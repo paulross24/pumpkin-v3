@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import urllib.request
+import urllib.request
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -198,6 +199,49 @@ class HttpPlanner(Planner):
         return PlannerResult(proposals=proposals, raw_response=raw)
 
 
+class OpenAIPlanner(Planner):
+    def __init__(self, api_key: str, model: str, base_url: str, timeout: float) -> None:
+        self.api_key = api_key
+        self.model = model
+        self.base_url = base_url
+        self.timeout = timeout
+
+    def generate(self, context_pack: Dict[str, Any], prompt: str) -> PlannerResult:
+        payload = {
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "Return ONLY JSON with a top-level 'proposals' list.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0.4,
+        }
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(self.base_url, data=data, method="POST")
+        req.add_header("Content-Type", "application/json")
+        req.add_header("Authorization", f"Bearer {self.api_key}")
+        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            raw = resp.read().decode("utf-8")
+        decoded = json.loads(raw)
+        choices = decoded.get("choices")
+        if not isinstance(choices, list) or not choices:
+            raise ValueError("openai response missing choices")
+        message = choices[0].get("message", {})
+        content = message.get("content")
+        if not isinstance(content, str):
+            raise ValueError("openai response missing content")
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"openai content invalid JSON: {exc}")
+        proposals = parsed.get("proposals")
+        if not isinstance(proposals, list):
+            raise ValueError("openai response missing proposals list")
+        return PlannerResult(proposals=proposals, raw_response=content)
+
+
 def load_planner() -> Planner:
     mode = os.getenv("PUMPKIN_PLANNER_MODE", "stub")
     if mode == "stub":
@@ -210,4 +254,16 @@ def load_planner() -> Planner:
             raise ValueError("PUMPKIN_PLANNER_URL is required for http planner")
         api_key = os.getenv("PUMPKIN_PLANNER_API_KEY")
         return HttpPlanner(url=url, api_key=api_key, timeout=settings.planner_timeout_seconds())
+    if mode == "openai":
+        api_key = os.getenv("PUMPKIN_OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("PUMPKIN_OPENAI_API_KEY is required for openai planner")
+        model = os.getenv("PUMPKIN_OPENAI_MODEL", "gpt-4o-mini")
+        base_url = os.getenv("PUMPKIN_OPENAI_BASE_URL", "https://api.openai.com/v1/chat/completions")
+        return OpenAIPlanner(
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+            timeout=settings.planner_timeout_seconds(),
+        )
     raise ValueError(f"unknown planner mode: {mode}")
