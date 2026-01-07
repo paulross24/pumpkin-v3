@@ -9,6 +9,7 @@ WorkingDirectory=/home/rossp/pumpkin-v3
 ExecStart=/usr/bin/python3 -m pumpkin voice server
 Restart=always
 EnvironmentFile=-/etc/pumpkin/pumpkin.env
+Environment=PYTHONUNBUFFERED=1
 
 [Install]
 WantedBy=multi-user.target

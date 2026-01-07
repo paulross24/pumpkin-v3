@@ -153,6 +153,28 @@ def _latest_event(conn, event_type: str) -> Dict[str, Any] | None:
     }
 
 
+def _latest_errors(conn, limit: int) -> list[Dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM events WHERE type = ? ORDER BY id DESC LIMIT ?",
+        ("android.error", limit),
+    ).fetchall()
+    errors: list[Dict[str, Any]] = []
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"])
+        except Exception:
+            payload = {}
+        errors.append(
+            {
+                "id": row["id"],
+                "ts": row["ts"],
+                "payload": payload,
+                "severity": row["severity"],
+            }
+        )
+    return errors
+
+
 def _summarize_issues(system_snapshot: Dict[str, Any] | None) -> list[Dict[str, Any]]:
     issues: list[Dict[str, Any]] = []
     if not system_snapshot:
@@ -178,7 +200,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
 
     def _log_request(self) -> None:
         status = getattr(self, "_response_code", 0)
-        print(f"PumpkinVoice {self.command} {self.path} {status}")
+        print(f"PumpkinVoice {self.command} {self.path} {status}", flush=True)
 
     def do_POST(self) -> None:
         try:
@@ -193,6 +215,12 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 return
             if self.path == "/errors":
                 self._handle_errors()
+                return
+            if self.path == "/proposals/approve":
+                self._handle_proposal_decision("approved")
+                return
+            if self.path == "/proposals/reject":
+                self._handle_proposal_decision("rejected")
                 return
             self.send_response(404)
             self.end_headers()
@@ -312,8 +340,11 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "GET /openapi.json",
                             "GET /proposals",
                             "GET /summary",
+                            "GET /errors",
                             "POST /ask",
                             "POST /errors",
+                            "POST /proposals/approve",
+                            "POST /proposals/reject",
                             "POST /ingest",
                             "POST /voice",
                             "POST /satellite/voice",
@@ -422,6 +453,19 @@ class VoiceHandler(BaseHTTPRequestHandler):
                     },
                 )
                 return
+            if path == "/errors":
+                limit = _parse_limit(params.get("limit", [None])[0], default=5, max_limit=50)
+                conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+                errors = _latest_errors(conn, limit)
+                _send_json(
+                    self,
+                    200,
+                    {
+                        "count": len(errors),
+                        "errors": errors,
+                    },
+                )
+                return
             if path == "/openapi.json":
                 _send_json(
                     self,
@@ -454,6 +498,28 @@ class VoiceHandler(BaseHTTPRequestHandler):
                                     "responses": {
                                         "200": {
                                             "description": "Summary snapshot",
+                                            "content": {
+                                                "application/json": {
+                                                    "schema": {"type": "object"}
+                                                }
+                                            },
+                                        }
+                                    },
+                                }
+                            },
+                            "/errors": {
+                                "get": {
+                                    "summary": "List recent client error reports",
+                                    "parameters": [
+                                        {
+                                            "name": "limit",
+                                            "in": "query",
+                                            "schema": {"type": "integer"},
+                                        }
+                                    ],
+                                    "responses": {
+                                        "200": {
+                                            "description": "Error reports",
                                             "content": {
                                                 "application/json": {
                                                     "schema": {"type": "object"}
@@ -596,6 +662,68 @@ class VoiceHandler(BaseHTTPRequestHandler):
                                     },
                                 }
                             },
+                            "/proposals/approve": {
+                                "post": {
+                                    "summary": "Approve proposal",
+                                    "requestBody": {
+                                        "required": True,
+                                        "content": {
+                                            "application/json": {
+                                                "schema": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "id": {"type": "integer"},
+                                                        "actor": {"type": "string"},
+                                                        "reason": {"type": "string"},
+                                                    },
+                                                    "required": ["id"],
+                                                }
+                                            }
+                                        },
+                                    },
+                                    "responses": {
+                                        "200": {
+                                            "description": "Decision recorded",
+                                            "content": {
+                                                "application/json": {
+                                                    "schema": {"type": "object"}
+                                                }
+                                            },
+                                        }
+                                    },
+                                }
+                            },
+                            "/proposals/reject": {
+                                "post": {
+                                    "summary": "Reject proposal",
+                                    "requestBody": {
+                                        "required": True,
+                                        "content": {
+                                            "application/json": {
+                                                "schema": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "id": {"type": "integer"},
+                                                        "actor": {"type": "string"},
+                                                        "reason": {"type": "string"},
+                                                    },
+                                                    "required": ["id"],
+                                                }
+                                            }
+                                        },
+                                    },
+                                    "responses": {
+                                        "200": {
+                                            "description": "Decision recorded",
+                                            "content": {
+                                                "application/json": {
+                                                    "schema": {"type": "object"}
+                                                }
+                                            },
+                                        }
+                                    },
+                                }
+                            },
                         },
                     },
                 )
@@ -685,6 +813,11 @@ class VoiceHandler(BaseHTTPRequestHandler):
             "ts": data.get("ts"),
             "location": data.get("location"),
         }
+        print(
+            "PumpkinVoice ask "
+            f"source={source!r} device={device!r} text={_truncate_text(text, INGEST_LOG_TEXT_LIMIT)!r}",
+            flush=True,
+        )
         conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
         store.insert_event(
             conn,
@@ -705,6 +838,10 @@ class VoiceHandler(BaseHTTPRequestHandler):
         except Exception:
             _send_json(self, 502, {"error": "openai_request_failed"})
             return
+        print(
+            f"PumpkinVoice ask_reply { _truncate_text(reply, INGEST_LOG_TEXT_LIMIT)!r}",
+            flush=True,
+        )
         _send_json(self, 200, {"status": "ok", "reply": reply})
 
     def _handle_errors(self) -> None:
@@ -745,6 +882,46 @@ class VoiceHandler(BaseHTTPRequestHandler):
             severity="warn",
         )
         _send_json(self, 200, {"status": "ok", "event_id": event_id})
+
+    def _handle_proposal_decision(self, decision: str) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+        try:
+            data = _parse_json(body)
+        except ValueError:
+            _bad_request(self, "invalid JSON")
+            return
+        if not isinstance(data, dict):
+            _bad_request(self, "JSON body must be an object")
+            return
+        proposal_id = data.get("id")
+        if not isinstance(proposal_id, int):
+            _bad_request(self, "id must be an integer")
+            return
+        actor = data.get("actor")
+        if actor is not None and not isinstance(actor, str):
+            _bad_request(self, "actor must be a string")
+            return
+        reason = data.get("reason")
+        if reason is not None and not isinstance(reason, str):
+            _bad_request(self, "reason must be a string")
+            return
+        conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+        row = store.get_proposal(conn, proposal_id)
+        if not row:
+            _send_json(self, 404, {"error": "proposal_not_found"})
+            return
+        policy_hash = row["policy_hash"]
+        store.insert_approval(
+            conn,
+            proposal_id=proposal_id,
+            actor=actor or "android",
+            decision=decision,
+            reason=reason,
+            policy_hash=policy_hash,
+        )
+        store.update_proposal_status(conn, proposal_id, decision)
+        _send_json(self, 200, {"status": "ok", "id": proposal_id, "decision": decision})
 
     def log_message(self, fmt: str, *args: Any) -> None:
         return
