@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -14,6 +15,8 @@ from urllib.parse import parse_qs, urlparse
 
 from . import settings
 from . import store
+from . import module_config
+from . import ha_client
 from .audit import append_jsonl
 from .db import init_db
 
@@ -170,6 +173,51 @@ def _load_llm_config(conn) -> Dict[str, Any]:
         "base_url": base_url
         or os.getenv("PUMPKIN_OPENAI_BASE_URL", "https://api.openai.com/v1/chat/completions"),
     }
+
+
+def _lookup_presence(text: str) -> str | None:
+    match = re.search(r"\bis\\s+([a-zA-Z]+)\\s+home\\b", text, re.IGNORECASE)
+    if not match:
+        return None
+    name = match.group(1).lower()
+    config_path = settings.modules_config_path()
+    if not config_path.exists():
+        return None
+    try:
+        config = module_config.load_config(str(config_path))
+    except Exception:
+        return None
+    enabled = set(config.get("enabled", []))
+    if "homeassistant.observer" not in enabled:
+        return None
+    module_cfg = config.get("modules", {}).get("homeassistant.observer", {})
+    people = module_cfg.get("people", {})
+    if not isinstance(people, dict):
+        return None
+    entity_id = people.get(name)
+    if not isinstance(entity_id, str):
+        return None
+    base_url = module_cfg.get("base_url")
+    token_env = module_cfg.get("token_env", "PUMPKIN_HA_TOKEN")
+    token = os.getenv(token_env)
+    if not base_url or not token:
+        return None
+    result = ha_client.fetch_entity_state(
+        base_url=base_url,
+        token=token,
+        entity_id=entity_id,
+        timeout=settings.ha_request_timeout_seconds(),
+    )
+    if not result.get("ok"):
+        return "I couldn't reach Home Assistant to check presence."
+    state = result.get("state")
+    if state == "home":
+        return f"{match.group(1).capitalize()} is home."
+    if state == "not_home":
+        return f"{match.group(1).capitalize()} is not home."
+    if isinstance(state, str):
+        return f"{match.group(1).capitalize()} is {state}."
+    return "I couldn't determine presence."
 
 
 def _latest_errors(conn, limit: int) -> list[Dict[str, Any]]:
@@ -911,6 +959,11 @@ class VoiceHandler(BaseHTTPRequestHandler):
             payload=payload,
             severity="info",
         )
+        presence_reply = _lookup_presence(text)
+        if presence_reply:
+            print(f"PumpkinVoice ask_reply {presence_reply!r}", flush=True)
+            _send_json(self, 200, {"status": "ok", "reply": presence_reply})
+            return
         llm_config = _load_llm_config(conn)
         api_key = self.headers.get("X-Pumpkin-OpenAI-Key") or llm_config["api_key"]
         try:
