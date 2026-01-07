@@ -1,0 +1,5 @@
+# Replace <hostname> and <local-ip> as needed
+# Ensure this rule is above the http_status:404 catch-all
+
+- hostname: voice.rosshome.co.uk
+  service: http://<local-ip>:9000

@@ -1,0 +1,217 @@
+{
+  "version": "context-pack.v1",
+  "policy": {
+    "hash": "sha256:925072578b24b92649252782d708be7032be2a59d2d4cd6b738f11b2c743945f",
+    "mode": "strict",
+    "allowed_actions": [
+      {
+        "action_type": "notify.local",
+        "params_schema": {
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string",
+              "maxLength": 2000
+            }
+          },
+          "required": [
+            "message"
+          ]
+        }
+      }
+    ]
+  },
+  "system_snapshot": {
+    "loadavg": {
+      "1m": 0.0,
+      "5m": 0.0,
+      "15m": 0.0
+    },
+    "disk": {
+      "path": "/",
+      "total_bytes": 101360754688,
+      "used_bytes": 8037539840,
+      "free_bytes": 88127102976,
+      "used_percent": 0.0793
+    },
+    "meminfo_kb": {
+      "MemTotal": 16356600,
+      "MemAvailable": 15746992
+    }
+  },
+  "recent_events": [
+    {
+      "id": 10,
+      "ts": "2025-12-26T11:13:31.980577+00:00",
+      "source": "system",
+      "type": "system.snapshot",
+      "payload": {
+        "loadavg": {
+          "1m": 0.0,
+          "5m": 0.0,
+          "15m": 0.0
+        },
+        "disk": {
+          "path": "/",
+          "total_bytes": 101360754688,
+          "used_bytes": 8037416960,
+          "free_bytes": 88127225856,
+          "used_percent": 0.0793
+        },
+        "meminfo_kb": {
+          "MemTotal": 16356600,
+          "MemAvailable": 15748240
+        }
+      },
+      "severity": "info"
+    },
+    {
+      "id": 11,
+      "ts": "2025-12-26T11:13:39.870823+00:00",
+      "source": "core",
+      "type": "heartbeat",
+      "payload": {
+        "policy_hash": "sha256:925072578b24b92649252782d708be7032be2a59d2d4cd6b738f11b2c743945f"
+      },
+      "severity": "info"
+    },
+    {
+      "id": 12,
+      "ts": "2025-12-26T11:13:39.877202+00:00",
+      "source": "system",
+      "type": "system.snapshot",
+      "payload": {
+        "loadavg": {
+          "1m": 0.0,
+          "5m": 0.0,
+          "15m": 0.0
+        },
+        "disk": {
+          "path": "/",
+          "total_bytes": 101360754688,
+          "used_bytes": 8037433344,
+          "free_bytes": 88127209472,
+          "used_percent": 0.0793
+        },
+        "meminfo_kb": {
+          "MemTotal": 16356600,
+          "MemAvailable": 15746392
+        }
+      },
+      "severity": "info"
+    },
+    {
+      "id": 13,
+      "ts": "2025-12-26T11:19:13.310318+00:00",
+      "source": "core",
+      "type": "heartbeat",
+      "payload": {
+        "policy_hash": "sha256:925072578b24b92649252782d708be7032be2a59d2d4cd6b738f11b2c743945f"
+      },
+      "severity": "info"
+    },
+    {
+      "id": 14,
+      "ts": "2025-12-26T11:19:13.313670+00:00",
+      "source": "system",
+      "type": "system.snapshot",
+      "payload": {
+        "loadavg": {
+          "1m": 0.0,
+          "5m": 0.0,
+          "15m": 0.0
+        },
+        "disk": {
+          "path": "/",
+          "total_bytes": 101360754688,
+          "used_bytes": 8037539840,
+          "free_bytes": 88127102976,
+          "used_percent": 0.0793
+        },
+        "meminfo_kb": {
+          "MemTotal": 16356600,
+          "MemAvailable": 15746992
+        }
+      },
+      "severity": "info"
+    }
+  ],
+  "pending_proposals": [
+    {
+      "id": 10,
+      "ts_created": "2025-12-26T11:19:13.329516+00:00",
+      "kind": "hardware.recommendation",
+      "summary": "Review hardware capacity (stub planner)",
+      "risk": 0.1,
+      "status": "pending"
+    },
+    {
+      "id": 9,
+      "ts_created": "2025-12-26T11:19:13.324601+00:00",
+      "kind": "action.request",
+      "summary": "Send a local notification (stub planner)",
+      "risk": 0.3,
+      "status": "pending"
+    },
+    {
+      "id": 8,
+      "ts_created": "2025-12-26T11:13:39.891884+00:00",
+      "kind": "hardware.recommendation",
+      "summary": "Review hardware capacity (stub planner)",
+      "risk": 0.1,
+      "status": "pending"
+    },
+    {
+      "id": 7,
+      "ts_created": "2025-12-26T11:13:39.886738+00:00",
+      "kind": "action.request",
+      "summary": "Send a local notification (stub planner)",
+      "risk": 0.3,
+      "status": "pending"
+    },
+    {
+      "id": 6,
+      "ts_created": "2025-12-26T11:13:31.997401+00:00",
+      "kind": "hardware.recommendation",
+      "summary": "Review hardware capacity (stub planner)",
+      "risk": 0.1,
+      "status": "pending"
+    },
+    {
+      "id": 4,
+      "ts_created": "2025-12-26T11:10:12.707064+00:00",
+      "kind": "hardware.recommendation",
+      "summary": "Review hardware capacity",
+      "risk": 0.1,
+      "status": "pending"
+    },
+    {
+      "id": 3,
+      "ts_created": "2025-12-26T11:10:12.697023+00:00",
+      "kind": "action.request",
+      "summary": "Send a local notification",
+      "risk": 0.2,
+      "status": "pending"
+    },
+    {
+      "id": 2,
+      "ts_created": "2025-12-26T11:10:03.525133+00:00",
+      "kind": "hardware.recommendation",
+      "summary": "Review hardware capacity",
+      "risk": 0.1,
+      "status": "pending"
+    }
+  ],
+  "memory": {
+    "policy.last_hash": "sha256:925072578b24b92649252782d708be7032be2a59d2d4cd6b738f11b2c743945f",
+    "core.last_event_id": 14
+  },
+  "constraints": {
+    "constitution": [
+      "Propose first, act second",
+      "Destructive/system-altering actions always require approval",
+      "Policy changes always require approval",
+      "All changes are auditable and reversible"
+    ]
+  }
+}

@@ -1,0 +1,16 @@
+# Canonical editable policy source. Proposals/actions record policy_hash for traceability.
+version: 1
+mode: strict
+defaults:
+  require_approval: true
+auto_approve: []
+actions:
+  - action_type: notify.local
+    params_schema:
+      type: object
+      properties:
+        message:
+          type: string
+          maxLength: 2500
+      required:
+        - message

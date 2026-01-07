@@ -1,0 +1,14 @@
+[Unit]
+Description=Pumpkin v3 core daemon
+After=network.target
+
+[Service]
+Type=simple
+User=rossp
+WorkingDirectory=/home/rossp/pumpkin-v3
+ExecStart=/usr/bin/python3 -m pumpkin daemon
+Restart=always
+EnvironmentFile=-/etc/pumpkin/pumpkin.env
+
+[Install]
+WantedBy=multi-user.target

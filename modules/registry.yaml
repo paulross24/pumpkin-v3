@@ -1,0 +1,28 @@
+version: 1
+modules:
+  - name: homeassistant.observer
+    type: observer
+    description: Ingests state and event data from Home Assistant for richer context.
+    config_schema:
+      type: object
+      properties:
+        base_url:
+          type: string
+        verify_tls:
+          type: boolean
+        token_env:
+          type: string
+      required:
+        - base_url
+    safety_level: med
+    prerequisites:
+      packages: []
+      services:
+        - home-assistant
+      network_access:
+        - http://192.168.1.140
+    provides:
+      - source: homeassistant
+        signals:
+          - entity.state
+          - event

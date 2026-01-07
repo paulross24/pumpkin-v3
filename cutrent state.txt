@@ -1,0 +1,67 @@
+Pumpkin v3 - Runtime Snapshot (Authoritative)
+
+1. CURRENT REALITY STATEMENT
+Pumpkin v3 is a Python-based daemon + CLI that records observations into a SQLite database, generates proposals via a planner (default stub), enforces a YAML policy, and can execute only notify.local actions after explicit approval; it also exposes a text-only HTTP voice intake that writes events and drives proposal generation, with a module registry present but no modules enabled by default (modules/config.yaml).
+
+2. SYSTEM TOPOLOGY
+- hosts: single local host implied by paths and systemd unit files; running state is unknown / not evidenced (deploy/pumpkin.service, deploy/pumpkin-voice.service).
+- containers / services: no containers defined; two systemd service unit files exist for pumpkin and pumpkin-voice, runtime status unknown.
+- networks: HTTP voice server binds to PUMPKIN_VOICE_HOST (default 0.0.0.0) on PUMPKIN_VOICE_PORT (default 9000) (pumpkin/voice_server.py, pumpkin/settings.py); optional outbound HTTP to planner (PUMPKIN_PLANNER_URL) and Home Assistant (base_url in module config) if configured.
+- gateways: voice HTTP endpoint POST /voice and CLI entrypoints (python3 -m pumpkin ...) are the only input gateways; policy evaluation gates all actions (pumpkin/policy.py).
+
+3. INTENT -> ACTION FLOW
+- Input arrives via voice (POST /voice) or CLI observation (pumpkin observe add), and is stored as an event in SQLite (pumpkin/voice_server.py, pumpkin/store.py).
+- Core loop (pumpkin/core.py) adds system snapshot events, optional module events (only if enabled), then loads new events since the last run.
+- Proposal generation uses rule-based logic plus planner output (stub/mock/http) and stores proposals with policy hash (pumpkin/propose.py).
+- Approvals are recorded via CLI (pumpkin proposals approve), changing proposal status to approved (pumpkin/cli.py).
+- Execution only processes approved action.request proposals; policy validation runs before execution; executor supports only notify.local (pumpkin/core.py, pumpkin/policy.py, pumpkin/act.py).
+- Choke points: policy evaluation (pumpkin/policy.py), explicit approval requirement (default strict), and executor support limited to notify.local.
+
+4. ALLOWED ACTIONS (AUTHORITATIVE)
+- notify.local with params schema { message: string, maxLength: 2000 } as defined in policy.yaml.
+- Approval: required for all actions (policy mode strict, defaults.require_approval: true, auto_approve: []); no encoded max-risk auto-approval rules.
+
+5. BLOCKED / NON-EXISTENT ACTIONS
+- Any action type not listed in policy.yaml is forbidden by policy evaluation.
+- shell.* action types and specific dangerous action types (shell.exec, shell.command, shell.run) are blocked by policy change lint (pumpkin/policy_change.py).
+- Action execution is limited to notify.local; all other action types raise unsupported action_type (pumpkin/act.py).
+- module.install is proposal/runbook only; no executor exists to install modules.
+- module.enable / module.disable require manual CLI apply; the daemon does not execute module config changes.
+- Software installation, self-expansion, and permission changes are not implemented as executable actions.
+
+6. DATA SOURCES AVAILABLE TO PUMPKIN
+- SQLite DB (data/pumpkin.db): read/write for events, proposals, approvals, actions, memory, policy snapshots.
+- Audit log (data/audit.jsonl): append-only writes; read during rollback/find-backup flows.
+- Local system metrics: /proc/meminfo, load average, disk usage from / (read-only).
+- Policy and module configuration files: policy.yaml, modules/registry.yaml, modules/config.yaml (read; write only via explicit CLI apply commands).
+- Home Assistant API (base_url in module config): read-only GET /api/ when module is enabled and token is present; currently not enabled in modules/config.yaml.
+- Planner HTTP endpoint (PUMPKIN_PLANNER_URL): outbound POST if planner mode is http; otherwise stub/mock (runtime mode unknown).
+
+7. AUTONOMY ASSESSMENT (YES / NO ONLY)
+- Can Pumpkin act without user prompt? NO
+- Can it install software? NO
+- Can it modify its own permissions? NO
+- Can it execute actions outside the gateway? NO
+- Can it claim state changes without executor confirmation? NO
+
+8. EVIDENCE-BASED EXAMPLES
+- Example from data/audit.jsonl: user input (voice) -> parsed intent (unknown / not evidenced) -> policy decision -> executor action -> outcome
+  - voice.received and voice.event_created with event_id: 39 show a voice input was accepted and stored.
+  - proposal.created with proposal_kind: capability.offer and source_event_ids: [39] shows the system generated a capability offer proposal tied to that voice event.
+  - action.blocked_no_approval lists pending action.request proposals that were not executed due to missing approvals, indicating policy enforcement blocked execution.
+  - No action.started or action.succeeded entries for this chain are present in the shown log segment; executor outcome is not executed due to no approval.
+
+9. KNOWN GAPS / STUBS
+- Wyoming readiness (no code yet) is documented in docs/voice.md but not implemented (documented but not implemented).
+- Module installation is only proposed with runbook generation; no runtime installer or executor exists (partially implemented: proposal/runbook only).
+- Module enable/disable proposals exist, but daemon does not execute them; requires manual CLI apply (partially implemented: proposal + manual apply).
+- Cloudflare voice ingress is only a generated instruction (cmd ops cloudflare-voice); no active gateway integration in runtime code (documented guidance only).
+
+10. FINAL SUMMARY
+- Pumpkin v3 IS a local Python service with a SQLite-backed event/proposal/action log and an append-only audit trail (data/pumpkin.db, data/audit.jsonl).
+- Pumpkin v3 IS a proposal-first system that requires explicit approvals for action.request execution under a strict policy (policy.yaml).
+- Pumpkin v3 IS limited to a single executable action: notify.local with a 2000-character message cap.
+- Pumpkin v3 IS capable of accepting text-only voice input over HTTP and converting it into stored events.
+- Pumpkin v3 IS NOT able to run shell commands, install software, or modify its own permissions.
+- Pumpkin v3 IS NOT executing module installs or module config changes automatically; those paths are proposal/manual only.
+- Pumpkin v3 IS NOT evidenced to run any external services beyond optional HTTP planner or Home Assistant reads (runtime status unknown).
