@@ -96,12 +96,19 @@ def _parse_limit(value: str | None, default: int = 25, max_limit: int = 200) -> 
         return default
 
 
-def _call_openai(prompt: str, api_key: str | None = None) -> str:
+def _call_openai(
+    prompt: str,
+    api_key: str | None = None,
+    model: str | None = None,
+    base_url: str | None = None,
+) -> str:
     api_key = api_key or os.getenv("PUMPKIN_OPENAI_API_KEY")
     if not api_key:
         raise ValueError("openai_api_key_missing")
-    model = os.getenv("PUMPKIN_OPENAI_MODEL", "gpt-4o-mini")
-    url = os.getenv("PUMPKIN_OPENAI_BASE_URL", "https://api.openai.com/v1/chat/completions")
+    model = model or os.getenv("PUMPKIN_OPENAI_MODEL", "gpt-4o-mini")
+    url = base_url or os.getenv(
+        "PUMPKIN_OPENAI_BASE_URL", "https://api.openai.com/v1/chat/completions"
+    )
     payload = {
         "model": model,
         "messages": [
@@ -150,6 +157,18 @@ def _latest_event(conn, event_type: str) -> Dict[str, Any] | None:
         "type": row["type"],
         "payload": payload,
         "severity": row["severity"],
+    }
+
+
+def _load_llm_config(conn) -> Dict[str, Any]:
+    api_key = store.get_memory(conn, "llm.openai_api_key")
+    model = store.get_memory(conn, "llm.openai_model")
+    base_url = store.get_memory(conn, "llm.openai_base_url")
+    return {
+        "api_key": api_key or os.getenv("PUMPKIN_OPENAI_API_KEY"),
+        "model": model or os.getenv("PUMPKIN_OPENAI_MODEL", "gpt-4o-mini"),
+        "base_url": base_url
+        or os.getenv("PUMPKIN_OPENAI_BASE_URL", "https://api.openai.com/v1/chat/completions"),
     }
 
 
@@ -221,6 +240,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 return
             if self.path == "/proposals/reject":
                 self._handle_proposal_decision("rejected")
+                return
+            if self.path == "/llm/config":
+                self._handle_llm_config()
                 return
             self.send_response(404)
             self.end_headers()
@@ -341,10 +363,12 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "GET /proposals",
                             "GET /summary",
                             "GET /errors",
+                            "GET /llm/config",
                             "POST /ask",
                             "POST /errors",
                             "POST /proposals/approve",
                             "POST /proposals/reject",
+                            "POST /llm/config",
                             "POST /ingest",
                             "POST /voice",
                             "POST /satellite/voice",
@@ -354,6 +378,8 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 return
             if path == "/config":
                 bind_host, bind_port = _effective_bind(self)
+                conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+                llm_config = _load_llm_config(conn)
                 _send_json(
                     self,
                     200,
@@ -365,8 +391,8 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         },
                         "llm": {
                             "provider": "openai",
-                            "model": os.getenv("PUMPKIN_OPENAI_MODEL", "gpt-4o-mini"),
-                            "enabled": bool(os.getenv("PUMPKIN_OPENAI_API_KEY")),
+                            "model": llm_config["model"],
+                            "enabled": bool(llm_config["api_key"]),
                         },
                         "upstream": {
                             "planner_mode": os.getenv("PUMPKIN_PLANNER_MODE", "stub"),
@@ -466,6 +492,20 @@ class VoiceHandler(BaseHTTPRequestHandler):
                     },
                 )
                 return
+            if path == "/llm/config":
+                conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+                llm_config = _load_llm_config(conn)
+                _send_json(
+                    self,
+                    200,
+                    {
+                        "provider": "openai",
+                        "model": llm_config["model"],
+                        "base_url": llm_config["base_url"],
+                        "enabled": bool(llm_config["api_key"]),
+                    },
+                )
+                return
             if path == "/openapi.json":
                 _send_json(
                     self,
@@ -520,6 +560,21 @@ class VoiceHandler(BaseHTTPRequestHandler):
                                     "responses": {
                                         "200": {
                                             "description": "Error reports",
+                                            "content": {
+                                                "application/json": {
+                                                    "schema": {"type": "object"}
+                                                }
+                                            },
+                                        }
+                                    },
+                                }
+                            },
+                            "/llm/config": {
+                                "get": {
+                                    "summary": "Get LLM configuration",
+                                    "responses": {
+                                        "200": {
+                                            "description": "LLM config",
                                             "content": {
                                                 "application/json": {
                                                     "schema": {"type": "object"}
@@ -653,6 +708,36 @@ class VoiceHandler(BaseHTTPRequestHandler):
                                     "responses": {
                                         "200": {
                                             "description": "Acknowledged",
+                                            "content": {
+                                                "application/json": {
+                                                    "schema": {"type": "object"}
+                                                }
+                                            },
+                                        }
+                                    },
+                                }
+                            },
+                            "/llm/config": {
+                                "post": {
+                                    "summary": "Set LLM configuration",
+                                    "requestBody": {
+                                        "required": True,
+                                        "content": {
+                                            "application/json": {
+                                                "schema": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "api_key": {"type": "string"},
+                                                        "model": {"type": "string"},
+                                                        "base_url": {"type": "string"},
+                                                    },
+                                                }
+                                            }
+                                        },
+                                    },
+                                    "responses": {
+                                        "200": {
+                                            "description": "Updated",
                                             "content": {
                                                 "application/json": {
                                                     "schema": {"type": "object"}
@@ -826,9 +911,15 @@ class VoiceHandler(BaseHTTPRequestHandler):
             payload=payload,
             severity="info",
         )
-        api_key = self.headers.get("X-Pumpkin-OpenAI-Key")
+        llm_config = _load_llm_config(conn)
+        api_key = self.headers.get("X-Pumpkin-OpenAI-Key") or llm_config["api_key"]
         try:
-            reply = _call_openai(text, api_key=api_key)
+            reply = _call_openai(
+                text,
+                api_key=api_key,
+                model=llm_config["model"],
+                base_url=llm_config["base_url"],
+            )
         except ValueError as exc:
             _send_json(self, 503, {"error": str(exc)})
             return
@@ -922,6 +1013,49 @@ class VoiceHandler(BaseHTTPRequestHandler):
         )
         store.update_proposal_status(conn, proposal_id, decision)
         _send_json(self, 200, {"status": "ok", "id": proposal_id, "decision": decision})
+
+    def _handle_llm_config(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+        try:
+            data = _parse_json(body)
+        except ValueError:
+            _bad_request(self, "invalid JSON")
+            return
+        if not isinstance(data, dict):
+            _bad_request(self, "JSON body must be an object")
+            return
+        api_key = data.get("api_key")
+        model = data.get("model")
+        base_url = data.get("base_url")
+        if api_key is not None and not isinstance(api_key, str):
+            _bad_request(self, "api_key must be a string")
+            return
+        if model is not None and not isinstance(model, str):
+            _bad_request(self, "model must be a string")
+            return
+        if base_url is not None and not isinstance(base_url, str):
+            _bad_request(self, "base_url must be a string")
+            return
+        conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+        if api_key is not None:
+            store.set_memory(conn, "llm.openai_api_key", api_key.strip())
+        if model is not None:
+            store.set_memory(conn, "llm.openai_model", model.strip())
+        if base_url is not None:
+            store.set_memory(conn, "llm.openai_base_url", base_url.strip())
+        llm_config = _load_llm_config(conn)
+        _send_json(
+            self,
+            200,
+            {
+                "status": "ok",
+                "provider": "openai",
+                "model": llm_config["model"],
+                "base_url": llm_config["base_url"],
+                "enabled": bool(llm_config["api_key"]),
+            },
+        )
 
     def log_message(self, fmt: str, *args: Any) -> None:
         return

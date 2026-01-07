@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from . import settings
+from . import store
+from .db import init_db
 
 @dataclass(frozen=True)
 class PlannerResult:
@@ -257,9 +259,23 @@ def load_planner() -> Planner:
     if mode == "openai":
         api_key = os.getenv("PUMPKIN_OPENAI_API_KEY")
         if not api_key:
+            try:
+                conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+                api_key = store.get_memory(conn, "llm.openai_api_key")
+                if not api_key:
+                    api_key = None
+            except Exception:
+                api_key = None
+        if not api_key:
             raise ValueError("PUMPKIN_OPENAI_API_KEY is required for openai planner")
         model = os.getenv("PUMPKIN_OPENAI_MODEL", "gpt-4o-mini")
         base_url = os.getenv("PUMPKIN_OPENAI_BASE_URL", "https://api.openai.com/v1/chat/completions")
+        try:
+            conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+            model = store.get_memory(conn, "llm.openai_model") or model
+            base_url = store.get_memory(conn, "llm.openai_base_url") or base_url
+        except Exception:
+            pass
         return OpenAIPlanner(
             api_key=api_key,
             model=model,
