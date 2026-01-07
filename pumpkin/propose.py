@@ -210,6 +210,19 @@ def _hash_and_excerpt(prompt: str, max_bytes: int = 2048) -> Tuple[str, str]:
     return f"sha256:{digest}", excerpt
 
 
+def _proposal_excerpt(proposal: Dict[str, Any], max_len: int = 512) -> str:
+    details = proposal.get("details", {})
+    rationale = details.get("rationale") if isinstance(details, dict) else None
+    if isinstance(rationale, str) and rationale.strip():
+        text = rationale.strip()
+    else:
+        summary = proposal.get("summary")
+        text = summary.strip() if isinstance(summary, str) else ""
+    if len(text) > max_len:
+        return text[:max_len] + "..."
+    return text
+
+
 def _cap_context_pack(context_pack: Dict[str, Any], max_bytes: int) -> Dict[str, Any]:
     def size_of(pack: Dict[str, Any]) -> int:
         return len(json.dumps(pack, ensure_ascii=True).encode("utf-8"))
@@ -1006,7 +1019,7 @@ def build_proposals(events: List[Any], conn) -> List[Dict[str, Any]]:
             )
             for proposal in validated:
                 proposal["ai_context_hash"] = context_hash
-                proposal["ai_context_excerpt"] = context_excerpt
+                proposal["ai_context_excerpt"] = _proposal_excerpt(proposal)
             combined = rule_based + validated
             return combined[:MAX_PROPOSALS_PER_LOOP]
         except Exception as exc:
