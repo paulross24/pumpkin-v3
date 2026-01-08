@@ -285,6 +285,8 @@ def homeassistant_snapshot(
             }
         )
     if calendar_enabled:
+        summary["calendars"] = []
+        summary["upcoming_events"] = []
         calendars_result = ha_client.fetch_calendars(
             base_url=base_url, token=token, timeout=settings.ha_request_timeout_seconds()
         )
@@ -331,6 +333,7 @@ def homeassistant_snapshot(
             upcoming.sort(key=lambda item: _event_start(item) or datetime.max)
             summary["upcoming_events"] = upcoming[: max(1, calendar_limit)]
         else:
+            summary["calendar_error"] = calendars_result.get("error")
             events.append(
                 {
                     "source": "homeassistant",
