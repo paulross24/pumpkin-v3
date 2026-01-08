@@ -119,7 +119,8 @@ def _call_openai(
                 "role": "system",
                 "content": (
                     "You are Pumpkin, a helpful, calm assistant for a home automation system. "
-                    "Be concise, friendly, and clear. If you are unsure, say so."
+                    "Use the CONTEXT data when relevant. Be concise, friendly, and clear. "
+                    "If you are unsure, say so."
                 ),
             },
             {"role": "user", "content": prompt},
@@ -310,6 +311,74 @@ def _calendar_reply_for_events(label: str, events: list[dict], text: str) -> str
         lines.append(f"{summary} ({start})")
     joined = "; ".join(lines)
     return f"Upcoming events on {label}: {joined}"
+
+
+def _status_query(text: str) -> bool:
+    lowered = text.lower()
+    return bool(
+        re.search(r"\b(status|health|issues|problem|problems|system)\b", lowered)
+        or "how is the system" in lowered
+        or "how's the system" in lowered
+    )
+
+
+def _home_query(text: str) -> bool:
+    lowered = text.lower()
+    return bool(
+        re.search(r"\bwho('?s| is)\s+home\b", lowered)
+        or "who is at home" in lowered
+        or "anyone home" in lowered
+    )
+
+
+def _build_llm_context(conn) -> Dict[str, Any]:
+    snapshot_event = _latest_event(conn, "system.snapshot")
+    system_snapshot = snapshot_event.get("payload") if snapshot_event else None
+    issues = _summarize_issues(system_snapshot)
+    ha_summary = store.get_memory(conn, "homeassistant.summary") or {}
+    trimmed_ha = {
+        "people_home": ha_summary.get("people_home") or [],
+        "people": ha_summary.get("people") or [],
+        "zones": ha_summary.get("zones") or [],
+        "calendars": ha_summary.get("calendars") or [],
+        "upcoming_events": (ha_summary.get("upcoming_events") or [])[:5],
+    }
+    pending = store.list_proposals(conn, status="pending", limit=5)
+    errors = _latest_errors(conn, limit=3)
+    return {
+        "system_snapshot": system_snapshot,
+        "issues": issues,
+        "homeassistant": trimmed_ha,
+        "pending_proposals": [
+            {"id": row["id"], "summary": row["summary"], "kind": row["kind"]}
+            for row in pending
+        ],
+        "recent_errors": errors,
+    }
+
+
+def _local_status_reply(conn) -> str:
+    snapshot_event = _latest_event(conn, "system.snapshot")
+    system_snapshot = snapshot_event.get("payload") if snapshot_event else None
+    issues = _summarize_issues(system_snapshot)
+    ha_summary = store.get_memory(conn, "homeassistant.summary") or {}
+    people_home = ha_summary.get("people_home") or []
+    if issues:
+        issue_text = "; ".join(issue.get("message", "issue") for issue in issues)
+        return f"I see some issues: {issue_text}"
+    if people_home:
+        return f"All looks good. People home: {', '.join(people_home)}."
+    return "All looks good. No issues detected."
+
+
+def _local_home_reply(conn) -> str | None:
+    ha_summary = store.get_memory(conn, "homeassistant.summary") or {}
+    people_home = ha_summary.get("people_home") or []
+    if not people_home:
+        return "No one is marked as home."
+    if len(people_home) == 1:
+        return f"{people_home[0]} is home."
+    return f"People home: {', '.join(people_home)}."
 
 
 def _lookup_calendar(text: str, device: str | None, conn) -> str | None:
@@ -1221,16 +1290,34 @@ class VoiceHandler(BaseHTTPRequestHandler):
             print(f"PumpkinVoice ask_reply {presence_reply!r}", flush=True)
             _send_json(self, 200, {"status": "ok", "reply": presence_reply})
             return
+        if _home_query(text):
+            home_reply = _local_home_reply(conn)
+            if home_reply:
+                print(f"PumpkinVoice ask_reply {home_reply!r}", flush=True)
+                _send_json(self, 200, {"status": "ok", "reply": home_reply})
+                return
         calendar_reply = _lookup_calendar(text, device, conn)
         if calendar_reply:
             print(f"PumpkinVoice ask_reply {calendar_reply!r}", flush=True)
             _send_json(self, 200, {"status": "ok", "reply": calendar_reply})
             return
+        if _status_query(text):
+            status_reply = _local_status_reply(conn)
+            print(f"PumpkinVoice ask_reply {status_reply!r}", flush=True)
+            _send_json(self, 200, {"status": "ok", "reply": status_reply})
+            return
         llm_config = _load_llm_config(conn)
         api_key = self.headers.get("X-Pumpkin-OpenAI-Key") or llm_config["api_key"]
+        context = _build_llm_context(conn)
+        prompt = (
+            "Answer the user question using the context when relevant. "
+            "If the context lacks the answer, say so briefly.\n\n"
+            f"USER_QUESTION: {text}\n\n"
+            f"CONTEXT: {json.dumps(context, ensure_ascii=True)}"
+        )
         try:
             reply = _call_openai(
-                text,
+                prompt,
                 api_key=api_key,
                 model=llm_config["model"],
                 base_url=llm_config["base_url"],
