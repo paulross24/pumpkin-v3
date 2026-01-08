@@ -1,0 +1,16 @@
+# Home Assistant automation to forward state changes to PumpkinVoice
+alias: Pumpkin Voice Webhook
+trigger:
+  - platform: event
+    event_type: state_changed
+condition: []
+action:
+  - service: rest_command.pumpkin_voice_webhook
+    data:
+      event_type: "{{ trigger.event.event_type }}"
+      time_fired: "{{ trigger.event.time_fired }}"
+      data:
+        entity_id: "{{ trigger.event.data.entity_id }}"
+        state: "{{ trigger.event.data.new_state.state if trigger.event.data.new_state else None }}"
+        attributes: "{{ trigger.event.data.new_state.attributes if trigger.event.data.new_state else None }}"
+mode: queued

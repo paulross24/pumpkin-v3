@@ -1,0 +1,7 @@
+# Add this to configuration.yaml in Home Assistant
+rest_command:
+  pumpkin_voice_webhook:
+    url: "http://192.168.1.157:9000/ha/webhook"
+    method: POST
+    content_type: "application/json"
+    payload: "{{ payload }}"

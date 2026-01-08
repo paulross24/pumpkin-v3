@@ -341,6 +341,54 @@ def _home_summary_query(text: str) -> bool:
     )
 
 
+def _parse_time_24h(value: str) -> str | None:
+    match = re.search(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", value.strip().lower())
+    if not match:
+        return None
+    hour = int(match.group(1))
+    minute = int(match.group(2) or 0)
+    meridiem = match.group(3)
+    if meridiem:
+        if meridiem == "pm" and hour < 12:
+            hour += 12
+        if meridiem == "am" and hour == 12:
+            hour = 0
+    if hour > 23 or minute > 59:
+        return None
+    return f"{hour:02d}:{minute:02d}"
+
+
+def _parse_quiet_hours(text: str) -> Dict[str, Any] | None:
+    lowered = text.lower()
+    if "quiet hours" not in lowered and "do not disturb" not in lowered and "dnd" not in lowered:
+        return None
+    match = re.search(
+        r"(?:from|between)?\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s*(?:to|-)\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)",
+        lowered,
+    )
+    if not match:
+        return None
+    start = _parse_time_24h(match.group(1))
+    end = _parse_time_24h(match.group(2))
+    if not start or not end:
+        return None
+    days = "weekdays" if "weekday" in lowered else "weekends" if "weekend" in lowered else "daily"
+    return {"start": start, "end": end, "days": days}
+
+
+def _parse_notification_style(text: str) -> str | None:
+    lowered = text.lower()
+    if "notification" not in lowered and "notifications" not in lowered:
+        return None
+    if "brief" in lowered:
+        return "brief"
+    if "detailed" in lowered or "detail" in lowered:
+        return "detailed"
+    if "normal" in lowered or "standard" in lowered:
+        return "normal"
+    return None
+
+
 def _build_llm_context(conn, device: str | None) -> Dict[str, Any]:
     snapshot_event = _latest_event(conn, "system.snapshot")
     system_snapshot = snapshot_event.get("payload") if snapshot_event else None
@@ -400,6 +448,35 @@ def _local_home_reply(conn) -> str | None:
     if len(people_home) == 1:
         return f"{people_home[0]} is home."
     return f"People home: {', '.join(people_home)}."
+
+
+def _update_profile_preference(conn, device: str | None, key: str, value: Any) -> str | None:
+    profile = _speaker_profile_from_device(conn, device)
+    if not isinstance(profile, dict):
+        return "I don't know who this device belongs to yet. Tell me your name first."
+    prefs = profile.get("preferences", {})
+    if not isinstance(prefs, dict):
+        prefs = {}
+    prefs[key] = value
+    profile["preferences"] = prefs
+    store.set_memory(conn, f"speaker.profile.device:{device.strip()}", profile)
+    return None
+
+
+def _handle_preference_update(text: str, device: str | None, conn) -> str | None:
+    quiet = _parse_quiet_hours(text)
+    if quiet:
+        error = _update_profile_preference(conn, device, "quiet_hours", quiet)
+        if error:
+            return error
+        return f"Quiet hours set to {quiet['start']}–{quiet['end']} ({quiet['days']})."
+    style = _parse_notification_style(text)
+    if style:
+        error = _update_profile_preference(conn, device, "notification_style", style)
+        if error:
+            return error
+        return f"Notification style set to {style}."
+    return None
 
 
 def _friendly_entity_name(entity_id: str, payload: Dict[str, Any]) -> str:
@@ -685,6 +762,22 @@ def _record_ha_event(conn, data: Dict[str, Any]) -> int:
         payload=payload,
         severity="info",
     )
+    entity_id = payload.get("payload", {}).get("entity_id")
+    state = payload.get("payload", {}).get("state")
+    attributes = payload.get("payload", {}).get("attributes")
+    if isinstance(entity_id, str):
+        entities = store.get_memory(conn, "homeassistant.entities") or {}
+        if not isinstance(entities, dict):
+            entities = {}
+        entry = entities.get(entity_id, {})
+        if not isinstance(entry, dict):
+            entry = {}
+        if state is not None:
+            entry["state"] = state
+        if isinstance(attributes, dict):
+            entry["attributes"] = attributes
+        entities[entity_id] = entry
+        store.set_memory(conn, "homeassistant.entities", entities)
     store.set_memory(conn, "homeassistant.last_event", payload)
     return event_id
 
@@ -990,6 +1083,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 system_snapshot = snapshot_event["payload"] if snapshot_event else None
                 ha_summary = store.get_memory(conn, "homeassistant.summary")
                 ha_last_event = store.get_memory(conn, "homeassistant.last_event")
+                home_state = _home_state_summary(conn)
                 issues = _summarize_issues(system_snapshot)
                 _send_json(
                     self,
@@ -1000,6 +1094,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "system_snapshot": system_snapshot,
                         "homeassistant": ha_summary,
                         "homeassistant_last_event": ha_last_event,
+                        "home_state": home_state,
                         "issues": issues,
                         "proposals": proposal_items,
                         "proposal_count": len(proposal_items),
@@ -1476,6 +1571,11 @@ class VoiceHandler(BaseHTTPRequestHandler):
             summary_reply = _local_house_summary_reply(conn)
             print(f"PumpkinVoice ask_reply {summary_reply!r}", flush=True)
             _send_json(self, 200, {"status": "ok", "reply": summary_reply})
+            return
+        preference_reply = _handle_preference_update(text, device, conn)
+        if preference_reply:
+            print(f"PumpkinVoice ask_reply {preference_reply!r}", flush=True)
+            _send_json(self, 200, {"status": "ok", "reply": preference_reply})
             return
         calendar_reply = _lookup_calendar(text, device, conn)
         if calendar_reply:
