@@ -287,6 +287,7 @@ def homeassistant_snapshot(
     if calendar_enabled:
         summary["calendars"] = []
         summary["upcoming_events"] = []
+        summary["calendar_events"] = {}
         calendars_result = ha_client.fetch_calendars(
             base_url=base_url, token=token, timeout=settings.ha_request_timeout_seconds()
         )
@@ -307,6 +308,7 @@ def homeassistant_snapshot(
                 entity_id = cal.get("entity_id")
                 if not entity_id:
                     continue
+                per_calendar = []
                 result = ha_client.fetch_calendar_events(
                     base_url=base_url,
                     token=token,
@@ -320,16 +322,21 @@ def homeassistant_snapshot(
                 for event in result.get("events", []):
                     if not isinstance(event, dict):
                         continue
+                    entry = {
+                        "calendar": cal.get("name"),
+                        "entity_id": entity_id,
+                        "summary": event.get("summary"),
+                        "start": event.get("start"),
+                        "end": event.get("end"),
+                        "location": event.get("location"),
+                    }
+                    per_calendar.append(entry)
                     upcoming.append(
                         {
-                            "calendar": cal.get("name"),
-                            "entity_id": entity_id,
-                            "summary": event.get("summary"),
-                            "start": event.get("start"),
-                            "end": event.get("end"),
-                            "location": event.get("location"),
+                            **entry,
                         }
                     )
+                summary["calendar_events"][entity_id] = per_calendar
             upcoming.sort(key=lambda item: _event_start(item) or datetime.max)
             summary["upcoming_events"] = upcoming[: max(1, calendar_limit)]
         else:

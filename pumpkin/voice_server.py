@@ -8,7 +8,7 @@ import re
 import sys
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict
 from urllib.parse import parse_qs, urlparse
@@ -173,6 +173,151 @@ def _load_llm_config(conn) -> Dict[str, Any]:
         "base_url": base_url
         or os.getenv("PUMPKIN_OPENAI_BASE_URL", "https://api.openai.com/v1/chat/completions"),
     }
+
+
+def _speaker_profile_from_device(conn, device: str | None) -> Dict[str, Any] | None:
+    if not isinstance(device, str) or not device.strip():
+        return None
+    key = f"speaker.profile.device:{device.strip()}"
+    profile = store.get_memory(conn, key)
+    if isinstance(profile, dict):
+        return profile
+    return None
+
+
+def _parse_dt(value: str | None) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        cleaned = value.replace("Z", "+00:00")
+        return datetime.fromisoformat(cleaned)
+    except ValueError:
+        return None
+
+
+def _calendar_window(text: str) -> tuple[datetime | None, datetime | None]:
+    now = datetime.now(timezone.utc)
+    lowered = text.lower()
+    if "tomorrow" in lowered:
+        start = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=1)
+        return start, end
+    if "today" in lowered:
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=1)
+        return start, end
+    if "this week" in lowered or "next 7 days" in lowered:
+        return now, now + timedelta(days=7)
+    return None, None
+
+
+def _select_events(events: list[dict], text: str, limit: int = 5) -> list[dict]:
+    start, end = _calendar_window(text)
+    if start and end:
+        filtered = []
+        for event in events:
+            event_start = _parse_dt(
+                (event.get("start") or {}).get("dateTime")
+                if isinstance(event.get("start"), dict)
+                else event.get("start")
+            )
+            if event_start and start <= event_start < end:
+                filtered.append(event)
+        return filtered[:limit]
+    return events[:limit]
+
+
+def _calendar_reply_for_events(label: str, events: list[dict], text: str) -> str:
+    if not events:
+        if "today" in text.lower():
+            return f"No events on {label} today."
+        if "tomorrow" in text.lower():
+            return f"No events on {label} tomorrow."
+        return f"No upcoming events on {label}."
+    lines = []
+    for event in events:
+        summary = event.get("summary") or "Untitled"
+        start = event.get("start")
+        if isinstance(start, dict):
+            start = start.get("dateTime") or start.get("date")
+        lines.append(f"{summary} ({start})")
+    joined = "; ".join(lines)
+    return f"Upcoming events on {label}: {joined}"
+
+
+def _lookup_calendar(text: str, device: str | None, conn) -> str | None:
+    lowered = text.lower()
+    if not re.search(r"\\b(calendar|schedule|appointments|events|availability|free|busy)\\b", lowered):
+        return None
+    summary = store.get_memory(conn, "homeassistant.summary")
+    if not isinstance(summary, dict):
+        return "Home Assistant calendar data is not available yet."
+    calendars = summary.get("calendars") or []
+    events_by_calendar = summary.get("calendar_events") or {}
+    config_path = settings.modules_config_path()
+    calendar_people: dict[str, str] = {}
+    calendar_shared: list[str] = []
+    if config_path.exists():
+        try:
+            config = module_config.load_config(str(config_path))
+            module_cfg = config.get("modules", {}).get("homeassistant.observer", {})
+            calendar_people = module_cfg.get("calendar_people") or {}
+            calendar_shared = module_cfg.get("calendar_shared") or []
+        except Exception:
+            calendar_people = {}
+            calendar_shared = []
+
+    target_label = None
+    target_calendar = None
+
+    if "family" in lowered or "shared" in lowered:
+        if calendar_shared:
+            target_calendar = calendar_shared[0]
+        elif calendars:
+            target_calendar = calendars[0].get("entity_id")
+        target_label = "the family calendar"
+    elif "my " in lowered or "mine" in lowered:
+        profile = _speaker_profile_from_device(conn, device)
+        person_id = profile.get("ha_person_id") if profile else None
+        if isinstance(person_id, str):
+            target_calendar = calendar_people.get(person_id)
+            target_label = profile.get("ha_person_name") or "your calendar"
+        else:
+            return "I don't know which Home Assistant person you are yet. Tell me your name first."
+    else:
+        match = re.search(r"\\b(?:is|isn't|is not)\\s+([a-zA-Z]+)\\s+(?:free|busy|available)\\b", lowered)
+        if not match:
+            match = re.search(r\"\\b([a-zA-Z]+)'s\\s+calendar\\b\", lowered)
+        if match:
+            name = match.group(1).lower()
+            people = summary.get("people") or []
+            person_id = None
+            person_name = None
+            for person in people:
+                if not isinstance(person, dict):
+                    continue
+                pname = str(person.get("name") or "").lower()
+                pid = str(person.get("entity_id") or "").lower()
+                tail = pid.split(".", 1)[-1] if "." in pid else pid
+                if name in {pname, pid, tail}:
+                    person_id = person.get("entity_id")
+                    person_name = person.get("name") or name
+                    break
+            profile = _speaker_profile_from_device(conn, device)
+            self_id = profile.get("ha_person_id") if profile else None
+            if person_id and self_id and person_id != self_id:
+                return "I can only share your own calendar right now."
+            if person_id:
+                target_calendar = calendar_people.get(person_id)
+                target_label = person_name or "calendar"
+
+    if not target_calendar:
+        return "I couldn't find a calendar for that request yet."
+
+    calendar_events = events_by_calendar.get(target_calendar) or []
+    events = _select_events(calendar_events, text)
+    label = target_label or target_calendar
+    return _calendar_reply_for_events(label, events, text)
 
 
 def _lookup_presence(text: str) -> str | None:
@@ -984,6 +1129,11 @@ class VoiceHandler(BaseHTTPRequestHandler):
         if presence_reply:
             print(f"PumpkinVoice ask_reply {presence_reply!r}", flush=True)
             _send_json(self, 200, {"status": "ok", "reply": presence_reply})
+            return
+        calendar_reply = _lookup_calendar(text, device, conn)
+        if calendar_reply:
+            print(f"PumpkinVoice ask_reply {calendar_reply!r}", flush=True)
+            _send_json(self, 200, {"status": "ok", "reply": calendar_reply})
             return
         llm_config = _load_llm_config(conn)
         api_key = self.headers.get("X-Pumpkin-OpenAI-Key") or llm_config["api_key"]
