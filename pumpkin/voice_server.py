@@ -247,7 +247,7 @@ def _calendar_reply_for_events(label: str, events: list[dict], text: str) -> str
 
 def _lookup_calendar(text: str, device: str | None, conn) -> str | None:
     lowered = text.lower()
-    if not re.search(r"\\b(calendar|schedule|appointments|events|availability|free|busy)\\b", lowered):
+    if not re.search(r"\b(calendar|schedule|appointments|events|availability|free|busy)\b", lowered):
         return None
     summary = store.get_memory(conn, "homeassistant.summary")
     if not isinstance(summary, dict):
