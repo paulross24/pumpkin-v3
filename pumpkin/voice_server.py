@@ -426,6 +426,14 @@ def _build_llm_context(conn, device: str | None) -> Dict[str, Any]:
     }
 
 
+def _parse_speaker_name(text: str) -> str | None:
+    match = re.search(r"\b(?:i am|i'm|my name is|this is)\s+([a-zA-Z][a-zA-Z\\-\\s']{0,60})$", text.strip(), re.IGNORECASE)
+    if not match:
+        return None
+    name = " ".join(match.group(1).strip().split())
+    return name[:80] if name else None
+
+
 def _local_status_reply(conn) -> str:
     snapshot_event = _latest_event(conn, "system.snapshot")
     system_snapshot = snapshot_event.get("payload") if snapshot_event else None
@@ -460,6 +468,23 @@ def _update_profile_preference(conn, device: str | None, key: str, value: Any) -
     prefs[key] = value
     profile["preferences"] = prefs
     store.set_memory(conn, f"speaker.profile.device:{device.strip()}", profile)
+    return None
+
+
+def _store_speaker_name(conn, device: str | None, name: str) -> str | None:
+    if not isinstance(device, str) or not device.strip():
+        return "I need a device ID to remember you."
+    key = f"speaker.profile.device:{device.strip()}"
+    profile = store.get_memory(conn, key)
+    if not isinstance(profile, dict):
+        profile = {
+            "state": "named",
+            "consent": True,
+            "preferences": {},
+        }
+    profile["name"] = name
+    profile["state"] = "named"
+    store.set_memory(conn, key, profile)
     return None
 
 
@@ -1571,6 +1596,13 @@ class VoiceHandler(BaseHTTPRequestHandler):
             summary_reply = _local_house_summary_reply(conn)
             print(f"PumpkinVoice ask_reply {summary_reply!r}", flush=True)
             _send_json(self, 200, {"status": "ok", "reply": summary_reply})
+            return
+        name = _parse_speaker_name(text)
+        if name:
+            error = _store_speaker_name(conn, device, name)
+            reply = error or f"Thanks, {name}. I'll remember you."
+            print(f"PumpkinVoice ask_reply {reply!r}", flush=True)
+            _send_json(self, 200, {"status": "ok", "reply": reply})
             return
         preference_reply = _handle_preference_update(text, device, conn)
         if preference_reply:
