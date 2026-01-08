@@ -195,6 +195,27 @@ def _parse_dt(value: str | None) -> datetime | None:
         return None
 
 
+def _event_window(event: dict) -> tuple[datetime | None, datetime | None, bool]:
+    start_raw = event.get("start")
+    end_raw = event.get("end")
+    start = None
+    end = None
+    is_all_day = False
+    if isinstance(start_raw, dict):
+        start_val = start_raw.get("dateTime") or start_raw.get("date")
+        start = _parse_dt(start_val)
+        if start_raw.get("date") and not start_raw.get("dateTime"):
+            is_all_day = True
+    elif isinstance(start_raw, str):
+        start = _parse_dt(start_raw)
+    if isinstance(end_raw, dict):
+        end_val = end_raw.get("dateTime") or end_raw.get("date")
+        end = _parse_dt(end_val)
+    elif isinstance(end_raw, str):
+        end = _parse_dt(end_raw)
+    return start, end, is_all_day
+
+
 def _calendar_window(text: str) -> tuple[datetime | None, datetime | None]:
     now = datetime.now(timezone.utc)
     lowered = text.lower()
@@ -209,6 +230,44 @@ def _calendar_window(text: str) -> tuple[datetime | None, datetime | None]:
     if "this week" in lowered or "next 7 days" in lowered:
         return now, now + timedelta(days=7)
     return None, None
+
+
+def _availability_time(text: str) -> datetime | None:
+    lowered = text.lower()
+    match = re.search(r"\b(?:at|around)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", lowered)
+    if not match:
+        return None
+    hour = int(match.group(1))
+    minute = int(match.group(2) or 0)
+    meridiem = match.group(3)
+    if meridiem:
+        if meridiem == "pm" and hour < 12:
+            hour += 12
+        if meridiem == "am" and hour == 12:
+            hour = 0
+    if hour > 23 or minute > 59:
+        return None
+    base = datetime.now(timezone.utc)
+    if "tomorrow" in lowered:
+        base = base + timedelta(days=1)
+    target = base.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    return target
+
+
+def _is_busy_at(events: list[dict], target: datetime) -> bool:
+    for event in events:
+        start, end, is_all_day = _event_window(event)
+        if not start:
+            continue
+        if is_all_day:
+            if start.date() == target.date():
+                return True
+            continue
+        if end and start <= target < end:
+            return True
+        if not end and start <= target < (start + timedelta(hours=1)):
+            return True
+    return False
 
 
 def _select_events(events: list[dict], text: str, limit: int = 5) -> list[dict]:
@@ -254,6 +313,8 @@ def _lookup_calendar(text: str, device: str | None, conn) -> str | None:
     has_calendar_keyword = bool(
         re.search(r"\b(calendar|schedule|agenda|appointments|events|availability|free|busy)\b", lowered)
     )
+    has_availability = bool(re.search(r"\bfree\b|\bbusy\b|\bavailable\b", lowered))
+    availability_at = _availability_time(lowered)
     has_whats_on = bool(re.search(r"\bwhat('?s| is)\s+on\b", lowered))
     if not has_calendar_keyword and not has_whats_on:
         return None
@@ -335,6 +396,12 @@ def _lookup_calendar(text: str, device: str | None, conn) -> str | None:
         return "I couldn't find a calendar for that request yet."
 
     calendar_events = events_by_calendar.get(target_calendar) or []
+    if has_availability and availability_at:
+        busy = _is_busy_at(calendar_events, availability_at)
+        when = availability_at.strftime("%H:%M UTC")
+        if busy:
+            return f"{target_label or 'That calendar'} looks busy at {when}."
+        return f"{target_label or 'That calendar'} looks free at {when}."
     events = _select_events(calendar_events, text)
     label = target_label or target_calendar
     return _calendar_reply_for_events(label, events, text)
