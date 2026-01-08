@@ -190,7 +190,11 @@ def _parse_dt(value: str | None) -> datetime | None:
         return None
     try:
         cleaned = value.replace("Z", "+00:00")
-        return datetime.fromisoformat(cleaned)
+        parsed = datetime.fromisoformat(cleaned)
+        if parsed.tzinfo is None:
+            local_tz = datetime.now().astimezone().tzinfo
+            return parsed.replace(tzinfo=local_tz)
+        return parsed
     except ValueError:
         return None
 
@@ -247,7 +251,7 @@ def _availability_time(text: str) -> datetime | None:
             hour = 0
     if hour > 23 or minute > 59:
         return None
-    base = datetime.now(timezone.utc)
+    base = datetime.now().astimezone()
     if "tomorrow" in lowered:
         base = base + timedelta(days=1)
     target = base.replace(hour=hour, minute=minute, second=0, microsecond=0)
@@ -398,7 +402,7 @@ def _lookup_calendar(text: str, device: str | None, conn) -> str | None:
     calendar_events = events_by_calendar.get(target_calendar) or []
     if has_availability and availability_at:
         busy = _is_busy_at(calendar_events, availability_at)
-        when = availability_at.strftime("%H:%M UTC")
+        when = availability_at.strftime("%H:%M %Z").strip()
         if busy:
             return f"{target_label or 'That calendar'} looks busy at {when}."
         return f"{target_label or 'That calendar'} looks free at {when}."
