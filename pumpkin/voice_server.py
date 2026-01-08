@@ -513,6 +513,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         }
                     )
                 system_snapshot = snapshot_event["payload"] if snapshot_event else None
+                ha_summary = store.get_memory(conn, "homeassistant.summary")
                 issues = _summarize_issues(system_snapshot)
                 _send_json(
                     self,
@@ -521,6 +522,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "status": "ok",
                         "heartbeat": heartbeat_event,
                         "system_snapshot": system_snapshot,
+                        "homeassistant": ha_summary,
                         "issues": issues,
                         "proposals": proposal_items,
                         "proposal_count": len(proposal_items),

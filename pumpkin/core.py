@@ -96,9 +96,29 @@ def _collect_module_events(conn) -> List[Dict[str, Any]]:
         if not _cooldown_elapsed(conn, "ha.request", settings.ha_error_cooldown_seconds()):
             return events
 
-        ha_events = observe.homeassistant_snapshot(base_url=base_url, token=token)
+        include_domains = module_cfg.get("include_domains")
+        include_entities = module_cfg.get("include_entities")
+        exclude_domains = module_cfg.get("exclude_domains")
+        exclude_entities = module_cfg.get("exclude_entities")
+        attribute_allowlist = module_cfg.get("attribute_allowlist")
+        previous = store.get_memory(conn, "homeassistant.entities") or {}
+
+        ha_events, current_states, summary = observe.homeassistant_snapshot(
+            base_url=base_url,
+            token=token,
+            previous=previous,
+            include_domains=include_domains,
+            include_entities=include_entities,
+            exclude_domains=exclude_domains,
+            exclude_entities=exclude_entities,
+            attribute_allowlist=attribute_allowlist,
+        )
         events.extend(ha_events)
-        if any(ev["type"] == "homeassistant.request_failed" for ev in ha_events):
+        if current_states:
+            store.set_memory(conn, "homeassistant.entities", current_states)
+        if summary:
+            store.set_memory(conn, "homeassistant.summary", summary)
+        if any(ev["type"] in {"homeassistant.request_failed", "homeassistant.states_failed"} for ev in ha_events):
             _record_cooldown(conn, "ha.request")
 
     return events

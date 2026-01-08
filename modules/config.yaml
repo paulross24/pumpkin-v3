@@ -1,3 +1,22 @@
 version: 1
-enabled: []
-modules: {}
+enabled:
+  - homeassistant.observer
+modules:
+  homeassistant.observer:
+    base_url: "http://192.168.1.140:8123"
+    token_env: "PUMPKIN_HA_TOKEN"
+    include_domains:
+      - "*"
+    attribute_allowlist:
+      - friendly_name
+      - device_class
+      - unit_of_measurement
+      - icon
+      - battery_level
+      - temperature
+      - current_temperature
+      - humidity
+      - brightness
+      - hvac_mode
+      - hvac_action
+      - preset_mode
