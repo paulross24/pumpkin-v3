@@ -331,7 +331,17 @@ def _home_query(text: str) -> bool:
     )
 
 
-def _build_llm_context(conn) -> Dict[str, Any]:
+def _home_summary_query(text: str) -> bool:
+    lowered = text.lower()
+    return bool(
+        "house summary" in lowered
+        or "home summary" in lowered
+        or "state of the house" in lowered
+        or "state of the home" in lowered
+    )
+
+
+def _build_llm_context(conn, device: str | None) -> Dict[str, Any]:
     snapshot_event = _latest_event(conn, "system.snapshot")
     system_snapshot = snapshot_event.get("payload") if snapshot_event else None
     issues = _summarize_issues(system_snapshot)
@@ -342,9 +352,19 @@ def _build_llm_context(conn) -> Dict[str, Any]:
         "zones": ha_summary.get("zones") or [],
         "calendars": ha_summary.get("calendars") or [],
         "upcoming_events": (ha_summary.get("upcoming_events") or [])[:5],
+        "last_event": store.get_memory(conn, "homeassistant.last_event"),
     }
     pending = store.list_proposals(conn, status="pending", limit=5)
     errors = _latest_errors(conn, limit=3)
+    profile = _speaker_profile_from_device(conn, device)
+    profile_summary = None
+    if isinstance(profile, dict):
+        profile_summary = {
+            "name": profile.get("name"),
+            "ha_person_id": profile.get("ha_person_id"),
+            "preferences": profile.get("preferences", {}),
+            "voice_recognition_opt_in": profile.get("voice_recognition_opt_in", False),
+        }
     return {
         "system_snapshot": system_snapshot,
         "issues": issues,
@@ -354,6 +374,7 @@ def _build_llm_context(conn) -> Dict[str, Any]:
             for row in pending
         ],
         "recent_errors": errors,
+        "speaker_profile": profile_summary,
     }
 
 
@@ -379,6 +400,100 @@ def _local_home_reply(conn) -> str | None:
     if len(people_home) == 1:
         return f"{people_home[0]} is home."
     return f"People home: {', '.join(people_home)}."
+
+
+def _friendly_entity_name(entity_id: str, payload: Dict[str, Any]) -> str:
+    attributes = payload.get("attributes", {}) if isinstance(payload, dict) else {}
+    name = attributes.get("friendly_name") if isinstance(attributes, dict) else None
+    return str(name or entity_id)
+
+
+def _extract_entities(conn) -> Dict[str, Dict[str, Any]]:
+    entities = store.get_memory(conn, "homeassistant.entities")
+    if isinstance(entities, dict):
+        return entities
+    return {}
+
+
+def _entity_matches(payload: Dict[str, Any], device_class: str) -> bool:
+    attributes = payload.get("attributes", {}) if isinstance(payload, dict) else {}
+    if not isinstance(attributes, dict):
+        return False
+    return attributes.get("device_class") == device_class
+
+
+def _collect_entities(entities: Dict[str, Dict[str, Any]], domain: str, device_class: str | None) -> List[str]:
+    matched: List[str] = []
+    for entity_id, payload in entities.items():
+        if not isinstance(entity_id, str):
+            continue
+        if not entity_id.startswith(domain + "."):
+            continue
+        if device_class and not _entity_matches(payload, device_class):
+            continue
+        state = payload.get("state")
+        if state != "on":
+            continue
+        matched.append(_friendly_entity_name(entity_id, payload))
+    return matched
+
+
+def _home_state_summary(conn) -> Dict[str, Any]:
+    ha_summary = store.get_memory(conn, "homeassistant.summary") or {}
+    people_home = ha_summary.get("people_home") or []
+    entities = _extract_entities(conn)
+    doors_open = _collect_entities(entities, "binary_sensor", "door")
+    windows_open = _collect_entities(entities, "binary_sensor", "window")
+    motion_active = _collect_entities(entities, "binary_sensor", "motion")
+    lights_on = _collect_entities(entities, "light", None)
+    return {
+        "people_home": people_home,
+        "doors_open": doors_open,
+        "windows_open": windows_open,
+        "motion_active": motion_active,
+        "lights_on": lights_on,
+    }
+
+
+def _home_state_suggestions(summary: Dict[str, Any]) -> List[str]:
+    suggestions: List[str] = []
+    doors_open = summary.get("doors_open") or []
+    windows_open = summary.get("windows_open") or []
+    motion_active = summary.get("motion_active") or []
+    people_home = summary.get("people_home") or []
+    if doors_open or windows_open:
+        suggestions.append("Check open doors or windows.")
+    if not people_home and (doors_open or windows_open):
+        suggestions.append("No one is home but an entry is open.")
+    if not people_home and motion_active:
+        suggestions.append("Motion detected while no one is home.")
+    return suggestions
+
+
+def _local_house_summary_reply(conn) -> str:
+    summary = _home_state_summary(conn)
+    people_home = summary.get("people_home") or []
+    doors_open = summary.get("doors_open") or []
+    windows_open = summary.get("windows_open") or []
+    motion_active = summary.get("motion_active") or []
+    lights_on = summary.get("lights_on") or []
+    parts = []
+    if people_home:
+        parts.append(f"People home: {', '.join(people_home)}")
+    else:
+        parts.append("No one is marked as home")
+    if doors_open:
+        parts.append(f"Doors open: {', '.join(doors_open)}")
+    if windows_open:
+        parts.append(f"Windows open: {', '.join(windows_open)}")
+    if motion_active:
+        parts.append(f"Motion active: {', '.join(motion_active)}")
+    if lights_on:
+        parts.append(f"Lights on: {', '.join(lights_on)}")
+    suggestions = _home_state_suggestions(summary)
+    if suggestions:
+        parts.append(f"Suggestions: {', '.join(suggestions)}")
+    return ". ".join(parts) + "."
 
 
 def _lookup_calendar(text: str, device: str | None, conn) -> str | None:
@@ -481,7 +596,7 @@ def _lookup_calendar(text: str, device: str | None, conn) -> str | None:
 
 
 def _lookup_presence(text: str) -> str | None:
-    match = re.search(r"\b(?:is|where is)\\s+([a-zA-Z]+)\\b", text, re.IGNORECASE)
+    match = re.search(r"\b(?:is|where is)\s+([a-zA-Z]+)\b", text, re.IGNORECASE)
     if not match:
         return None
     name = match.group(1).lower()
@@ -542,6 +657,36 @@ def _lookup_presence(text: str) -> str | None:
     if isinstance(state, str):
         return f"{match.group(1).capitalize()} is {state}."
     return "I couldn't determine presence."
+
+
+def _coerce_ha_event_payload(data: Dict[str, Any]) -> Dict[str, Any]:
+    event_type = data.get("event_type") or data.get("type")
+    payload = data.get("data") if isinstance(data.get("data"), dict) else {}
+    if not payload:
+        payload = {
+            "entity_id": data.get("entity_id"),
+            "state": data.get("state"),
+            "attributes": data.get("attributes"),
+        }
+    return {
+        "event_type": event_type,
+        "origin": data.get("origin"),
+        "time_fired": data.get("time_fired"),
+        "payload": payload,
+    }
+
+
+def _record_ha_event(conn, data: Dict[str, Any]) -> int:
+    payload = _coerce_ha_event_payload(data)
+    event_id = store.insert_event(
+        conn,
+        source="homeassistant",
+        event_type="homeassistant.webhook",
+        payload=payload,
+        severity="info",
+    )
+    store.set_memory(conn, "homeassistant.last_event", payload)
+    return event_id
 
 
 def _latest_errors(conn, limit: int) -> list[Dict[str, Any]]:
@@ -606,6 +751,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 return
             if self.path == "/errors":
                 self._handle_errors()
+                return
+            if self.path == "/ha/webhook":
+                self._handle_ha_webhook()
                 return
             if self.path == "/proposals/approve":
                 self._handle_proposal_decision("approved")
@@ -742,6 +890,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "POST /proposals/reject",
                             "POST /llm/config",
                             "POST /ingest",
+                            "POST /ha/webhook",
                             "POST /voice",
                             "POST /satellite/voice",
                         ],
@@ -774,6 +923,8 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "voice_rate_limit_seconds": settings.voice_cooldown_seconds(),
                             "max_text_len": MAX_TEXT_LEN,
                             "ingest_enabled": True,
+                            "ha_webhook_enabled": True,
+                            "home_summary_enabled": True,
                         },
                         "build": {
                             "python": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
@@ -838,6 +989,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                     )
                 system_snapshot = snapshot_event["payload"] if snapshot_event else None
                 ha_summary = store.get_memory(conn, "homeassistant.summary")
+                ha_last_event = store.get_memory(conn, "homeassistant.last_event")
                 issues = _summarize_issues(system_snapshot)
                 _send_json(
                     self,
@@ -847,6 +999,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "heartbeat": heartbeat_event,
                         "system_snapshot": system_snapshot,
                         "homeassistant": ha_summary,
+                        "homeassistant_last_event": ha_last_event,
                         "issues": issues,
                         "proposals": proposal_items,
                         "proposal_count": len(proposal_items),
@@ -1091,6 +1244,29 @@ class VoiceHandler(BaseHTTPRequestHandler):
                                     },
                                 }
                             },
+                            "/ha/webhook": {
+                                "post": {
+                                    "summary": "Record Home Assistant webhook event",
+                                    "requestBody": {
+                                        "required": True,
+                                        "content": {
+                                            "application/json": {
+                                                "schema": {"type": "object"}
+                                            }
+                                        },
+                                    },
+                                    "responses": {
+                                        "200": {
+                                            "description": "Acknowledged",
+                                            "content": {
+                                                "application/json": {
+                                                    "schema": {"type": "object"}
+                                                }
+                                            },
+                                        }
+                                    },
+                                }
+                            },
                             "/llm/config": {
                                 "post": {
                                     "summary": "Set LLM configuration",
@@ -1296,6 +1472,11 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 print(f"PumpkinVoice ask_reply {home_reply!r}", flush=True)
                 _send_json(self, 200, {"status": "ok", "reply": home_reply})
                 return
+        if _home_summary_query(text):
+            summary_reply = _local_house_summary_reply(conn)
+            print(f"PumpkinVoice ask_reply {summary_reply!r}", flush=True)
+            _send_json(self, 200, {"status": "ok", "reply": summary_reply})
+            return
         calendar_reply = _lookup_calendar(text, device, conn)
         if calendar_reply:
             print(f"PumpkinVoice ask_reply {calendar_reply!r}", flush=True)
@@ -1308,7 +1489,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
             return
         llm_config = _load_llm_config(conn)
         api_key = self.headers.get("X-Pumpkin-OpenAI-Key") or llm_config["api_key"]
-        context = _build_llm_context(conn)
+        context = _build_llm_context(conn, device)
         prompt = (
             "Answer the user question using the context when relevant. "
             "If the context lacks the answer, say so briefly.\n\n"
@@ -1374,6 +1555,21 @@ class VoiceHandler(BaseHTTPRequestHandler):
             payload=payload,
             severity="warn",
         )
+        _send_json(self, 200, {"status": "ok", "event_id": event_id})
+
+    def _handle_ha_webhook(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+        try:
+            data = _parse_json(body)
+        except ValueError:
+            _bad_request(self, "invalid JSON")
+            return
+        if not isinstance(data, dict):
+            _bad_request(self, "JSON body must be an object")
+            return
+        conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+        event_id = _record_ha_event(conn, data)
         _send_json(self, 200, {"status": "ok", "event_id": event_id})
 
     def _handle_proposal_decision(self, decision: str) -> None:
