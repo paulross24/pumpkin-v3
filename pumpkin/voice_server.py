@@ -341,6 +341,46 @@ def _home_summary_query(text: str) -> bool:
     )
 
 
+def _recent_query(text: str) -> bool:
+    lowered = text.lower()
+    return bool(
+        "what changed" in lowered
+        or "recent events" in lowered
+        or "last events" in lowered
+        or "last thing" in lowered
+    )
+
+
+def _inventory_query(text: str) -> bool:
+    lowered = text.lower()
+    return bool(
+        "list doors" in lowered
+        or "list windows" in lowered
+        or "which lights are on" in lowered
+        or "lights on" in lowered
+    )
+
+
+def _memory_query(text: str) -> bool:
+    lowered = text.lower()
+    return bool(
+        "what do you know about me" in lowered
+        or "what do you remember about me" in lowered
+        or "forget me" in lowered
+        or "forget everything" in lowered
+    )
+
+
+def _health_query(text: str) -> bool:
+    lowered = text.lower()
+    return bool(
+        "system health" in lowered
+        or "health report" in lowered
+        or "risk report" in lowered
+        or "status report" in lowered
+    )
+
+
 def _parse_time_24h(value: str) -> str | None:
     match = re.search(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", value.strip().lower())
     if not match:
@@ -596,6 +636,80 @@ def _local_house_summary_reply(conn) -> str:
     if suggestions:
         parts.append(f"Suggestions: {', '.join(suggestions)}")
     return ". ".join(parts) + "."
+
+
+def _recent_events_reply(conn, limit: int = 5) -> str:
+    rows = conn.execute(
+        "SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,)
+    ).fetchall()
+    if not rows:
+        return "No recent events recorded."
+    summaries = []
+    for row in rows:
+        summaries.append(f"{row['type']} from {row['source']} at {row['ts']}")
+    return "Recent events: " + "; ".join(summaries)
+
+
+def _last_ha_event_reply(conn) -> str:
+    last_event = store.get_memory(conn, "homeassistant.last_event")
+    if not isinstance(last_event, dict):
+        return "No recent Home Assistant event recorded."
+    event_type = last_event.get("event_type") or "event"
+    payload = last_event.get("payload") or {}
+    entity_id = payload.get("entity_id")
+    state = payload.get("state")
+    if entity_id and state is not None:
+        return f"Last HA event: {event_type} for {entity_id} => {state}."
+    return f"Last HA event: {event_type}."
+
+
+def _inventory_reply(conn, text: str) -> str:
+    entities = _extract_entities(conn)
+    lowered = text.lower()
+    if "door" in lowered:
+        doors = _collect_entities(entities, "binary_sensor", "door")
+        return "Open doors: " + (", ".join(doors) if doors else "none.")
+    if "window" in lowered:
+        windows = _collect_entities(entities, "binary_sensor", "window")
+        return "Open windows: " + (", ".join(windows) if windows else "none.")
+    if "light" in lowered:
+        lights = _collect_entities(entities, "light", None)
+        return "Lights on: " + (", ".join(lights) if lights else "none.")
+    return "I couldn't find matching devices."
+
+
+def _health_report_reply(conn) -> str:
+    snapshot_event = _latest_event(conn, "system.snapshot")
+    system_snapshot = snapshot_event.get("payload") if snapshot_event else None
+    issues = _summarize_issues(system_snapshot)
+    ha_summary = store.get_memory(conn, "homeassistant.summary") or {}
+    calendar_error = ha_summary.get("calendar_error")
+    parts = []
+    if issues:
+        parts.append("Issues: " + "; ".join(issue.get("message", "issue") for issue in issues))
+    else:
+        parts.append("No system issues detected.")
+    if calendar_error:
+        parts.append(f"Calendar error: {calendar_error}.")
+    return " ".join(parts)
+
+
+def _memory_reply(conn, device: str | None, text: str) -> str:
+    lowered = text.lower()
+    if "forget" in lowered:
+        if not isinstance(device, str) or not device.strip():
+            return "I need a device ID to forget you."
+        store.set_memory(conn, f"speaker.profile.device:{device.strip()}", {"state": "guest"})
+        return "Done. I've cleared what I stored about you."
+    profile = _speaker_profile_from_device(conn, device)
+    if not isinstance(profile, dict):
+        return "I don't have a profile stored for you yet."
+    summary = {
+        "name": profile.get("name"),
+        "preferences": profile.get("preferences", {}),
+        "ha_person_id": profile.get("ha_person_id"),
+    }
+    return f"Here's what I remember: {json.dumps(summary, ensure_ascii=True)}"
 
 
 def _lookup_calendar(text: str, device: str | None, conn) -> str | None:
@@ -1597,6 +1711,26 @@ class VoiceHandler(BaseHTTPRequestHandler):
             print(f"PumpkinVoice ask_reply {summary_reply!r}", flush=True)
             _send_json(self, 200, {"status": "ok", "reply": summary_reply})
             return
+        if _recent_query(text):
+            reply = _recent_events_reply(conn, limit=5)
+            print(f"PumpkinVoice ask_reply {reply!r}", flush=True)
+            _send_json(self, 200, {"status": "ok", "reply": reply})
+            return
+        if "last ha event" in text.lower() or "last home assistant" in text.lower():
+            reply = _last_ha_event_reply(conn)
+            print(f"PumpkinVoice ask_reply {reply!r}", flush=True)
+            _send_json(self, 200, {"status": "ok", "reply": reply})
+            return
+        if _inventory_query(text):
+            reply = _inventory_reply(conn, text)
+            print(f"PumpkinVoice ask_reply {reply!r}", flush=True)
+            _send_json(self, 200, {"status": "ok", "reply": reply})
+            return
+        if _health_query(text):
+            reply = _health_report_reply(conn)
+            print(f"PumpkinVoice ask_reply {reply!r}", flush=True)
+            _send_json(self, 200, {"status": "ok", "reply": reply})
+            return
         name = _parse_speaker_name(text)
         if name:
             error = _store_speaker_name(conn, device, name)
@@ -1608,6 +1742,11 @@ class VoiceHandler(BaseHTTPRequestHandler):
         if preference_reply:
             print(f"PumpkinVoice ask_reply {preference_reply!r}", flush=True)
             _send_json(self, 200, {"status": "ok", "reply": preference_reply})
+            return
+        if _memory_query(text):
+            reply = _memory_reply(conn, device, text)
+            print(f"PumpkinVoice ask_reply {reply!r}", flush=True)
+            _send_json(self, 200, {"status": "ok", "reply": reply})
             return
         calendar_reply = _lookup_calendar(text, device, conn)
         if calendar_reply:
