@@ -7,6 +7,9 @@ modules:
     token_env: "PUMPKIN_HA_TOKEN"
     include_domains:
       - "*"
+    calendar_enabled: true
+    calendar_days_ahead: 7
+    calendar_limit: 10
     attribute_allowlist:
       - friendly_name
       - device_class

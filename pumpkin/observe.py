@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from . import ha_client
@@ -153,6 +154,26 @@ def _summarize_states(states: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def _parse_datetime(value: str) -> Optional[datetime]:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        cleaned = value.replace("Z", "+00:00")
+        return datetime.fromisoformat(cleaned)
+    except ValueError:
+        return None
+
+
+def _event_start(event: Dict[str, Any]) -> Optional[datetime]:
+    start = event.get("start") or {}
+    if isinstance(start, dict):
+        value = start.get("dateTime") or start.get("date")
+        return _parse_datetime(value) if value else None
+    if isinstance(start, str):
+        return _parse_datetime(start)
+    return None
+
+
 def homeassistant_snapshot(
     base_url: str,
     token: str,
@@ -162,6 +183,9 @@ def homeassistant_snapshot(
     exclude_domains: Optional[Iterable[str]] = None,
     exclude_entities: Optional[Iterable[str]] = None,
     attribute_allowlist: Optional[Iterable[str]] = None,
+    calendar_enabled: bool = False,
+    calendar_days_ahead: int = 7,
+    calendar_limit: int = 10,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, Any]], Dict[str, Any]]:
     events: List[Dict[str, Any]] = []
     result = ha_client.fetch_status(
@@ -260,4 +284,59 @@ def homeassistant_snapshot(
                 "severity": "info",
             }
         )
+    if calendar_enabled:
+        calendars_result = ha_client.fetch_calendars(
+            base_url=base_url, token=token, timeout=settings.ha_request_timeout_seconds()
+        )
+        if calendars_result.get("ok"):
+            calendars = []
+            for item in calendars_result.get("calendars", []):
+                if not isinstance(item, dict):
+                    continue
+                entity_id = item.get("entity_id")
+                name = item.get("name") or entity_id
+                if entity_id:
+                    calendars.append({"entity_id": entity_id, "name": name})
+            summary["calendars"] = calendars
+            now = datetime.now(timezone.utc)
+            end = now + timedelta(days=max(1, calendar_days_ahead))
+            upcoming = []
+            for cal in calendars:
+                entity_id = cal.get("entity_id")
+                if not entity_id:
+                    continue
+                result = ha_client.fetch_calendar_events(
+                    base_url=base_url,
+                    token=token,
+                    entity_id=entity_id,
+                    start=now.isoformat(),
+                    end=end.isoformat(),
+                    timeout=settings.ha_request_timeout_seconds(),
+                )
+                if not result.get("ok"):
+                    continue
+                for event in result.get("events", []):
+                    if not isinstance(event, dict):
+                        continue
+                    upcoming.append(
+                        {
+                            "calendar": cal.get("name"),
+                            "entity_id": entity_id,
+                            "summary": event.get("summary"),
+                            "start": event.get("start"),
+                            "end": event.get("end"),
+                            "location": event.get("location"),
+                        }
+                    )
+            upcoming.sort(key=lambda item: _event_start(item) or datetime.max)
+            summary["upcoming_events"] = upcoming[: max(1, calendar_limit)]
+        else:
+            events.append(
+                {
+                    "source": "homeassistant",
+                    "type": "homeassistant.calendar_failed",
+                    "payload": {"error": calendars_result.get("error")},
+                    "severity": "warn",
+                }
+            )
     return events, current, summary
