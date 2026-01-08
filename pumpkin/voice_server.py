@@ -285,9 +285,9 @@ def _lookup_calendar(text: str, device: str | None, conn) -> str | None:
         else:
             return "I don't know which Home Assistant person you are yet. Tell me your name first."
     else:
-        match = re.search(r"\\b(?:is|isn't|is not)\\s+([a-zA-Z]+)\\s+(?:free|busy|available)\\b", lowered)
+        match = re.search(r"\b(?:is|isn't|is not)\s+([a-zA-Z]+)\s+(?:free|busy|available)\b", lowered)
         if not match:
-            match = re.search(r\"\\b([a-zA-Z]+)'s\\s+calendar\\b\", lowered)
+            match = re.search(r"\b([a-zA-Z]+)'s\s+calendar\b", lowered)
         if match:
             name = match.group(1).lower()
             people = summary.get("people") or []
