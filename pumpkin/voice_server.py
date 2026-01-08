@@ -229,10 +229,14 @@ def _select_events(events: list[dict], text: str, limit: int = 5) -> list[dict]:
 
 def _calendar_reply_for_events(label: str, events: list[dict], text: str) -> str:
     if not events:
-        if "today" in text.lower():
-            return f"No events on {label} today."
-        if "tomorrow" in text.lower():
-            return f"No events on {label} tomorrow."
+        lowered = text.lower()
+        label_text = label[:1].upper() + label[1:] if label else label
+        if "today" in lowered:
+            return f"{label_text} is clear today."
+        if "tomorrow" in lowered:
+            return f"{label_text} is clear tomorrow."
+        if "this week" in lowered or "next 7 days" in lowered:
+            return f"No events on {label} this week."
         return f"No upcoming events on {label}."
     lines = []
     for event in events:
@@ -247,7 +251,11 @@ def _calendar_reply_for_events(label: str, events: list[dict], text: str) -> str
 
 def _lookup_calendar(text: str, device: str | None, conn) -> str | None:
     lowered = text.lower()
-    if not re.search(r"\b(calendar|schedule|appointments|events|availability|free|busy)\b", lowered):
+    has_calendar_keyword = bool(
+        re.search(r"\b(calendar|schedule|agenda|appointments|events|availability|free|busy)\b", lowered)
+    )
+    has_whats_on = bool(re.search(r"\bwhat('?s| is)\s+on\b", lowered))
+    if not has_calendar_keyword and not has_whats_on:
         return None
     summary = store.get_memory(conn, "homeassistant.summary")
     if not isinstance(summary, dict):
@@ -310,6 +318,18 @@ def _lookup_calendar(text: str, device: str | None, conn) -> str | None:
             if person_id:
                 target_calendar = calendar_people.get(person_id)
                 target_label = person_name or "calendar"
+        elif has_whats_on or "today" in lowered or "tomorrow" in lowered or "this week" in lowered:
+            profile = _speaker_profile_from_device(conn, device)
+            person_id = profile.get("ha_person_id") if profile else None
+            if isinstance(person_id, str):
+                target_calendar = calendar_people.get(person_id)
+                target_label = profile.get("ha_person_name") or "your calendar"
+            if not target_calendar and calendar_shared:
+                target_calendar = calendar_shared[0]
+                target_label = "the family calendar"
+            if not target_calendar and calendars:
+                target_calendar = calendars[0].get("entity_id")
+                target_label = calendars[0].get("name") or "the calendar"
 
     if not target_calendar:
         return "I couldn't find a calendar for that request yet."
