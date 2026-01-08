@@ -96,6 +96,50 @@ def _normalize_name(text: str) -> str:
     return name[:80]
 
 
+def _load_ha_people(conn) -> List[Dict[str, Any]]:
+    summary = store.get_memory(conn, "homeassistant.summary")
+    if isinstance(summary, dict):
+        people = summary.get("people")
+        if isinstance(people, list):
+            return [item for item in people if isinstance(item, dict)]
+    entities = store.get_memory(conn, "homeassistant.entities")
+    people = []
+    if isinstance(entities, dict):
+        for entity_id, payload in entities.items():
+            if not isinstance(entity_id, str) or not entity_id.startswith("person."):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            attributes = payload.get("attributes", {}) if isinstance(payload.get("attributes"), dict) else {}
+            name = attributes.get("friendly_name") or entity_id
+            people.append({"entity_id": entity_id, "name": str(name), "state": payload.get("state")})
+    return people
+
+
+def _match_ha_person(name: str, people: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not name:
+        return None
+    needle = name.strip().lower()
+    for person in people:
+        pname = str(person.get("name") or "").strip().lower()
+        entity_id = str(person.get("entity_id") or "")
+        entity_tail = entity_id.split(".", 1)[-1].lower() if "." in entity_id else entity_id.lower()
+        if needle == pname or needle == entity_id.lower() or needle == entity_tail:
+            return person
+    return None
+
+
+def _ha_people_options(people: List[Dict[str, Any]], limit: int = 6) -> str:
+    names = [str(person.get("name") or person.get("entity_id")) for person in people]
+    names = [name for name in names if name]
+    if not names:
+        return ""
+    if len(names) > limit:
+        names = names[:limit]
+        return ", ".join(names) + "..."
+    return ", ".join(names)
+
+
 def _context_pack(
     conn,
     policy: policy_mod.Policy,
@@ -377,11 +421,13 @@ def _rule_based_proposals(events: List[Any], conn) -> List[Dict[str, Any]]:
                     if _session_is_new(session, now):
                         session["asked_remember"] = False
                         session["asked_voice_recognition"] = False
+                        session["asked_ha_person"] = False
                     session["last_seen_ts"] = now
                     session["interaction_count"] = int(session.get("interaction_count", 0)) + 1
 
                     profile = _load_speaker_profile(conn, speaker_key)
                     affirmation = intent.parse_affirmation(text)
+                    ha_people = _load_ha_people(conn)
 
                     if session.get("pending_remember_response") and affirmation in {"yes", "no"}:
                         session["pending_remember_response"] = False
@@ -488,6 +534,60 @@ def _rule_based_proposals(events: List[Any], conn) -> List[Dict[str, Any]]:
                                     "steps": ["Confirm stored identity"],
                                 }
                             )
+                            if ha_people:
+                                match = _match_ha_person(name, ha_people)
+                                if match:
+                                    profile["ha_person_id"] = match.get("entity_id")
+                                    profile["ha_person_name"] = match.get("name")
+                                    _save_speaker_profile(conn, speaker_key, profile)
+                                    proposals.append(
+                                        {
+                                            "kind": "action.request",
+                                            "summary": "Linked Home Assistant profile",
+                                            "details": {
+                                                "rationale": "Speaker name matched a Home Assistant person.",
+                                                "action_type": "notify.local",
+                                                "action_params": {
+                                                    "message": (
+                                                        f"Linked you to Home Assistant profile "
+                                                        f"{match.get('name') or match.get('entity_id')}."
+                                                    ),
+                                                },
+                                            },
+                                            "risk": 0.2,
+                                            "expected_outcome": "Speaker is informed their profile is linked.",
+                                            "source_event_ids": [row["id"]],
+                                            "needs_new_capability": False,
+                                            "capability_request": None,
+                                            "steps": ["Confirm HA profile link"],
+                                        }
+                                    )
+                                elif not session.get("asked_ha_person"):
+                                    session["asked_ha_person"] = True
+                                    session["pending_ha_person"] = True
+                                    options = _ha_people_options(ha_people)
+                                    message = (
+                                        "Which Home Assistant person are you? "
+                                        f"Options: {options}. "
+                                        "You can say the name or say 'skip'."
+                                    )
+                                    proposals.append(
+                                        {
+                                            "kind": "action.request",
+                                            "summary": "Ask for Home Assistant person link",
+                                            "details": {
+                                                "rationale": "Speaker name did not match HA people.",
+                                                "action_type": "notify.local",
+                                                "action_params": {"message": message},
+                                            },
+                                            "risk": 0.2,
+                                            "expected_outcome": "Speaker links their HA profile.",
+                                            "source_event_ids": [row["id"]],
+                                            "needs_new_capability": False,
+                                            "capability_request": None,
+                                            "steps": ["Ask for HA person match"],
+                                        }
+                                    )
                         else:
                             proposals.append(
                                 {
@@ -509,6 +609,60 @@ def _rule_based_proposals(events: List[Any], conn) -> List[Dict[str, Any]]:
                                 }
                             )
                         handled_identity_response = True
+                    elif session.get("pending_ha_person"):
+                        choice = _match_ha_person(text, ha_people)
+                        if choice:
+                            session["pending_ha_person"] = False
+                            profile = profile or {}
+                            profile["ha_person_id"] = choice.get("entity_id")
+                            profile["ha_person_name"] = choice.get("name")
+                            _save_speaker_profile(conn, speaker_key, profile)
+                            proposals.append(
+                                {
+                                    "kind": "action.request",
+                                    "summary": "Linked Home Assistant profile",
+                                    "details": {
+                                        "rationale": "Speaker selected a Home Assistant person.",
+                                        "action_type": "notify.local",
+                                        "action_params": {
+                                            "message": (
+                                                f"Linked you to Home Assistant profile "
+                                                f"{choice.get('name') or choice.get('entity_id')}."
+                                            ),
+                                        },
+                                    },
+                                    "risk": 0.2,
+                                    "expected_outcome": "Speaker is informed their profile is linked.",
+                                    "source_event_ids": [row["id"]],
+                                    "needs_new_capability": False,
+                                    "capability_request": None,
+                                    "steps": ["Confirm HA profile link"],
+                                }
+                            )
+                            handled_identity_response = True
+                        elif intent.parse_affirmation(text) in {"no"} or text.strip().lower() in {"skip", "later"}:
+                            session["pending_ha_person"] = False
+                            session["declined_ha_person"] = True
+                            proposals.append(
+                                {
+                                    "kind": "action.request",
+                                    "summary": "Skipped Home Assistant profile link",
+                                    "details": {
+                                        "rationale": "Speaker declined to link HA profile.",
+                                        "action_type": "notify.local",
+                                        "action_params": {
+                                            "message": "Understood. I won't link a Home Assistant profile yet.",
+                                        },
+                                    },
+                                    "risk": 0.2,
+                                    "expected_outcome": "Speaker is informed no link is stored.",
+                                    "source_event_ids": [row["id"]],
+                                    "needs_new_capability": False,
+                                    "capability_request": None,
+                                    "steps": ["Confirm HA link skipped"],
+                                }
+                            )
+                            handled_identity_response = True
                     elif session.get("pending_voice_recognition") and affirmation in {"yes", "no"}:
                         session["pending_voice_recognition"] = False
                         if affirmation == "yes":

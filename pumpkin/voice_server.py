@@ -176,7 +176,7 @@ def _load_llm_config(conn) -> Dict[str, Any]:
 
 
 def _lookup_presence(text: str) -> str | None:
-    match = re.search(r"\bis\\s+([a-zA-Z]+)\\s+home\\b", text, re.IGNORECASE)
+    match = re.search(r"\b(?:is|where is)\\s+([a-zA-Z]+)\\b", text, re.IGNORECASE)
     if not match:
         return None
     name = match.group(1).lower()
@@ -192,9 +192,28 @@ def _lookup_presence(text: str) -> str | None:
         return None
     module_cfg = config.get("modules", {}).get("homeassistant.observer", {})
     people = module_cfg.get("people", {})
-    if not isinstance(people, dict):
-        return None
-    entity_id = people.get(name)
+    entity_id = None
+    if isinstance(people, dict):
+        entity_id = people.get(name)
+    if not isinstance(entity_id, str):
+        summary = store.get_memory(init_db(str(settings.db_path()), str(settings.repo_root() / "migrations")), "homeassistant.summary")
+        if isinstance(summary, dict):
+            for person in summary.get("people", []) or []:
+                if not isinstance(person, dict):
+                    continue
+                pname = str(person.get("name") or "").lower()
+                pid = str(person.get("entity_id") or "").lower()
+                tail = pid.split(".", 1)[-1] if "." in pid else pid
+                if name in {pname, pid, tail}:
+                    entity_id = person.get("entity_id")
+                    state = person.get("state")
+                    if isinstance(state, str):
+                        if state == "home":
+                            return f"{match.group(1).capitalize()} is home."
+                        if state == "not_home":
+                            return f"{match.group(1).capitalize()} is not home."
+                        return f"{match.group(1).capitalize()} is {state}."
+                    break
     if not isinstance(entity_id, str):
         return None
     base_url = module_cfg.get("base_url")

@@ -68,6 +68,10 @@ _DEFAULT_ATTR_ALLOWLIST = [
     "unit_of_measurement",
     "icon",
     "battery_level",
+    "latitude",
+    "longitude",
+    "radius",
+    "passive",
     "temperature",
     "current_temperature",
     "humidity",
@@ -110,16 +114,42 @@ def _filter_entity(
 def _summarize_states(states: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     counts: Dict[str, int] = {}
     home_people: List[str] = []
+    people: List[Dict[str, Any]] = []
+    zones: List[Dict[str, Any]] = []
     for entity_id, payload in states.items():
         domain = entity_id.split(".", 1)[0] if "." in entity_id else ""
         counts[domain] = counts.get(domain, 0) + 1
-        if domain == "person" and payload.get("state") == "home":
+        if domain == "person":
             name = payload.get("attributes", {}).get("friendly_name") or entity_id
-            home_people.append(str(name))
+            if payload.get("state") == "home":
+                home_people.append(str(name))
+            people.append(
+                {
+                    "entity_id": entity_id,
+                    "name": str(name),
+                    "state": payload.get("state"),
+                }
+            )
+        if domain == "zone":
+            attributes = payload.get("attributes", {}) or {}
+            name = attributes.get("friendly_name") or entity_id
+            zones.append(
+                {
+                    "entity_id": entity_id,
+                    "name": str(name),
+                    "latitude": attributes.get("latitude"),
+                    "longitude": attributes.get("longitude"),
+                    "radius": attributes.get("radius"),
+                    "passive": attributes.get("passive"),
+                    "icon": attributes.get("icon"),
+                }
+            )
     return {
         "entity_count": len(states),
         "counts_by_domain": counts,
         "people_home": sorted(home_people),
+        "people": sorted(people, key=lambda item: item.get("name", "")),
+        "zones": sorted(zones, key=lambda item: item.get("name", "")),
     }
 
 
