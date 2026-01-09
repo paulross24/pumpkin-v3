@@ -349,4 +349,26 @@ def homeassistant_snapshot(
                     "severity": "warn",
                 }
             )
+    areas_result = ha_client.fetch_areas(
+        base_url=base_url, token=token, timeout=settings.ha_request_timeout_seconds()
+    )
+    if areas_result.get("ok"):
+        areas = []
+        for area in areas_result.get("areas", []):
+            if not isinstance(area, dict):
+                continue
+            area_id = area.get("area_id")
+            name = area.get("name")
+            if area_id and name:
+                areas.append({"area_id": area_id, "name": name})
+        summary["areas"] = areas
+    else:
+        events.append(
+            {
+                "source": "homeassistant",
+                "type": "homeassistant.areas_failed",
+                "payload": {"error": areas_result.get("error")},
+                "severity": "warn",
+            }
+        )
     return events, current, summary

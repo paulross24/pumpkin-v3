@@ -388,6 +388,31 @@ def _match_entity(entities: Dict[str, Dict[str, Any]], target: str) -> str | Non
     return None
 
 
+def _match_area(areas: List[Dict[str, Any]], target: str) -> Dict[str, Any] | None:
+    needle = target.lower()
+    for area in areas:
+        name = str(area.get("name") or "").lower()
+        if name and name in needle:
+            return area
+    return None
+
+
+def _area_domain_hint(target: str) -> str | None:
+    lowered = target.lower()
+    if "light" in lowered:
+        return "light"
+    if "switch" in lowered:
+        return "switch"
+    if "fan" in lowered:
+        return "fan"
+    return None
+
+
+def _wants_area_control(target: str) -> bool:
+    lowered = target.lower()
+    return "all" in lowered or "lights" in lowered or "switches" in lowered or "fans" in lowered
+
+
 def _execute_ha_command(text: str, conn) -> str | None:
     command = _parse_control_command(text)
     if not command:
@@ -414,6 +439,28 @@ def _execute_ha_command(text: str, conn) -> str | None:
         entities = {}
     entity_id = _match_entity(entities, command["target"])
     if not entity_id:
+        summary = store.get_memory(conn, "homeassistant.summary") or {}
+        areas = summary.get("areas") or []
+        if not isinstance(areas, list):
+            areas = []
+        area = _match_area(areas, command["target"])
+        domain_hint = _area_domain_hint(command["target"])
+        if area and domain_hint and _wants_area_control(command["target"]) and command["action"] in {
+            "turn_on",
+            "turn_off",
+            "toggle",
+        }:
+            result = ha_client.call_service(
+                base_url=base_url,
+                token=token,
+                domain=domain_hint,
+                service=command["action"],
+                payload={"area_id": area.get("area_id")},
+                timeout=settings.ha_request_timeout_seconds(),
+            )
+            if not result.get("ok"):
+                return "Home Assistant rejected that command."
+            return f"Done. {command['action'].replace('_', ' ')} {area.get('name')} {domain_hint}s."
         return f"I couldn't find a device named {command['target']}."
     domain = entity_id.split(".", 1)[0]
     service = None

@@ -138,3 +138,23 @@ def call_service(
         return {"ok": False, "error": "url_error"}
     except Exception as exc:
         return {"ok": False, "error": "unknown_error"}
+
+
+def fetch_areas(base_url: str, token: str, timeout: float) -> Dict[str, Any]:
+    url = base_url.rstrip("/") + "/api/areas"
+    req = Request(url, method="GET")
+    req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("Content-Type", "application/json")
+    try:
+        with urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8")
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            return {"ok": False, "error": "unexpected_payload"}
+        return {"ok": True, "areas": data}
+    except HTTPError as exc:
+        return {"ok": False, "error": f"http_{exc.code}"}
+    except URLError as exc:
+        return {"ok": False, "error": "url_error"}
+    except Exception as exc:
+        return {"ok": False, "error": "unknown_error"}
