@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import base64
 import json
-from typing import Any, Dict, List
-from urllib.parse import urlencode
+import os
+import socket
+import ssl
+from typing import Any, Dict, List, Optional
+from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
@@ -150,11 +154,155 @@ def fetch_areas(base_url: str, token: str, timeout: float) -> Dict[str, Any]:
             raw = resp.read().decode("utf-8")
         data = json.loads(raw)
         if not isinstance(data, list):
-            return {"ok": False, "error": "unexpected_payload"}
+            return fetch_areas_ws(base_url, token, timeout, "unexpected_payload")
         return {"ok": True, "areas": data}
     except HTTPError as exc:
+        if exc.code == 404:
+            return fetch_areas_ws(base_url, token, timeout, "http_404")
         return {"ok": False, "error": f"http_{exc.code}"}
     except URLError as exc:
         return {"ok": False, "error": "url_error"}
     except Exception as exc:
         return {"ok": False, "error": "unknown_error"}
+
+
+def fetch_areas_ws(base_url: str, token: str, timeout: float, fallback_reason: str) -> Dict[str, Any]:
+    try:
+        sock = _ws_connect(base_url, timeout)
+    except Exception as exc:
+        return {"ok": False, "error": f"{fallback_reason}:ws_connect_failed"}
+    try:
+        auth_msg = _ws_read_json(sock, timeout)
+        for _ in range(3):
+            if isinstance(auth_msg, dict) and auth_msg.get("type") == "auth_required":
+                break
+            auth_msg = _ws_read_json(sock, timeout)
+        _ws_send_json(sock, {"type": "auth", "access_token": token})
+        auth_reply = _ws_read_json(sock, timeout)
+        if not isinstance(auth_reply, dict) or auth_reply.get("type") != "auth_ok":
+            return {"ok": False, "error": f"{fallback_reason}:ws_auth_failed"}
+        req_id = 1
+        _ws_send_json(sock, {"id": req_id, "type": "config/area_registry/list"})
+        for _ in range(5):
+            reply = _ws_read_json(sock, timeout)
+            if isinstance(reply, dict) and reply.get("id") == req_id:
+                if reply.get("success") is True and isinstance(reply.get("result"), list):
+                    return {"ok": True, "areas": reply["result"]}
+                return {"ok": False, "error": f"{fallback_reason}:ws_result_failed"}
+        return {"ok": False, "error": f"{fallback_reason}:ws_no_result"}
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+
+
+def _ws_connect(base_url: str, timeout: float) -> socket.socket:
+    url = base_url
+    if "://" not in url:
+        url = "http://" + url
+    parsed = urlparse(url)
+    scheme = parsed.scheme or "http"
+    host = parsed.hostname or ""
+    port = parsed.port or (443 if scheme == "https" else 80)
+    path = "/api/websocket"
+    sock = socket.create_connection((host, port), timeout=timeout)
+    sock.settimeout(timeout)
+    if scheme == "https":
+        ctx = ssl.create_default_context()
+        sock = ctx.wrap_socket(sock, server_hostname=host)
+    key = base64.b64encode(os.urandom(16)).decode("ascii")
+    headers = [
+        f"GET {path} HTTP/1.1",
+        f"Host: {host}",
+        "Upgrade: websocket",
+        "Connection: Upgrade",
+        f"Sec-WebSocket-Key: {key}",
+        "Sec-WebSocket-Version: 13",
+        "",
+        "",
+    ]
+    sock.sendall("\r\n".join(headers).encode("ascii"))
+    response = _recv_until(sock, b"\r\n\r\n")
+    if not response.startswith(b"HTTP/1.1 101"):
+        raise RuntimeError("ws_handshake_failed")
+    return sock
+
+
+def _ws_send_json(sock: socket.socket, payload: Dict[str, Any]) -> None:
+    data = json.dumps(payload, ensure_ascii=True).encode("utf-8")
+    _ws_send_frame(sock, data)
+
+
+def _ws_read_json(sock: socket.socket, timeout: float) -> Optional[Dict[str, Any]]:
+    raw = _ws_recv_frame(sock)
+    if raw is None:
+        return None
+    try:
+        decoded = json.loads(raw.decode("utf-8"))
+    except Exception:
+        return None
+    if isinstance(decoded, dict):
+        return decoded
+    return None
+
+
+def _ws_send_frame(sock: socket.socket, payload: bytes) -> None:
+    length = len(payload)
+    header = bytearray()
+    header.append(0x81)
+    if length < 126:
+        header.append(0x80 | length)
+    elif length < 65536:
+        header.append(0x80 | 126)
+        header.extend(length.to_bytes(2, "big"))
+    else:
+        header.append(0x80 | 127)
+        header.extend(length.to_bytes(8, "big"))
+    mask = os.urandom(4)
+    masked = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+    sock.sendall(bytes(header) + mask + masked)
+
+
+def _ws_recv_frame(sock: socket.socket) -> Optional[bytes]:
+    first_two = _recv_exact(sock, 2)
+    if not first_two:
+        return None
+    b1, b2 = first_two[0], first_two[1]
+    opcode = b1 & 0x0F
+    if opcode == 0x8:
+        return None
+    length = b2 & 0x7F
+    if length == 126:
+        length_bytes = _recv_exact(sock, 2)
+        length = int.from_bytes(length_bytes, "big")
+    elif length == 127:
+        length_bytes = _recv_exact(sock, 8)
+        length = int.from_bytes(length_bytes, "big")
+    if length == 0:
+        return b""
+    return _recv_exact(sock, length)
+
+
+def _recv_exact(sock: socket.socket, size: int) -> bytes:
+    chunks = []
+    remaining = size
+    while remaining > 0:
+        chunk = sock.recv(remaining)
+        if not chunk:
+            raise RuntimeError("ws_connection_closed")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def _recv_until(sock: socket.socket, marker: bytes) -> bytes:
+    data = b""
+    while marker not in data:
+        chunk = sock.recv(1024)
+        if not chunk:
+            break
+        data += chunk
+        if len(data) > 65536:
+            break
+    return data
