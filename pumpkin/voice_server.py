@@ -975,6 +975,8 @@ def _inventory_query(text: str) -> bool:
         "list doors" in lowered
         or "list windows" in lowered
         or "which lights are on" in lowered
+        or "what lights are on" in lowered
+        or "lights are on" in lowered
         or "lights on" in lowered
     )
 
@@ -1205,6 +1207,9 @@ def _handle_preference_update(text: str, device: str | None, conn) -> str | None
             if parts:
                 return "Quiet hours set to " + "; ".join(parts) + "."
         return f"Quiet hours set to {quiet['start']}–{quiet['end']} ({quiet['days']})."
+    lowered = text.lower()
+    if "quiet hours" in lowered or "do not disturb" in lowered or "dnd" in lowered:
+        return "Tell me the time window, e.g. 'quiet hours 21:00 to 06:00 weekdays'."
     style = _parse_notification_style(text)
     if style:
         error = _update_profile_preference(conn, device, "notification_style", style)
