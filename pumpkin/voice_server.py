@@ -341,6 +341,109 @@ def _home_summary_query(text: str) -> bool:
     )
 
 
+def _parse_control_command(text: str) -> Dict[str, Any] | None:
+    lowered = text.lower().strip()
+    match = re.search(r"\bturn\s+(on|off)\s+(.+)", lowered)
+    if match:
+        return {"action": f"turn_{match.group(1)}", "target": match.group(2).strip()}
+    match = re.search(r"\bswitch\s+(on|off)\s+(.+)", lowered)
+    if match:
+        return {"action": f"turn_{match.group(1)}", "target": match.group(2).strip()}
+    match = re.search(r"\btoggle\s+(.+)", lowered)
+    if match:
+        return {"action": "toggle", "target": match.group(1).strip()}
+    match = re.search(r"\b(open|close)\s+(.+)", lowered)
+    if match:
+        return {"action": match.group(1), "target": match.group(2).strip()}
+    match = re.search(r"\b(lock|unlock)\s+(.+)", lowered)
+    if match:
+        return {"action": match.group(1), "target": match.group(2).strip()}
+    match = re.search(
+        r"\bset\s+(.+)\s+to\s+(\d{1,2})(?:\s*degrees|\s*c)?\b", lowered
+    )
+    if match:
+        return {
+            "action": "set_temperature",
+            "target": match.group(1).strip(),
+            "value": int(match.group(2)),
+        }
+    return None
+
+
+def _match_entity(entities: Dict[str, Dict[str, Any]], target: str) -> str | None:
+    needle = target.lower()
+    for entity_id, payload in entities.items():
+        if not isinstance(entity_id, str):
+            continue
+        if needle == entity_id.lower():
+            return entity_id
+        tail = entity_id.split(".", 1)[-1].lower()
+        if needle == tail:
+            return entity_id
+        attributes = payload.get("attributes", {}) if isinstance(payload, dict) else {}
+        if isinstance(attributes, dict):
+            name = str(attributes.get("friendly_name") or "").lower()
+            if name and needle in name:
+                return entity_id
+    return None
+
+
+def _execute_ha_command(text: str, conn) -> str | None:
+    command = _parse_control_command(text)
+    if not command:
+        return None
+    config_path = settings.modules_config_path()
+    if not config_path.exists():
+        return "Home Assistant is not configured."
+    try:
+        config = module_config.load_config(str(config_path))
+    except Exception:
+        return "Home Assistant config is invalid."
+    enabled = set(config.get("enabled", []))
+    if "homeassistant.observer" not in enabled:
+        return "Home Assistant integration is not enabled."
+    module_cfg = config.get("modules", {}).get("homeassistant.observer", {})
+    base_url = module_cfg.get("base_url")
+    token_env = module_cfg.get("token_env", "PUMPKIN_HA_TOKEN")
+    token = os.getenv(token_env)
+    if not base_url or not token:
+        return "Home Assistant credentials are missing."
+
+    entities = store.get_memory(conn, "homeassistant.entities") or {}
+    if not isinstance(entities, dict):
+        entities = {}
+    entity_id = _match_entity(entities, command["target"])
+    if not entity_id:
+        return f"I couldn't find a device named {command['target']}."
+    domain = entity_id.split(".", 1)[0]
+    service = None
+    payload = {"entity_id": entity_id}
+    action = command["action"]
+    if action in {"turn_on", "turn_off", "toggle"}:
+        service = action
+    elif action in {"open", "close"}:
+        service = "open_cover" if action == "open" else "close_cover"
+    elif action in {"lock", "unlock"}:
+        service = action
+    elif action == "set_temperature":
+        service = "set_temperature"
+        payload["temperature"] = command.get("value")
+    if not service:
+        return "I couldn't map that command to a Home Assistant service."
+
+    result = ha_client.call_service(
+        base_url=base_url,
+        token=token,
+        domain=domain,
+        service=service,
+        payload=payload,
+        timeout=settings.ha_request_timeout_seconds(),
+    )
+    if not result.get("ok"):
+        return "Home Assistant rejected that command."
+    return f"Done. {action.replace('_', ' ')} {command['target']}."
+
+
 def _recent_query(text: str) -> bool:
     lowered = text.lower()
     return bool(
@@ -1710,6 +1813,11 @@ class VoiceHandler(BaseHTTPRequestHandler):
             summary_reply = _local_house_summary_reply(conn)
             print(f"PumpkinVoice ask_reply {summary_reply!r}", flush=True)
             _send_json(self, 200, {"status": "ok", "reply": summary_reply})
+            return
+        control_reply = _execute_ha_command(text, conn)
+        if control_reply:
+            print(f"PumpkinVoice ask_reply {control_reply!r}", flush=True)
+            _send_json(self, 200, {"status": "ok", "reply": control_reply})
             return
         if _recent_query(text):
             reply = _recent_events_reply(conn, limit=5)
