@@ -447,10 +447,41 @@ def _match_entities_by_area_hint(
     return matched
 
 
-def _execute_ha_command(text: str, conn) -> str | None:
+def _last_target_key(device: str) -> str:
+    return f"voice.last_target.{device}"
+
+
+def _load_last_target(conn, device: str | None) -> str | None:
+    if not device:
+        return None
+    value = store.get_memory(conn, _last_target_key(device))
+    return value if isinstance(value, str) else None
+
+
+def _store_last_target(conn, device: str | None, target: str) -> None:
+    if not device or not target:
+        return
+    store.set_memory(conn, _last_target_key(device), target)
+
+
+def _resolve_followup_target(target: str, device: str | None, conn) -> str:
+    normalized = target.strip().lower()
+    if normalized in {"them", "it", "that", "those", "these", "all"}:
+        last_target = _load_last_target(conn, device)
+        if last_target:
+            return last_target
+    if normalized in {"all of them", "all of those", "all of these"}:
+        last_target = _load_last_target(conn, device)
+        if last_target:
+            return last_target
+    return target
+
+
+def _execute_ha_command(text: str, conn, device: str | None) -> str | None:
     command = _parse_control_command(text)
     if not command:
         return None
+    command["target"] = _resolve_followup_target(command["target"], device, conn)
     config_path = settings.modules_config_path()
     if not config_path.exists():
         return "Home Assistant is not configured."
@@ -509,8 +540,10 @@ def _execute_ha_command(text: str, conn) -> str | None:
                     )
                     if not fallback.get("ok"):
                         return "Home Assistant rejected that command."
+                    _store_last_target(conn, device, command["target"])
                     return f"Done. {command['action'].replace('_', ' ')} {area_hint} {domain_hint}s."
                 return f"I couldn't find any {domain_hint}s in {area.get('name')}."
+            _store_last_target(conn, device, command["target"])
             return f"Done. {command['action'].replace('_', ' ')} {area.get('name')} {domain_hint}s."
         if domain_hint and _wants_area_control(command["target"]) and command["action"] in {
             "turn_on",
@@ -530,6 +563,7 @@ def _execute_ha_command(text: str, conn) -> str | None:
                 )
                 if not result.get("ok"):
                     return "Home Assistant rejected that command."
+                _store_last_target(conn, device, command["target"])
                 return f"Done. {command['action'].replace('_', ' ')} {area_hint} {domain_hint}s."
         return f"I couldn't find a device named {command['target']}."
     domain = entity_id.split(".", 1)[0]
@@ -558,6 +592,7 @@ def _execute_ha_command(text: str, conn) -> str | None:
     )
     if not result.get("ok"):
         return "Home Assistant rejected that command."
+    _store_last_target(conn, device, command["target"])
     return f"Done. {action.replace('_', ' ')} {command['target']}."
 
 
@@ -1931,7 +1966,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
             print(f"PumpkinVoice ask_reply {summary_reply!r}", flush=True)
             _send_json(self, 200, {"status": "ok", "reply": summary_reply})
             return
-        control_reply = _execute_ha_command(text, conn)
+        control_reply = _execute_ha_command(text, conn, device)
         if control_reply:
             print(f"PumpkinVoice ask_reply {control_reply!r}", flush=True)
             _send_json(self, 200, {"status": "ok", "reply": control_reply})
