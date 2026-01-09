@@ -14,3 +14,16 @@ actions:
           maxLength: 2000
       required:
         - message
+  - action_type: code.apply_patch
+    params_schema:
+      type: object
+      properties:
+        repo_root:
+          type: string
+          maxLength: 500
+        patch:
+          type: string
+          maxLength: 200000
+      required:
+        - repo_root
+        - patch

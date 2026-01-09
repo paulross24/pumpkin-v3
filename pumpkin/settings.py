@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import List
 
 
 def repo_root() -> Path:
@@ -37,6 +38,13 @@ def modules_catalog_path() -> Path:
     return Path(
         os.getenv("PUMPKIN_MODULES_CATALOG_PATH", str(repo_root() / "modules/catalog.yaml"))
     )
+
+
+def code_assistant_roots() -> List[str]:
+    raw = os.getenv("PUMPKIN_CODE_ASSISTANT_ROOTS")
+    if raw:
+        return [item.strip() for item in raw.split(",") if item.strip()]
+    return [str(repo_root())]
 
 
 def modules_config_path() -> Path:

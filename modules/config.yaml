@@ -1,6 +1,7 @@
 version: 1
 enabled:
   - homeassistant.observer
+  - code.assistant
 modules:
   homeassistant.observer:
     base_url: "http://192.168.1.140:8123"
@@ -27,3 +28,6 @@ modules:
       - hvac_mode
       - hvac_action
       - preset_mode
+  code.assistant:
+    repo_root: "/home/rossp"
+    require_approval: true

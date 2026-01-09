@@ -29,6 +29,7 @@ MAX_TEXT_LEN = 500
 INGEST_LOG_TEXT_LIMIT = 160
 OPENAI_TIMEOUT_SECONDS = 15
 _last_seen = {}
+CODE_PROMPT_MAX_LEN = 8000
 
 
 def _bad_request(handler: BaseHTTPRequestHandler, message: str) -> None:
@@ -146,6 +147,108 @@ def _call_openai(
     if not isinstance(content, str) or not content.strip():
         raise ValueError("openai_empty_content")
     return content.strip()
+
+
+def _call_openai_json(prompt: str, api_key: str | None, model: str | None, base_url: str | None) -> Dict[str, Any]:
+    content = _call_openai(prompt, api_key=api_key, model=model, base_url=base_url)
+    try:
+        return _parse_json(content.encode("utf-8"))
+    except ValueError:
+        return {"error": "invalid_json", "raw": content}
+
+
+def _code_assistant_enabled(conn) -> tuple[bool, Dict[str, Any]]:
+    config_path = settings.modules_config_path()
+    if not config_path.exists():
+        return False, {}
+    try:
+        config = module_config.load_config(str(config_path))
+    except Exception:
+        return False, {}
+    enabled = set(config.get("enabled", []))
+    if "code.assistant" not in enabled:
+        return False, {}
+    module_cfg = config.get("modules", {}).get("code.assistant", {})
+    return True, module_cfg if isinstance(module_cfg, dict) else {}
+
+
+def _is_code_request(text: str) -> bool:
+    lowered = text.lower()
+    triggers = [
+        "code",
+        "patch",
+        "edit file",
+        "update file",
+        "change file",
+        "modify file",
+        "fix bug",
+        "fix the code",
+        "add function",
+        "refactor",
+    ]
+    return any(token in lowered for token in triggers)
+
+
+def _build_code_prompt(instruction: str, repo_root: str) -> str:
+    clipped = instruction[:CODE_PROMPT_MAX_LEN]
+    return (
+        "You are a senior software engineer. "
+        "Return ONLY JSON with keys: summary, rationale, patch, needs_clarification, questions. "
+        "If the request is unclear, set needs_clarification true and list questions; patch should be empty. "
+        "If clear, provide a unified diff patch that applies cleanly with `patch` in the repo root. "
+        "Do not include explanations outside JSON. "
+        f"Repository root: {repo_root}\n\n"
+        f"REQUEST: {clipped}"
+    )
+
+
+def _maybe_code_patch(
+    text: str, device: str | None, api_key: str | None, conn
+) -> str | None:
+    if not _is_code_request(text):
+        return None
+    enabled, module_cfg = _code_assistant_enabled(conn)
+    if not enabled:
+        return "Code assistant is not enabled yet."
+    repo_root = module_cfg.get("repo_root") if isinstance(module_cfg, dict) else None
+    if not isinstance(repo_root, str) or not repo_root.strip():
+        return "Code assistant repo_root is not configured."
+    llm_config = _load_llm_config(conn)
+    key = api_key or llm_config["api_key"]
+    if not key:
+        return "OpenAI API key is missing for code assistant."
+    prompt = _build_code_prompt(text, repo_root)
+    result = _call_openai_json(prompt, key, llm_config["model"], llm_config["base_url"])
+    if result.get("needs_clarification"):
+        questions = result.get("questions") or []
+        if isinstance(questions, list) and questions:
+            return "I need a bit more detail: " + " ".join(str(q) for q in questions)
+        return "I need a bit more detail about the change you want."
+    patch = result.get("patch")
+    if not isinstance(patch, str) or not patch.strip():
+        return "I couldn't draft a patch for that yet."
+    summary = result.get("summary") or "Apply code changes"
+    rationale = result.get("rationale") or "Requested code change."
+    details = {
+        "rationale": rationale,
+        "action_type": "code.apply_patch",
+        "action_params": {"repo_root": repo_root, "patch": patch},
+    }
+    policy = policy_mod.load_policy(str(settings.policy_path()))
+    proposal_id = store.insert_proposal(
+        conn,
+        kind="action.request",
+        summary=summary,
+        details=details,
+        risk=0.8,
+        expected_outcome="Patch is applied after approval.",
+        status="pending",
+        policy_hash=policy.policy_hash,
+        needs_new_capability=False,
+        capability_request=None,
+    )
+    _store_pending_proposal(conn, device, proposal_id)
+    return f"Proposal #{proposal_id}: {summary}. Rationale: {rationale}. Reply yes to approve or no to skip."
 
 
 def _latest_event(conn, event_type: str) -> Dict[str, Any] | None:
@@ -2257,6 +2360,13 @@ class VoiceHandler(BaseHTTPRequestHandler):
             print(f"PumpkinVoice ask_reply {control_reply!r}", flush=True)
             _send_json(self, 200, {"status": "ok", "reply": control_reply})
             return
+        llm_config = _load_llm_config(conn)
+        api_key = self.headers.get("X-Pumpkin-OpenAI-Key") or llm_config["api_key"]
+        code_reply = _maybe_code_patch(text, device, api_key, conn)
+        if code_reply:
+            print(f"PumpkinVoice ask_reply {code_reply!r}", flush=True)
+            _send_json(self, 200, {"status": "ok", "reply": code_reply})
+            return
         capability_reply = _maybe_capability_proposal(text, device, payload.get("client_ip"), conn)
         if capability_reply:
             print(f"PumpkinVoice ask_reply {capability_reply!r}", flush=True)
@@ -2309,8 +2419,8 @@ class VoiceHandler(BaseHTTPRequestHandler):
             print(f"PumpkinVoice ask_reply {status_reply!r}", flush=True)
             _send_json(self, 200, {"status": "ok", "reply": status_reply})
             return
-        llm_config = _load_llm_config(conn)
-        api_key = self.headers.get("X-Pumpkin-OpenAI-Key") or llm_config["api_key"]
+        llm_config = llm_config
+        api_key = api_key
         context = _build_llm_context(conn, device)
         prompt = (
             "Answer the user question using the context when relevant. "
