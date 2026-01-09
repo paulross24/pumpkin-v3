@@ -346,9 +346,15 @@ def _parse_control_command(text: str) -> Dict[str, Any] | None:
     match = re.search(r"\bturn\s+(on|off)\s+(.+)", lowered)
     if match:
         return {"action": f"turn_{match.group(1)}", "target": match.group(2).strip()}
+    match = re.search(r"\bturn\s+(.+)\s+(on|off)\b", lowered)
+    if match:
+        return {"action": f"turn_{match.group(2)}", "target": match.group(1).strip()}
     match = re.search(r"\bswitch\s+(on|off)\s+(.+)", lowered)
     if match:
         return {"action": f"turn_{match.group(1)}", "target": match.group(2).strip()}
+    match = re.search(r"\bswitch\s+(.+)\s+(on|off)\b", lowered)
+    if match:
+        return {"action": f"turn_{match.group(2)}", "target": match.group(1).strip()}
     match = re.search(r"\btoggle\s+(.+)", lowered)
     if match:
         return {"action": "toggle", "target": match.group(1).strip()}
