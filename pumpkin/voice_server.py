@@ -1126,6 +1126,8 @@ def _update_profile_preference(conn, device: str | None, key: str, value: Any) -
     prefs[key] = value
     profile["preferences"] = prefs
     store.set_memory(conn, f"speaker.profile.device:{device.strip()}", profile)
+    if key == "quiet_hours":
+        store.set_memory(conn, "core.quiet_hours", value)
     return None
 
 

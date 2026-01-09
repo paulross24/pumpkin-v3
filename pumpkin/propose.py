@@ -1221,3 +1221,29 @@ def build_proposals(events: List[Any], conn) -> List[Dict[str, Any]]:
 
     combined = rule_based + [notify]
     return combined[:MAX_PROPOSALS_PER_LOOP]
+
+
+def build_improvement_proposals(conn) -> List[Dict[str, Any]]:
+    policy = policy_mod.load_policy(str(settings.policy_path()))
+    context_pack, context_hash, context_excerpt = build_context_pack(conn)
+    prompt = (
+        _render_prompt(context_pack)
+        + "\n\nFocus only on improving existing capabilities, accuracy, or reliability. "
+        "Do not propose new modules or new capabilities. "
+        "Keep proposals to maintenance, action.request, policy.change, or hardware.recommendation."
+    )
+    try:
+        plan = planner.load_planner()
+        result = plan.generate(context_pack, prompt)
+        validated = _validate_planner_output(policy, result.proposals)
+    except Exception:
+        return []
+
+    filtered = []
+    for proposal in validated:
+        if proposal.get("kind") in {"module.install", "capability.offer"}:
+            continue
+        proposal["ai_context_hash"] = context_hash
+        proposal["ai_context_excerpt"] = _proposal_excerpt(proposal)
+        filtered.append(proposal)
+    return filtered[:MAX_PROPOSALS_PER_LOOP]

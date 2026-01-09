@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from datetime import datetime
 from typing import Any, Dict, List
 
 from . import audit
@@ -148,6 +149,47 @@ def _create_heartbeat(conn, policy_hash: str) -> None:
         payload={"policy_hash": policy_hash},
         severity="info",
     )
+
+
+def _quiet_hours_window(conn) -> Dict[str, Any] | None:
+    value = store.get_memory(conn, "core.quiet_hours")
+    return value if isinstance(value, dict) else None
+
+
+def _in_quiet_hours(conn) -> bool:
+    quiet = _quiet_hours_window(conn)
+    if not quiet:
+        return False
+    start = quiet.get("start")
+    end = quiet.get("end")
+    days = quiet.get("days", "daily")
+    if not isinstance(start, str) or not isinstance(end, str):
+        return False
+    now = datetime.now()
+    weekday = now.weekday()
+    if days == "weekdays" and weekday >= 5:
+        return False
+    if days == "weekends" and weekday < 5:
+        return False
+    try:
+        start_h, start_m = [int(part) for part in start.split(":", 1)]
+        end_h, end_m = [int(part) for part in end.split(":", 1)]
+    except Exception:
+        return False
+    now_minutes = now.hour * 60 + now.minute
+    start_minutes = start_h * 60 + start_m
+    end_minutes = end_h * 60 + end_m
+    if start_minutes <= end_minutes:
+        return start_minutes <= now_minutes <= end_minutes
+    return now_minutes >= start_minutes or now_minutes <= end_minutes
+
+
+def _should_reflect(conn) -> bool:
+    last_date = store.get_memory(conn, "core.last_reflection_date")
+    today = datetime.now().date().isoformat()
+    if last_date == today:
+        return False
+    return _in_quiet_hours(conn)
 
 
 def _record_proposals(conn, policy: policy_mod.Policy, proposals: List[Dict[str, Any]]) -> None:
@@ -336,6 +378,11 @@ def run_once() -> None:
 
     new_events = _load_events_since_last(conn)
     proposals = propose.build_proposals(new_events, conn)
+    if _should_reflect(conn):
+        improvement = propose.build_improvement_proposals(conn)
+        if improvement:
+            proposals.extend(improvement)
+        store.set_memory(conn, "core.last_reflection_date", datetime.now().date().isoformat())
     _record_proposals(conn, policy, proposals)
 
     _execute_approved(conn, policy)
