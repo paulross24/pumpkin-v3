@@ -413,6 +413,34 @@ def _wants_area_control(target: str) -> bool:
     return "all" in lowered or "lights" in lowered or "switches" in lowered or "fans" in lowered
 
 
+def _extract_area_hint(target: str) -> str:
+    lowered = target.lower()
+    stop = {"all", "the", "a", "an", "in", "on", "at", "of"}
+    domain_words = {"light", "lights", "switch", "switches", "fan", "fans"}
+    parts = [word for word in re.split(r"\\s+", lowered) if word]
+    filtered = [word for word in parts if word not in stop and word not in domain_words]
+    return " ".join(filtered).strip() or lowered
+
+
+def _match_entities_by_area_hint(
+    entities: Dict[str, Dict[str, Any]], domain: str, area_hint: str
+) -> List[str]:
+    matched: List[str] = []
+    needle = area_hint.lower()
+    for entity_id, payload in entities.items():
+        if not isinstance(entity_id, str):
+            continue
+        if not entity_id.startswith(domain + "."):
+            continue
+        attributes = payload.get("attributes", {}) if isinstance(payload, dict) else {}
+        if not isinstance(attributes, dict):
+            continue
+        name = str(attributes.get("friendly_name") or "").lower()
+        if needle and needle in name:
+            matched.append(entity_id)
+    return matched
+
+
 def _execute_ha_command(text: str, conn) -> str | None:
     command = _parse_control_command(text)
     if not command:
@@ -461,6 +489,25 @@ def _execute_ha_command(text: str, conn) -> str | None:
             if not result.get("ok"):
                 return "Home Assistant rejected that command."
             return f"Done. {command['action'].replace('_', ' ')} {area.get('name')} {domain_hint}s."
+        if domain_hint and _wants_area_control(command["target"]) and command["action"] in {
+            "turn_on",
+            "turn_off",
+            "toggle",
+        }:
+            area_hint = _extract_area_hint(command["target"])
+            entity_ids = _match_entities_by_area_hint(entities, domain_hint, area_hint)
+            if entity_ids:
+                result = ha_client.call_service(
+                    base_url=base_url,
+                    token=token,
+                    domain=domain_hint,
+                    service=command["action"],
+                    payload={"entity_id": entity_ids},
+                    timeout=settings.ha_request_timeout_seconds(),
+                )
+                if not result.get("ok"):
+                    return "Home Assistant rejected that command."
+                return f"Done. {command['action'].replace('_', ' ')} {area_hint} {domain_hint}s."
         return f"I couldn't find a device named {command['target']}."
     domain = entity_id.split(".", 1)[0]
     service = None
