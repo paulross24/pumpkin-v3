@@ -17,6 +17,9 @@ from . import settings
 from . import store
 from . import module_config
 from . import ha_client
+from . import intent
+from . import policy as policy_mod
+from . import propose
 from .audit import append_jsonl
 from .db import init_db
 
@@ -599,6 +602,175 @@ def _execute_ha_command(text: str, conn, device: str | None) -> str | None:
         return "Home Assistant rejected that command."
     _store_last_target(conn, device, command["target"])
     return f"Done. {action.replace('_', ' ')} {command['target']}."
+
+
+def _pending_proposal_key(device: str) -> str:
+    return f"voice.pending_proposal.{device}"
+
+
+def _load_pending_proposal(conn, device: str | None) -> int | None:
+    if not device:
+        return None
+    value = store.get_memory(conn, _pending_proposal_key(device))
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
+
+
+def _store_pending_proposal(conn, device: str | None, proposal_id: int) -> None:
+    if not device:
+        return
+    store.set_memory(conn, _pending_proposal_key(device), proposal_id)
+
+
+def _clear_pending_proposal(conn, device: str | None) -> None:
+    if not device:
+        return
+    store.set_memory(conn, _pending_proposal_key(device), None)
+
+
+def _handle_proposal_followup(text: str, device: str | None, conn) -> str | None:
+    decision = intent.parse_affirmation(text)
+    if decision not in {"yes", "no"}:
+        return None
+    proposal_id = _load_pending_proposal(conn, device)
+    if not proposal_id:
+        return None
+    policy = policy_mod.load_policy(str(settings.policy_path()))
+    status = "approved" if decision == "yes" else "rejected"
+    store.insert_approval(
+        conn,
+        proposal_id=proposal_id,
+        actor="voice",
+        decision=status,
+        reason="voice follow-up",
+        policy_hash=policy.policy_hash,
+    )
+    store.update_proposal_status(conn, proposal_id, status)
+    _clear_pending_proposal(conn, device)
+    if status == "approved":
+        return f"Approved proposal #{proposal_id}. I'll start the install."
+    return f"Rejected proposal #{proposal_id}."
+
+
+def _is_capability_request(text: str) -> bool:
+    lowered = text.lower()
+    triggers = [
+        "install",
+        "set up",
+        "setup",
+        "enable",
+        "add capability",
+        "add a capability",
+        "add module",
+        "integrate",
+        "connect",
+        "capability",
+        "module",
+        "face recognition",
+        "play music",
+        "music playback",
+    ]
+    return any(token in lowered for token in triggers)
+
+
+def _record_voice_proposals(conn, proposals: list[dict[str, Any]]) -> list[tuple[int, dict[str, Any]]]:
+    policy = policy_mod.load_policy(str(settings.policy_path()))
+    created: list[tuple[int, dict[str, Any]]] = []
+    module_install_ids: Dict[str, int] = {}
+    ordered = sorted(proposals, key=lambda p: 0 if p.get("kind") == "module.install" else 1)
+    for proposal in ordered:
+        summary = proposal.get("summary", "")
+        if summary and store.proposal_exists(conn, summary, statuses=["pending", "approved"]):
+            existing_id = _find_pending_proposal_id(conn, summary)
+            if existing_id:
+                created.append((existing_id, proposal))
+            continue
+        details = proposal.get("details", {})
+        link_key = proposal.get("link_key")
+        if proposal.get("kind") == "capability.offer" and link_key in module_install_ids:
+            details = dict(details)
+            details["runbook_hint"] = (
+                f"Run: python3 -m pumpkin modules runbook --proposal {module_install_ids[link_key]}"
+            )
+            proposal = dict(proposal)
+            proposal["details"] = details
+
+        proposal_id = store.insert_proposal(
+            conn,
+            kind=proposal.get("kind", "general"),
+            summary=proposal.get("summary", "proposal"),
+            details=proposal.get("details", {}),
+            risk=float(proposal.get("risk", 0.5)),
+            expected_outcome=proposal.get("expected_outcome", "Human review"),
+            status="pending",
+            policy_hash=policy.policy_hash,
+            needs_new_capability=proposal.get("needs_new_capability", False),
+            capability_request=proposal.get("capability_request"),
+            ai_context_hash=proposal.get("ai_context_hash"),
+            ai_context_excerpt=proposal.get("ai_context_excerpt"),
+        )
+        if proposal.get("kind") == "module.install" and link_key:
+            module_install_ids[link_key] = proposal_id
+        created.append((proposal_id, proposal))
+    return created
+
+
+def _find_pending_proposal_id(conn, summary: str) -> int | None:
+    if not summary:
+        return None
+    row = conn.execute(
+        "SELECT id FROM proposals WHERE summary = ? AND status IN ('pending','approved') "
+        "ORDER BY ts_created DESC LIMIT 1",
+        (summary,),
+    ).fetchone()
+    if row and row[0]:
+        return int(row[0])
+    return None
+
+
+def _maybe_capability_proposal(text: str, device: str | None, client_ip: str | None, conn) -> str | None:
+    if not _is_capability_request(text):
+        return None
+    payload = {
+        "text": text,
+        "device_id": device,
+        "client_ip": client_ip,
+    }
+    fake_row = {
+        "id": 0,
+        "type": "voice.command",
+        "payload_json": json.dumps(payload, ensure_ascii=True),
+    }
+    proposals = propose._rule_based_proposals([fake_row], conn)
+    created = _record_voice_proposals(conn, proposals)
+    if not created:
+        return "I couldn't draft a proposal for that yet."
+    preferred = None
+    for proposal_id, proposal in created:
+        if proposal.get("kind") == "module.install":
+            preferred = (proposal_id, proposal)
+            break
+    if preferred is None:
+        for proposal_id, proposal in created:
+            if proposal.get("kind") == "capability.offer":
+                preferred = (proposal_id, proposal)
+                break
+    if preferred is None:
+        preferred = created[0]
+    proposal_id, proposal = preferred
+    _store_pending_proposal(conn, device, proposal_id)
+    details = proposal.get("details", {}) if isinstance(proposal.get("details"), dict) else {}
+    rationale = details.get("rationale")
+    summary = proposal.get("summary", "Proposal ready")
+    if rationale:
+        return (
+            f"Proposal #{proposal_id}: {summary}. "
+            f"Rationale: {rationale}. Reply yes to approve or no to skip."
+        )
+    return f"Proposal #{proposal_id}: {summary}. Reply yes to approve or no to skip."
 
 
 def _recent_query(text: str) -> bool:
@@ -1955,6 +2127,11 @@ class VoiceHandler(BaseHTTPRequestHandler):
             payload=payload,
             severity="info",
         )
+        proposal_followup = _handle_proposal_followup(text, device, conn)
+        if proposal_followup:
+            print(f"PumpkinVoice ask_reply {proposal_followup!r}", flush=True)
+            _send_json(self, 200, {"status": "ok", "reply": proposal_followup})
+            return
         presence_reply = _lookup_presence(text)
         if presence_reply:
             print(f"PumpkinVoice ask_reply {presence_reply!r}", flush=True)
@@ -1975,6 +2152,11 @@ class VoiceHandler(BaseHTTPRequestHandler):
         if control_reply:
             print(f"PumpkinVoice ask_reply {control_reply!r}", flush=True)
             _send_json(self, 200, {"status": "ok", "reply": control_reply})
+            return
+        capability_reply = _maybe_capability_proposal(text, device, payload.get("client_ip"), conn)
+        if capability_reply:
+            print(f"PumpkinVoice ask_reply {capability_reply!r}", flush=True)
+            _send_json(self, 200, {"status": "ok", "reply": capability_reply})
             return
         if _recent_query(text):
             reply = _recent_events_reply(conn, limit=5)
