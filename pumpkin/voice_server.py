@@ -1546,6 +1546,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "GET /openapi.json",
                             "GET /proposals",
                             "GET /summary",
+                            "GET /timeline",
                             "GET /errors",
                             "GET /llm/config",
                             "POST /ask",
@@ -1628,6 +1629,50 @@ class VoiceHandler(BaseHTTPRequestHandler):
                     {
                         "count": len(proposals),
                         "proposals": proposals,
+                    },
+                )
+                return
+            if path == "/timeline":
+                limit = _parse_limit(params.get("limit", [None])[0], default=20, max_limit=200)
+                source = params.get("source", [None])[0]
+                event_type = params.get("type", [None])[0]
+                since_id_raw = params.get("since_id", [None])[0]
+                since_id = None
+                if since_id_raw:
+                    try:
+                        since_id = int(since_id_raw)
+                    except ValueError:
+                        since_id = None
+                conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+                rows = store.list_events(
+                    conn,
+                    limit=limit,
+                    source=source if isinstance(source, str) and source else None,
+                    event_type=event_type if isinstance(event_type, str) and event_type else None,
+                    since_id=since_id,
+                )
+                timeline = []
+                for row in rows:
+                    try:
+                        payload = json.loads(row["payload_json"])
+                    except Exception:
+                        payload = {}
+                    timeline.append(
+                        {
+                            "id": row["id"],
+                            "ts": row["ts"],
+                            "source": row["source"],
+                            "type": row["type"],
+                            "payload": payload,
+                            "severity": row["severity"],
+                        }
+                    )
+                _send_json(
+                    self,
+                    200,
+                    {
+                        "count": len(timeline),
+                        "events": timeline,
                     },
                 )
                 return
@@ -1731,6 +1776,43 @@ class VoiceHandler(BaseHTTPRequestHandler):
                                     "responses": {
                                         "200": {
                                             "description": "Summary snapshot",
+                                            "content": {
+                                                "application/json": {
+                                                    "schema": {"type": "object"}
+                                                }
+                                            },
+                                        }
+                                    },
+                                }
+                            },
+                            "/timeline": {
+                                "get": {
+                                    "summary": "Unified event timeline",
+                                    "parameters": [
+                                        {
+                                            "name": "limit",
+                                            "in": "query",
+                                            "schema": {"type": "integer"},
+                                        },
+                                        {
+                                            "name": "source",
+                                            "in": "query",
+                                            "schema": {"type": "string"},
+                                        },
+                                        {
+                                            "name": "type",
+                                            "in": "query",
+                                            "schema": {"type": "string"},
+                                        },
+                                        {
+                                            "name": "since_id",
+                                            "in": "query",
+                                            "schema": {"type": "integer"},
+                                        },
+                                    ],
+                                    "responses": {
+                                        "200": {
+                                            "description": "Timeline events",
                                             "content": {
                                                 "application/json": {
                                                     "schema": {"type": "object"}

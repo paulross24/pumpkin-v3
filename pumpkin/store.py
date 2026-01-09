@@ -36,6 +36,30 @@ def fetch_events_since(conn: sqlite3.Connection, last_id: int) -> List[sqlite3.R
     return rows
 
 
+def list_events(
+    conn: sqlite3.Connection,
+    limit: int = 50,
+    source: Optional[str] = None,
+    event_type: Optional[str] = None,
+    since_id: Optional[int] = None,
+) -> List[sqlite3.Row]:
+    clauses = []
+    params: List[Any] = []
+    if source:
+        clauses.append("source = ?")
+        params.append(source)
+    if event_type:
+        clauses.append("type = ?")
+        params.append(event_type)
+    if since_id is not None:
+        clauses.append("id > ?")
+        params.append(int(since_id))
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    params.append(int(limit))
+    query = f"SELECT * FROM events {where} ORDER BY id DESC LIMIT ?"
+    return conn.execute(query, tuple(params)).fetchall()
+
+
 def insert_proposal(
     conn: sqlite3.Connection,
     kind: str,
