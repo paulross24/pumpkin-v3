@@ -189,6 +189,45 @@ def _is_code_request(text: str) -> bool:
     return any(token in lowered for token in triggers)
 
 
+def _is_improvement_request(text: str) -> bool:
+    lowered = text.lower()
+    triggers = [
+        "improve yourself",
+        "work better",
+        "get better",
+        "self improve",
+        "self-improve",
+        "self improve",
+        "plan improvements",
+        "propose improvements",
+        "make plans",
+    ]
+    return any(token in lowered for token in triggers)
+
+
+def _maybe_improvement_plan(text: str, device: str | None, conn) -> str | None:
+    if not _is_improvement_request(text):
+        return None
+    recent = store.list_events(conn, limit=50)
+    events = sorted(recent, key=lambda row: row["id"]) if recent else []
+    try:
+        proposals = propose.build_proposals(events, conn)
+    except Exception:
+        return "I couldn't generate improvement plans right now."
+    created = _record_voice_proposals(conn, proposals)
+    if not created:
+        return "No improvement plans right now."
+    proposal_lines = []
+    for proposal_id, proposal in created[:3]:
+        summary = proposal.get("summary", "proposal")
+        proposal_lines.append(f"#{proposal_id} {summary}")
+    if proposal_lines:
+        _store_pending_proposal(conn, device, created[0][0])
+        joined = "; ".join(proposal_lines)
+        return f"Drafted proposals: {joined}. Reply yes to approve the first one."
+    return "No improvement plans right now."
+
+
 def _build_code_prompt(instruction: str, repo_root: str) -> str:
     clipped = instruction[:CODE_PROMPT_MAX_LEN]
     return (
@@ -2359,6 +2398,11 @@ class VoiceHandler(BaseHTTPRequestHandler):
         if control_reply:
             print(f"PumpkinVoice ask_reply {control_reply!r}", flush=True)
             _send_json(self, 200, {"status": "ok", "reply": control_reply})
+            return
+        improvement_reply = _maybe_improvement_plan(text, device, conn)
+        if improvement_reply:
+            print(f"PumpkinVoice ask_reply {improvement_reply!r}", flush=True)
+            _send_json(self, 200, {"status": "ok", "reply": improvement_reply})
             return
         llm_config = _load_llm_config(conn)
         api_key = self.headers.get("X-Pumpkin-OpenAI-Key") or llm_config["api_key"]
