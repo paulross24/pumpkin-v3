@@ -53,8 +53,8 @@ modules:
   - name: code.assistant
     type: capability
     description: Draft code changes, tests, and patches with human approval.
-    status: planned
-    safety_level: med
+    status: available
+    safety_level: high
     prerequisites:
       packages: []
       services: []

@@ -26,3 +26,25 @@ modules:
         signals:
           - entity.state
           - event
+  - name: code.assistant
+    type: capability
+    description: Draft code changes and reviewable patches with human approval.
+    config_schema:
+      type: object
+      properties:
+        repo_root:
+          type: string
+        require_approval:
+          type: boolean
+      required:
+        - repo_root
+    safety_level: high
+    prerequisites:
+      packages: []
+      services: []
+      network_access: []
+    provides:
+      - source: code
+        signals:
+          - patch.proposed
+          - patch.reviewed
