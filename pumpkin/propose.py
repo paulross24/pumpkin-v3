@@ -310,6 +310,9 @@ def _validate_planner_proposal(
     _parse_json_field(summary, "summary", str)
     _parse_json_field(expected_outcome, "expected_outcome", str)
     _parse_json_field(details, "details", dict)
+    rationale = details.get("rationale") if isinstance(details, dict) else None
+    if not isinstance(rationale, str) or not rationale.strip():
+        raise ValueError("rationale must be non-empty string")
     if not isinstance(risk, (int, float)) or not (0.0 <= float(risk) <= 1.0):
         raise ValueError("risk must be 0.0-1.0")
 
