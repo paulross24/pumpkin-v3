@@ -49,3 +49,18 @@ modules:
         signals:
           - person.recognized
           - face.unknown
+
+  - name: code.assistant
+    type: capability
+    description: Draft code changes, tests, and patches with human approval.
+    status: planned
+    safety_level: med
+    prerequisites:
+      packages: []
+      services: []
+      network_access: []
+    provides:
+      - source: code
+        signals:
+          - patch.proposed
+          - patch.approved

@@ -97,6 +97,9 @@ def suggest_modules(text: str, registry_summary: List[Dict[str, Any]]) -> List[s
             "tokens": ["face", "recognition", "camera", "vision"],
         },
         {
+            "tokens": ["code", "coding", "developer", "program", "script", "patch"],
+        },
+        {
             "tokens": [
                 "light",
                 "lamp",
