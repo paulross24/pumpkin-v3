@@ -89,27 +89,38 @@ def suggest_modules(text: str, registry_summary: List[Dict[str, Any]]) -> List[s
     normalized = " ".join(text.strip().lower().split())
     suggestions = []
 
+    match_groups = [
+        {
+            "tokens": ["music", "audio", "play", "playback", "speaker", "playlist"],
+        },
+        {
+            "tokens": ["face", "recognition", "camera", "vision"],
+        },
+        {
+            "tokens": [
+                "light",
+                "lamp",
+                "switch",
+                "thermostat",
+                "sensor",
+                "tv",
+                "lock",
+                "door",
+                "home",
+                "home assistant",
+                "homeassistant",
+            ],
+        },
+    ]
+
     for module in registry_summary:
         name = (module.get("name") or "").lower()
         desc = (module.get("description") or "").lower()
-        if "homeassistant" in name or "home assistant" in desc:
-            if any(
-                token in normalized
-                for token in [
-                    "light",
-                    "lamp",
-                    "switch",
-                    "thermostat",
-                    "sensor",
-                    "camera",
-                    "tv",
-                    "lock",
-                    "door",
-                    "home",
-                    "home assistant",
-                    "homeassistant",
-                ]
-            ):
+        for group in match_groups:
+            if not any(token in normalized for token in group["tokens"]):
+                continue
+            if any(token in name or token in desc for token in group["tokens"]):
                 suggestions.append(module.get("name"))
+                break
 
     return [s for s in suggestions if s]

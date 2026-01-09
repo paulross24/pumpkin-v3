@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from . import planner
 from . import policy as policy_mod
 from . import module_registry
+from . import catalog as catalog_mod
 from . import module_config_change
 from . import intent
 from . import runbook
@@ -841,7 +842,17 @@ def _rule_based_proposals(events: List[Any], conn) -> List[Dict[str, Any]]:
                 classification = intent.classify_intent(text)
                 registry = module_registry.load_registry(str(settings.modules_registry_path()))
                 registry_summary = module_registry.registry_summary(registry)
-                suggested_modules = intent.suggest_modules(text, registry_summary)
+                catalog_summary = []
+                catalog_path = settings.modules_catalog_path()
+                if catalog_path.exists():
+                    try:
+                        catalog = catalog_mod.load_catalog(str(catalog_path))
+                        catalog_summary = catalog_mod.catalog_summary(catalog)
+                    except Exception:
+                        catalog_summary = []
+                suggested_modules = intent.suggest_modules(
+                    text, registry_summary + catalog_summary
+                )
 
                 intent_type = classification.get("intent_type")
                 if intent_type == "memory.query":
@@ -941,7 +952,10 @@ def _rule_based_proposals(events: List[Any], conn) -> List[Dict[str, Any]]:
 
                 link_key = f"cap:{hash(text)}"
                 for module_name in suggested_modules:
-                    module = module_registry.find_module(registry, module_name)
+                    try:
+                        module = module_registry.find_module(registry, module_name)
+                    except Exception:
+                        continue
                     schema = module.get("config_schema", {})
                     config = {}
                     for key, rule in (schema.get("properties", {}) or {}).items():

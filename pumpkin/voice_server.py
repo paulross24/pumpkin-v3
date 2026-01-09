@@ -17,6 +17,7 @@ from . import settings
 from . import store
 from . import module_config
 from . import ha_client
+from . import catalog as catalog_mod
 from . import intent
 from . import policy as policy_mod
 from . import propose
@@ -1543,6 +1544,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "GET /",
                             "GET /health",
                             "GET /config",
+                            "GET /catalog",
                             "GET /openapi.json",
                             "GET /proposals",
                             "GET /summary",
@@ -1594,6 +1596,25 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "build": {
                             "python": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
                         },
+                    },
+                )
+                return
+            if path == "/catalog":
+                catalog_path = settings.modules_catalog_path()
+                if not catalog_path.exists():
+                    _send_json(self, 404, {"error": "catalog_not_found"})
+                    return
+                try:
+                    catalog = catalog_mod.load_catalog(str(catalog_path))
+                except Exception as exc:
+                    _send_json(self, 500, {"error": "catalog_invalid"})
+                    return
+                _send_json(
+                    self,
+                    200,
+                    {
+                        "count": len(catalog.get("modules", [])),
+                        "modules": catalog.get("modules", []),
                     },
                 )
                 return
@@ -1758,6 +1779,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "/": {"get": {"summary": "Service metadata"}},
                             "/health": {"get": {"summary": "Health check"}},
                             "/config": {"get": {"summary": "Runtime config"}},
+                            "/catalog": {"get": {"summary": "Module catalog"}},
                             "/summary": {
                                 "get": {
                                     "summary": "System summary",

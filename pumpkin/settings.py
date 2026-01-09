@@ -33,6 +33,12 @@ def modules_registry_path() -> Path:
     )
 
 
+def modules_catalog_path() -> Path:
+    return Path(
+        os.getenv("PUMPKIN_MODULES_CATALOG_PATH", str(repo_root() / "modules/catalog.yaml"))
+    )
+
+
 def modules_config_path() -> Path:
     return Path(
         os.getenv("PUMPKIN_MODULES_CONFIG_PATH", str(repo_root() / "modules/config.yaml"))
