@@ -57,6 +57,12 @@ def _send_json(handler: BaseHTTPRequestHandler, status: int, payload: Dict[str, 
     handler.wfile.write(body)
 
 
+def _send_reply(handler: BaseHTTPRequestHandler, reply: str, notice: str | None) -> None:
+    if notice:
+        reply = f"{reply} {notice}"
+    _send_json(handler, 200, {"status": "ok", "reply": reply})
+
+
 def _parse_json(body: bytes) -> Dict[str, Any]:
     try:
         return json.loads(body.decode("utf-8"))
@@ -640,6 +646,29 @@ def _resolve_followup_target(target: str, device: str | None, conn) -> str:
         if last_target:
             return last_target
     return target
+
+
+def _expansion_notice(device: str | None, conn) -> str | None:
+    if not device:
+        return None
+    rows = store.list_proposals(conn, status="pending", limit=5)
+    candidate = None
+    for row in rows:
+        if row["kind"] in {"module.install", "capability.offer"}:
+            candidate = row
+            break
+    if not candidate:
+        return None
+    key = f"voice.last_expansion.{device}"
+    last_seen = store.get_memory(conn, key)
+    try:
+        last_seen_id = int(last_seen) if last_seen is not None else 0
+    except Exception:
+        last_seen_id = 0
+    if candidate["id"] <= last_seen_id:
+        return None
+    store.set_memory(conn, key, candidate["id"])
+    return f"New expansion idea: #{candidate['id']} {candidate['summary']}."
 
 
 def _execute_ha_command(text: str, conn, device: str | None) -> str | None:
@@ -2380,6 +2409,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
             flush=True,
         )
         conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+        llm_config = _load_llm_config(conn)
+        api_key = self.headers.get("X-Pumpkin-OpenAI-Key") or llm_config["api_key"]
+        notice = _expansion_notice(device, conn)
         store.insert_event(
             conn,
             source="voice",
@@ -2390,95 +2422,91 @@ class VoiceHandler(BaseHTTPRequestHandler):
         proposal_followup = _handle_proposal_followup(text, device, conn)
         if proposal_followup:
             print(f"PumpkinVoice ask_reply {proposal_followup!r}", flush=True)
-            _send_json(self, 200, {"status": "ok", "reply": proposal_followup})
+            _send_reply(self, proposal_followup, notice)
             return
         presence_reply = _lookup_presence(text)
         if presence_reply:
             print(f"PumpkinVoice ask_reply {presence_reply!r}", flush=True)
-            _send_json(self, 200, {"status": "ok", "reply": presence_reply})
+            _send_reply(self, presence_reply, notice)
             return
         if _home_query(text):
             home_reply = _local_home_reply(conn)
             if home_reply:
                 print(f"PumpkinVoice ask_reply {home_reply!r}", flush=True)
-                _send_json(self, 200, {"status": "ok", "reply": home_reply})
+                _send_reply(self, home_reply, notice)
                 return
         if _home_summary_query(text):
             summary_reply = _local_house_summary_reply(conn)
             print(f"PumpkinVoice ask_reply {summary_reply!r}", flush=True)
-            _send_json(self, 200, {"status": "ok", "reply": summary_reply})
+            _send_reply(self, summary_reply, notice)
             return
         control_reply = _execute_ha_command(text, conn, device)
         if control_reply:
             print(f"PumpkinVoice ask_reply {control_reply!r}", flush=True)
-            _send_json(self, 200, {"status": "ok", "reply": control_reply})
+            _send_reply(self, control_reply, notice)
             return
         improvement_reply = _maybe_improvement_plan(text, device, conn, api_key)
         if improvement_reply:
             print(f"PumpkinVoice ask_reply {improvement_reply!r}", flush=True)
-            _send_json(self, 200, {"status": "ok", "reply": improvement_reply})
+            _send_reply(self, improvement_reply, notice)
             return
-        llm_config = _load_llm_config(conn)
-        api_key = self.headers.get("X-Pumpkin-OpenAI-Key") or llm_config["api_key"]
         code_reply = _maybe_code_patch(text, device, api_key, conn)
         if code_reply:
             print(f"PumpkinVoice ask_reply {code_reply!r}", flush=True)
-            _send_json(self, 200, {"status": "ok", "reply": code_reply})
+            _send_reply(self, code_reply, notice)
             return
         capability_reply = _maybe_capability_proposal(text, device, payload.get("client_ip"), conn)
         if capability_reply:
             print(f"PumpkinVoice ask_reply {capability_reply!r}", flush=True)
-            _send_json(self, 200, {"status": "ok", "reply": capability_reply})
+            _send_reply(self, capability_reply, notice)
             return
         if _recent_query(text):
             reply = _recent_events_reply(conn, limit=5)
             print(f"PumpkinVoice ask_reply {reply!r}", flush=True)
-            _send_json(self, 200, {"status": "ok", "reply": reply})
+            _send_reply(self, reply, notice)
             return
         if "last ha event" in text.lower() or "last home assistant" in text.lower():
             reply = _last_ha_event_reply(conn)
             print(f"PumpkinVoice ask_reply {reply!r}", flush=True)
-            _send_json(self, 200, {"status": "ok", "reply": reply})
+            _send_reply(self, reply, notice)
             return
         if _inventory_query(text):
             reply = _inventory_reply(conn, text)
             print(f"PumpkinVoice ask_reply {reply!r}", flush=True)
-            _send_json(self, 200, {"status": "ok", "reply": reply})
+            _send_reply(self, reply, notice)
             return
         if _health_query(text):
             reply = _health_report_reply(conn)
             print(f"PumpkinVoice ask_reply {reply!r}", flush=True)
-            _send_json(self, 200, {"status": "ok", "reply": reply})
+            _send_reply(self, reply, notice)
             return
         name = _parse_speaker_name(text)
         if name:
             error = _store_speaker_name(conn, device, name)
             reply = error or f"Thanks, {name}. I'll remember you."
             print(f"PumpkinVoice ask_reply {reply!r}", flush=True)
-            _send_json(self, 200, {"status": "ok", "reply": reply})
+            _send_reply(self, reply, notice)
             return
         preference_reply = _handle_preference_update(text, device, conn)
         if preference_reply:
             print(f"PumpkinVoice ask_reply {preference_reply!r}", flush=True)
-            _send_json(self, 200, {"status": "ok", "reply": preference_reply})
+            _send_reply(self, preference_reply, notice)
             return
         if _memory_query(text):
             reply = _memory_reply(conn, device, text)
             print(f"PumpkinVoice ask_reply {reply!r}", flush=True)
-            _send_json(self, 200, {"status": "ok", "reply": reply})
+            _send_reply(self, reply, notice)
             return
         calendar_reply = _lookup_calendar(text, device, conn)
         if calendar_reply:
             print(f"PumpkinVoice ask_reply {calendar_reply!r}", flush=True)
-            _send_json(self, 200, {"status": "ok", "reply": calendar_reply})
+            _send_reply(self, calendar_reply, notice)
             return
         if _status_query(text):
             status_reply = _local_status_reply(conn)
             print(f"PumpkinVoice ask_reply {status_reply!r}", flush=True)
-            _send_json(self, 200, {"status": "ok", "reply": status_reply})
+            _send_reply(self, status_reply, notice)
             return
-        llm_config = llm_config
-        api_key = api_key
         context = _build_llm_context(conn, device)
         prompt = (
             "Answer the user question using the context when relevant. "
@@ -2506,7 +2534,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
             f"PumpkinVoice ask_reply { _truncate_text(reply, INGEST_LOG_TEXT_LIMIT)!r}",
             flush=True,
         )
-        _send_json(self, 200, {"status": "ok", "reply": reply})
+        _send_reply(self, reply, notice)
 
     def _handle_errors(self) -> None:
         length = int(self.headers.get("Content-Length", "0"))
