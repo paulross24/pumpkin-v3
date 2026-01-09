@@ -423,7 +423,7 @@ def _extract_area_hint(target: str) -> str:
     lowered = target.lower()
     stop = {"all", "the", "a", "an", "in", "on", "at", "of"}
     domain_words = {"light", "lights", "switch", "switches", "fan", "fans"}
-    parts = [word for word in re.split(r"\\s+", lowered) if word]
+    parts = [word for word in re.split(r"\s+", lowered) if word]
     filtered = [word for word in parts if word not in stop and word not in domain_words]
     return " ".join(filtered).strip() or lowered
 
@@ -494,6 +494,23 @@ def _execute_ha_command(text: str, conn) -> str | None:
             )
             if not result.get("ok"):
                 return "Home Assistant rejected that command."
+            acted = result.get("result")
+            if isinstance(acted, list) and not acted:
+                area_hint = _extract_area_hint(command["target"])
+                entity_ids = _match_entities_by_area_hint(entities, domain_hint, area_hint)
+                if entity_ids:
+                    fallback = ha_client.call_service(
+                        base_url=base_url,
+                        token=token,
+                        domain=domain_hint,
+                        service=command["action"],
+                        payload={"entity_id": entity_ids},
+                        timeout=settings.ha_request_timeout_seconds(),
+                    )
+                    if not fallback.get("ok"):
+                        return "Home Assistant rejected that command."
+                    return f"Done. {command['action'].replace('_', ' ')} {area_hint} {domain_hint}s."
+                return f"I couldn't find any {domain_hint}s in {area.get('name')}."
             return f"Done. {command['action'].replace('_', ' ')} {area.get('name')} {domain_hint}s."
         if domain_hint and _wants_area_control(command["target"]) and command["action"] in {
             "turn_on",
