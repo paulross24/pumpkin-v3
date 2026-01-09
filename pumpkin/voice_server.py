@@ -377,20 +377,25 @@ def _parse_control_command(text: str) -> Dict[str, Any] | None:
 
 
 def _match_entity(entities: Dict[str, Dict[str, Any]], target: str) -> str | None:
-    needle = target.lower()
-    for entity_id, payload in entities.items():
-        if not isinstance(entity_id, str):
-            continue
-        if needle == entity_id.lower():
-            return entity_id
-        tail = entity_id.split(".", 1)[-1].lower()
-        if needle == tail:
-            return entity_id
-        attributes = payload.get("attributes", {}) if isinstance(payload, dict) else {}
-        if isinstance(attributes, dict):
-            name = str(attributes.get("friendly_name") or "").lower()
-            if name and needle in name:
+    needle = target.lower().strip()
+    needles = [needle]
+    for prefix in ("the ", "a ", "an "):
+        if needle.startswith(prefix):
+            needles.append(needle[len(prefix) :])
+    for candidate in needles:
+        for entity_id, payload in entities.items():
+            if not isinstance(entity_id, str):
+                continue
+            if candidate == entity_id.lower():
                 return entity_id
+            tail = entity_id.split(".", 1)[-1].lower()
+            if candidate == tail:
+                return entity_id
+            attributes = payload.get("attributes", {}) if isinstance(payload, dict) else {}
+            if isinstance(attributes, dict):
+                name = str(attributes.get("friendly_name") or "").lower()
+                if name and candidate in name:
+                    return entity_id
     return None
 
 
