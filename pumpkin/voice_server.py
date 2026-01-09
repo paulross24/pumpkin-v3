@@ -1000,7 +1000,19 @@ def _health_query(text: str) -> bool:
 
 
 def _parse_time_24h(value: str) -> str | None:
-    match = re.search(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", value.strip().lower())
+    raw = value.strip().lower()
+    digits = re.sub(r"[^0-9]", "", raw)
+    if digits and len(digits) in {3, 4}:
+        if len(digits) == 3:
+            hour = int(digits[0])
+            minute = int(digits[1:])
+        else:
+            hour = int(digits[:2])
+            minute = int(digits[2:])
+        if hour > 23 or minute > 59:
+            return None
+        return f"{hour:02d}:{minute:02d}"
+    match = re.search(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", raw)
     if not match:
         return None
     hour = int(match.group(1))
@@ -1020,18 +1032,45 @@ def _parse_quiet_hours(text: str) -> Dict[str, Any] | None:
     lowered = text.lower()
     if "quiet hours" not in lowered and "do not disturb" not in lowered and "dnd" not in lowered:
         return None
-    match = re.search(
-        r"(?:from|between)?\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s*(?:to|-)\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)",
-        lowered,
+    pattern = re.compile(
+        r"(?:from|between)?\s*"
+        r"(\d{1,4}(?::\d{2})?\s*(?:am|pm)?)\s*"
+        r"(?:to|till|and|-)\s*"
+        r"(\d{1,4}(?::\d{2})?\s*(?:am|pm)?)"
     )
-    if not match:
+    windows = []
+    for match in pattern.finditer(lowered):
+        start = _parse_time_24h(match.group(1))
+        end = _parse_time_24h(match.group(2))
+        if not start or not end:
+            continue
+        tail = lowered[match.end() : match.end() + 24]
+        day_token = ""
+        if "weekday" in tail:
+            day_token = "weekdays"
+        elif "weekend" in tail:
+            day_token = "weekends"
+        windows.append({"start": start, "end": end, "days": day_token or None})
+    if not windows:
         return None
-    start = _parse_time_24h(match.group(1))
-    end = _parse_time_24h(match.group(2))
-    if not start or not end:
-        return None
-    days = "weekdays" if "weekday" in lowered else "weekends" if "weekend" in lowered else "daily"
-    return {"start": start, "end": end, "days": days}
+    has_weekday = "weekday" in lowered
+    has_weekend = "weekend" in lowered
+    if has_weekday and has_weekend and len(windows) >= 2:
+        if windows[0].get("days") is None:
+            windows[0]["days"] = "weekdays"
+        if windows[1].get("days") is None:
+            windows[1]["days"] = "weekends"
+    for window in windows:
+        if not window.get("days"):
+            if has_weekday and not has_weekend:
+                window["days"] = "weekdays"
+            elif has_weekend and not has_weekday:
+                window["days"] = "weekends"
+            else:
+                window["days"] = "daily"
+    if len(windows) == 1:
+        return windows[0]
+    return {"windows": windows}
 
 
 def _parse_notification_style(text: str) -> str | None:
@@ -1119,6 +1158,9 @@ def _local_home_reply(conn) -> str | None:
 def _update_profile_preference(conn, device: str | None, key: str, value: Any) -> str | None:
     profile = _speaker_profile_from_device(conn, device)
     if not isinstance(profile, dict):
+        if key == "quiet_hours":
+            store.set_memory(conn, "core.quiet_hours", value)
+            return None
         return "I don't know who this device belongs to yet. Tell me your name first."
     prefs = profile.get("preferences", {})
     if not isinstance(prefs, dict):
@@ -1154,6 +1196,14 @@ def _handle_preference_update(text: str, device: str | None, conn) -> str | None
         error = _update_profile_preference(conn, device, "quiet_hours", quiet)
         if error:
             return error
+        if isinstance(quiet, dict) and "windows" in quiet:
+            parts = []
+            for window in quiet.get("windows", []):
+                if not isinstance(window, dict):
+                    continue
+                parts.append(f"{window.get('start')}–{window.get('end')} ({window.get('days')})")
+            if parts:
+                return "Quiet hours set to " + "; ".join(parts) + "."
         return f"Quiet hours set to {quiet['start']}–{quiet['end']} ({quiet['days']})."
     style = _parse_notification_style(text)
     if style:

@@ -160,9 +160,19 @@ def _in_quiet_hours(conn) -> bool:
     quiet = _quiet_hours_window(conn)
     if not quiet:
         return False
-    start = quiet.get("start")
-    end = quiet.get("end")
-    days = quiet.get("days", "daily")
+    windows = quiet.get("windows")
+    if isinstance(windows, list):
+        for window in windows:
+            if _window_matches(window):
+                return True
+        return False
+    return _window_matches(quiet)
+
+
+def _window_matches(window: Dict[str, Any]) -> bool:
+    start = window.get("start")
+    end = window.get("end")
+    days = window.get("days", "daily")
     if not isinstance(start, str) or not isinstance(end, str):
         return False
     now = datetime.now()
