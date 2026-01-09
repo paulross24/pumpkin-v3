@@ -205,15 +205,29 @@ def _is_improvement_request(text: str) -> bool:
     return any(token in lowered for token in triggers)
 
 
-def _maybe_improvement_plan(text: str, device: str | None, conn) -> str | None:
+def _maybe_improvement_plan(text: str, device: str | None, conn, api_key: str | None) -> str | None:
     if not _is_improvement_request(text):
         return None
     recent = store.list_events(conn, limit=50)
     events = sorted(recent, key=lambda row: row["id"]) if recent else []
+    prev_mode = os.getenv("PUMPKIN_PLANNER_MODE")
+    prev_key = os.getenv("PUMPKIN_OPENAI_API_KEY")
+    if api_key and not prev_key:
+        os.environ["PUMPKIN_OPENAI_API_KEY"] = api_key
+    if prev_mode is None:
+        os.environ["PUMPKIN_PLANNER_MODE"] = "openai"
     try:
         proposals = propose.build_proposals(events, conn)
-    except Exception:
+    except Exception as exc:
+        print(f"PumpkinVoice planner_error {exc}", flush=True)
         return "I couldn't generate improvement plans right now."
+    finally:
+        if prev_mode is None:
+            os.environ.pop("PUMPKIN_PLANNER_MODE", None)
+        else:
+            os.environ["PUMPKIN_PLANNER_MODE"] = prev_mode
+        if prev_key is None and api_key:
+            os.environ.pop("PUMPKIN_OPENAI_API_KEY", None)
     created = _record_voice_proposals(conn, proposals)
     if not created:
         return "No improvement plans right now."
@@ -2399,7 +2413,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
             print(f"PumpkinVoice ask_reply {control_reply!r}", flush=True)
             _send_json(self, 200, {"status": "ok", "reply": control_reply})
             return
-        improvement_reply = _maybe_improvement_plan(text, device, conn)
+        improvement_reply = _maybe_improvement_plan(text, device, conn, api_key)
         if improvement_reply:
             print(f"PumpkinVoice ask_reply {improvement_reply!r}", flush=True)
             _send_json(self, 200, {"status": "ok", "reply": improvement_reply})
