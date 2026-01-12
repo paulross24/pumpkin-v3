@@ -12,6 +12,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import difflib
 from typing import Any, Dict, Iterable, List
 from urllib.parse import parse_qs, urlparse
 
@@ -633,6 +634,28 @@ def _match_entity(entities: Dict[str, Dict[str, Any]], target: str) -> str | Non
     return None
 
 
+def _fuzzy_match_entity(entities: Dict[str, Dict[str, Any]], target: str, domain_hint: str | None = None) -> str | None:
+    names = {}
+    for entity_id, payload in entities.items():
+        if not isinstance(entity_id, str):
+            continue
+        if domain_hint and not entity_id.startswith(domain_hint + "."):
+            continue
+        attributes = payload.get("attributes", {}) if isinstance(payload, dict) else {}
+        if isinstance(attributes, dict):
+            friendly = attributes.get("friendly_name")
+            if isinstance(friendly, str):
+                names[friendly] = entity_id
+        names[entity_id] = entity_id
+        tail = entity_id.split(".", 1)[-1]
+        names[tail] = entity_id
+    candidates = list(names.keys())
+    best = difflib.get_close_matches(target, candidates, n=1, cutoff=0.6)
+    if best:
+        return names.get(best[0])
+    return None
+
+
 def _match_area(areas: List[Dict[str, Any]], target: str) -> Dict[str, Any] | None:
     needle = target.lower()
     synonyms = {
@@ -746,6 +769,22 @@ def _match_entities_by_area_hint(
 def _last_target_key(device: str) -> str:
     return f"voice.last_target.{device}"
 
+def _synonym_key(target: str) -> str:
+    return f"voice.synonym.{target.strip().lower()}"
+
+
+def _store_entity_synonym(conn, target: str, entity_id: str) -> None:
+    if not target or not entity_id:
+        return
+    store.set_memory(conn, _synonym_key(target), entity_id)
+
+
+def _load_entity_synonym(conn, target: str) -> str | None:
+    if not target:
+        return None
+    value = store.get_memory(conn, _synonym_key(target))
+    return value if isinstance(value, str) else None
+
 
 def _load_last_target(conn, device: str | None) -> str | None:
     if not device:
@@ -841,6 +880,16 @@ def _execute_ha_command(text: str, conn, device: str | None) -> str | None:
     entities = store.get_memory(conn, "homeassistant.entities") or {}
     if not isinstance(entities, dict):
         entities = {}
+    synonym = _load_entity_synonym(conn, command["target"])
+    if synonym:
+        entity = entities.get(synonym)
+        if isinstance(entity, dict):
+            entity_id = synonym
+        else:
+            entity_id = None
+    else:
+        entity_id = None
+
     summary = store.get_memory(conn, "homeassistant.summary") or {}
     areas_list = summary.get("areas") or []
     if not isinstance(areas_list, list):
@@ -857,7 +906,7 @@ def _execute_ha_command(text: str, conn, device: str | None) -> str | None:
                 area_names[aid] = str(name)
     upstairs_entities = set(summary.get("upstairs_entities") or [])
     downstairs_entities = set(summary.get("downstairs_entities") or [])
-    entity_id = _match_entity(entities, command["target"])
+    entity_id = entity_id or _match_entity(entities, command["target"])
     if not entity_id:
         area = _match_area(areas_list, command["target"])
         domain_hint = _area_domain_hint(command["target"])
@@ -956,7 +1005,12 @@ def _execute_ha_command(text: str, conn, device: str | None) -> str | None:
                 )
                 _store_last_target(conn, device, command["target"])
                 return f"Done. {command['action'].replace('_', ' ')} {area_hint} {domain_hint}s."
-        return f"I couldn't find a device named {command['target']}."
+        fuzzy = _fuzzy_match_entity(entities, command["target"], domain_hint=domain_hint)
+        if fuzzy:
+            entity_id = fuzzy
+        else:
+            available = ", ".join(list(entities.keys())[:5])
+            return f"I couldn't find {command['target']}. I can see: {available}."
     domain = entity_id.split(".", 1)[0]
     service = None
     payload = {"entity_id": entity_id}
@@ -983,9 +1037,30 @@ def _execute_ha_command(text: str, conn, device: str | None) -> str | None:
     )
     if not result.get("ok"):
         return "Home Assistant rejected that command."
+    changed = []
+    acted = result.get("result")
+    if isinstance(acted, list):
+        for item in acted:
+            eid = item.get("entity_id") if isinstance(item, dict) else None
+            if eid:
+                changed.append(eid)
     _log_ha_action(conn, command, domain, service, payload, result)
     _store_last_target(conn, device, command["target"])
-    return f"Done. {action.replace('_', ' ')} {command['target']}."
+    _store_entity_synonym(conn, command["target"], entity_id)
+    name_hint = ""
+    if changed:
+        friendly = []
+        for eid in changed[:5]:
+            attrs = entities.get(eid, {}).get("attributes", {})
+            if isinstance(attrs, dict):
+                fname = attrs.get("friendly_name")
+                if fname:
+                    friendly.append(fname)
+        joined = ", ".join(friendly) if friendly else ", ".join(changed[:5])
+        name_hint = f" ({len(changed)} changed: {joined})"
+    profile = _speaker_profile_from_device(conn, device)
+    prefix = f"Okay {profile.get('name')}, " if isinstance(profile, dict) and profile.get("name") else ""
+    return f"{prefix}Done. {action.replace('_', ' ')} {command['target']}.{name_hint}"
 
 
 def _pending_proposal_key(device: str) -> str:
