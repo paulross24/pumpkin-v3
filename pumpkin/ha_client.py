@@ -12,6 +12,8 @@ from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
+from . import ha_cache
+
 
 def fetch_status(base_url: str, token: str, timeout: float) -> Dict[str, Any]:
     url = base_url.rstrip("/") + "/api/"
@@ -51,6 +53,11 @@ def fetch_entity_state(base_url: str, token: str, entity_id: str, timeout: float
 
 
 def fetch_states(base_url: str, token: str, timeout: float) -> Dict[str, Any]:
+    cache_key = f"{base_url.rstrip('/')}/api/states"
+    cached = ha_cache.cache.get(cache_key)
+    if cached is not None:
+        return {"ok": True, "states": cached}
+
     url = base_url.rstrip("/") + "/api/states"
     req = Request(url, method="GET")
     req.add_header("Authorization", f"Bearer {token}")
@@ -61,6 +68,7 @@ def fetch_states(base_url: str, token: str, timeout: float) -> Dict[str, Any]:
         data = json.loads(raw)
         if not isinstance(data, list):
             return {"ok": False, "error": "unexpected_payload"}
+        ha_cache.cache.set(cache_key, data)
         return {"ok": True, "states": data}
     except HTTPError as exc:
         return {"ok": False, "error": f"http_{exc.code}"}

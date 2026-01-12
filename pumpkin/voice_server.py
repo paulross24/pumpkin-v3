@@ -6,6 +6,8 @@ import json
 import os
 import re
 import sys
+import threading
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -21,6 +23,8 @@ from . import catalog as catalog_mod
 from . import intent
 from . import policy as policy_mod
 from . import propose
+from . import act
+from . import telemetry
 from .audit import append_jsonl
 from .db import init_db
 
@@ -1476,6 +1480,13 @@ def _health_report_reply(conn) -> str:
         parts.append("No system issues detected.")
     if calendar_error:
         parts.append(f"Calendar error: {calendar_error}.")
+    # Add quick telemetry snapshot
+    metrics = telemetry.collect_health_metrics()
+    parts.append(
+        f"Metrics: cpu_load_1m={metrics.get('cpu_load_1m')} "
+        f"mem_avail_kb={metrics.get('memory', {}).get('available_kb')} "
+        f"disk_used_pct={metrics.get('disk', {}).get('used_percent')}"
+    )
     return " ".join(parts)
 
 
@@ -1875,6 +1886,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
             path = parsed.path
             params = parse_qs(parsed.query)
             if path == "/health":
+                metrics = telemetry.collect_health_metrics()
                 _send_json(
                     self,
                     200,
@@ -1882,6 +1894,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "status": "ok",
                         "host": settings.voice_server_host(),
                         "port": settings.voice_server_port(),
+                        "metrics": metrics,
                     },
                 )
                 return
@@ -2862,7 +2875,71 @@ class VoiceHandler(BaseHTTPRequestHandler):
         return
 
 
+def _apply_approved_actions(limit: int = 5) -> None:
+    conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+    rows = store.fetch_approved_unexecuted(conn)[:limit]
+    if not rows:
+        return
+    audit_path = str(settings.audit_path())
+    for row in rows:
+        details = json.loads(row["details_json"])
+        action_type = details.get("action_type")
+        params = details.get("action_params") or {}
+        if action_type not in {"code.apply_patch", "notify.local"}:
+            continue
+        action_id = store.insert_action(
+            conn,
+            proposal_id=row["id"],
+            action_type=action_type,
+            params=params,
+            status="started",
+            policy_hash=row["policy_hash"],
+        )
+        try:
+            result = act.execute_action(action_type, params, audit_path)
+            store.finish_action(conn, action_id, status="succeeded", result=result)
+            store.update_proposal_status(conn, row["id"], "executed")
+            append_jsonl(
+                audit_path,
+                {
+                    "kind": "executor.applied",
+                    "proposal_id": row["id"],
+                    "action_type": action_type,
+                    "result": result,
+                },
+            )
+        except Exception as exc:  # pragma: no cover
+            store.finish_action(
+                conn, action_id, status="failed", result={"error": str(exc)}
+            )
+            append_jsonl(
+                audit_path,
+                {
+                    "kind": "executor.failed",
+                    "proposal_id": row["id"],
+                    "action_type": action_type,
+                    "error": str(exc),
+                },
+            )
+
+
+def _executor_loop(stop_event: threading.Event, interval_seconds: int = 300) -> None:
+    while not stop_event.wait(interval_seconds):
+        try:
+            _apply_approved_actions(limit=5)
+        except Exception as exc:  # pragma: no cover
+            append_jsonl(
+                str(settings.audit_path()),
+                {"kind": "executor.error", "error": str(exc)},
+            )
+
+
 def run_server(host: str | None = None, port: int | None = None) -> None:
+    stop_event = threading.Event()
+    executor_thread = threading.Thread(
+        target=_executor_loop, args=(stop_event,), daemon=True
+    )
+    executor_thread.start()
     bind_host = host or settings.voice_server_host()
     bind_port = port or settings.voice_server_port()
     append_jsonl(
@@ -2896,4 +2973,7 @@ def run_server(host: str | None = None, port: int | None = None) -> None:
         },
     )
     print(f"voice server listening on {bind_host}:{bind_port}")
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    finally:
+        stop_event.set()
