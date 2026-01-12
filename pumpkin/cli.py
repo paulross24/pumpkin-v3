@@ -23,6 +23,7 @@ from . import module_config_change
 from . import module_config
 from . import voice_server
 from . import act
+from . import selfcheck
 from .db import init_db
 
 
@@ -1208,6 +1209,18 @@ def cmd_ops_apply_approved(args: argparse.Namespace) -> None:
     print(f"Completed: {success} succeeded, {failed} failed")
 
 
+def cmd_ops_selfcheck(_: argparse.Namespace) -> None:
+    conn = _conn()
+    result = selfcheck.run_self_check(conn)
+    failures = result.get("failures") or []
+    if failures:
+        print("Self-check failures:")
+        for item in failures:
+            print(f"  - {item.get('check')}: {item.get('error') or 'failed'}")
+    else:
+        print("Self-check passed.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="pumpkin")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -1396,6 +1409,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     ops_verify = ops_sub.add_parser("verify")
     ops_verify.set_defaults(func=cmd_ops_verify)
+
+    ops_selfcheck = ops_sub.add_parser("selfcheck")
+    ops_selfcheck.set_defaults(func=cmd_ops_selfcheck)
 
     return parser
 
