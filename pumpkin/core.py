@@ -106,11 +106,13 @@ def _collect_module_events(conn) -> List[Dict[str, Any]]:
         calendar_days_ahead = int(module_cfg.get("calendar_days_ahead", 7))
         calendar_limit = int(module_cfg.get("calendar_limit", 10))
         previous = store.get_memory(conn, "homeassistant.entities") or {}
+        previous_summary = store.get_memory(conn, "homeassistant.summary") or {}
 
         ha_events, current_states, summary = observe.homeassistant_snapshot(
             base_url=base_url,
             token=token,
             previous=previous,
+            previous_summary=previous_summary,
             include_domains=include_domains,
             include_entities=include_entities,
             exclude_domains=exclude_domains,

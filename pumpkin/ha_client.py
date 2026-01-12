@@ -209,9 +209,6 @@ def fetch_entity_registry(base_url: str, token: str, timeout: float) -> Dict[str
     """Fetch entity registry with area mappings."""
     try:
         sock = _ws_connect(base_url, timeout)
-    except Exception:
-        return {"ok": False, "error": "ws_connect_failed"}
-    try:
         auth_msg = _ws_read_json(sock, timeout)
         for _ in range(3):
             if isinstance(auth_msg, dict) and auth_msg.get("type") == "auth_required":
@@ -230,6 +227,39 @@ def fetch_entity_registry(base_url: str, token: str, timeout: float) -> Dict[str
                     return {"ok": True, "entities": reply["result"]}
                 return {"ok": False, "error": "ws_result_failed"}
         return {"ok": False, "error": "ws_no_result"}
+    except Exception as exc:
+        return {"ok": False, "error": f"ws_error:{type(exc).__name__}"}
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+
+
+def fetch_device_registry(base_url: str, token: str, timeout: float) -> Dict[str, Any]:
+    """Fetch device registry to map devices to areas."""
+    try:
+        sock = _ws_connect(base_url, timeout)
+        auth_msg = _ws_read_json(sock, timeout)
+        for _ in range(3):
+            if isinstance(auth_msg, dict) and auth_msg.get("type") == "auth_required":
+                break
+            auth_msg = _ws_read_json(sock, timeout)
+        _ws_send_json(sock, {"type": "auth", "access_token": token})
+        auth_reply = _ws_read_json(sock, timeout)
+        if not isinstance(auth_reply, dict) or auth_reply.get("type") != "auth_ok":
+            return {"ok": False, "error": "ws_auth_failed"}
+        req_id = 3
+        _ws_send_json(sock, {"id": req_id, "type": "config/device_registry/list"})
+        for _ in range(5):
+            reply = _ws_read_json(sock, timeout)
+            if isinstance(reply, dict) and reply.get("id") == req_id:
+                if reply.get("success") is True and isinstance(reply.get("result"), list):
+                    return {"ok": True, "devices": reply["result"]}
+                return {"ok": False, "error": "ws_result_failed"}
+        return {"ok": False, "error": "ws_no_result"}
+    except Exception as exc:
+        return {"ok": False, "error": f"ws_error:{type(exc).__name__}"}
     finally:
         try:
             sock.close()

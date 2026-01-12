@@ -120,8 +120,33 @@ def _summarize_states(states: Dict[str, Dict[str, Any]], areas: Dict[str, Dict[s
     entity_areas: Dict[str, str] = {}
     upstairs = set()
     downstairs = set()
-    upstairs_tokens = ("upstairs", "first floor", "1st floor", "floor one", "upper")
-    downstairs_tokens = ("downstairs", "ground floor", "groundfloor", "ground level", "lower")
+    upstairs_tokens = (
+        "upstairs",
+        "first floor",
+        "1st floor",
+        "floor one",
+        "upper",
+        "bedroom",
+        "bathroom",
+        "ensuite",
+        "loft",
+        "office",
+        "study",
+    )
+    downstairs_tokens = (
+        "downstairs",
+        "ground floor",
+        "groundfloor",
+        "ground level",
+        "lower",
+        "kitchen",
+        "living",
+        "lounge",
+        "hall",
+        "toilet",
+        "wc",
+        "dining",
+    )
     for entity_id, payload in states.items():
         domain = entity_id.split(".", 1)[0] if "." in entity_id else ""
         counts[domain] = counts.get(domain, 0) + 1
@@ -195,6 +220,7 @@ def homeassistant_snapshot(
     base_url: str,
     token: str,
     previous: Optional[Dict[str, Dict[str, Any]]] = None,
+    previous_summary: Optional[Dict[str, Any]] = None,
     include_domains: Optional[Iterable[str]] = None,
     include_entities: Optional[Iterable[str]] = None,
     exclude_domains: Optional[Iterable[str]] = None,
@@ -206,6 +232,7 @@ def homeassistant_snapshot(
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, Any]], Dict[str, Any]]:
     events: List[Dict[str, Any]] = []
     areas_map: Dict[str, Dict[str, Any]] = {}
+    previous_summary = previous_summary or {}
     result = ha_client.fetch_status(
         base_url=base_url, token=token, timeout=settings.ha_request_timeout_seconds()
     )
@@ -266,15 +293,23 @@ def homeassistant_snapshot(
     registry_result = ha_client.fetch_entity_registry(
         base_url=base_url, token=token, timeout=settings.ha_request_timeout_seconds()
     )
+    if not registry_result.get("ok"):
+        registry_result = ha_client.fetch_entity_registry(
+            base_url=base_url, token=token, timeout=settings.ha_request_timeout_seconds()
+        )
     entity_area_map: Dict[str, str] = {}
+    device_area_map: Dict[str, str] = {}
     if registry_result.get("ok"):
         for entry in registry_result.get("entities", []):
             if not isinstance(entry, dict):
                 continue
             eid = entry.get("entity_id")
             aid = entry.get("area_id")
+            did = entry.get("device_id")
             if eid and aid:
                 entity_area_map[eid] = aid
+            if eid and did:
+                device_area_map[eid] = did
     else:
         events.append(
             {
@@ -284,6 +319,30 @@ def homeassistant_snapshot(
                 "severity": "warn",
             }
         )
+        entity_area_map = previous_summary.get("entity_areas", {}) or {}
+
+    device_registry = ha_client.fetch_device_registry(
+        base_url=base_url, token=token, timeout=settings.ha_request_timeout_seconds()
+    )
+    device_area_lookup: Dict[str, str] = {}
+    if device_registry.get("ok"):
+        for dev in device_registry.get("devices", []):
+            if not isinstance(dev, dict):
+                continue
+            did = dev.get("id")
+            aid = dev.get("area_id")
+            if did and aid:
+                device_area_lookup[did] = aid
+    else:
+        events.append(
+            {
+                "source": "homeassistant",
+                "type": "homeassistant.device_registry_failed",
+                "payload": {"error": device_registry.get("error")},
+                "severity": "warn",
+            }
+        )
+        device_area_lookup = previous_summary.get("device_area_lookup", {}) or {}
 
     allowlist = list(attribute_allowlist or _DEFAULT_ATTR_ALLOWLIST)
     current: Dict[str, Dict[str, Any]] = {}
@@ -300,16 +359,27 @@ def homeassistant_snapshot(
         ):
             continue
         attributes = entity.get("attributes", {}) or {}
+        area_id = entity.get("area_id") or entity_area_map.get(entity_id)
+        if not area_id:
+            device_id = device_area_map.get(entity_id)
+            if device_id:
+                area_id = device_area_lookup.get(device_id)
         current[entity_id] = {
             "state": entity.get("state"),
             "attributes": _normalize_attributes(attributes, allowlist),
-            "area_id": entity.get("area_id") or entity_area_map.get(entity_id),
+            "area_id": area_id,
         }
 
     summary = _summarize_states(current, areas_map)
     summary["areas"] = [
         {"area_id": aid, "name": area.get("name")} for aid, area in areas_map.items() if isinstance(area, dict)
     ]
+    if not summary.get("entity_areas") and previous_summary.get("entity_areas"):
+        summary["entity_areas"] = previous_summary.get("entity_areas")
+    if not summary.get("upstairs_entities") and previous_summary.get("upstairs_entities"):
+        summary["upstairs_entities"] = previous_summary.get("upstairs_entities")
+    if not summary.get("downstairs_entities") and previous_summary.get("downstairs_entities"):
+        summary["downstairs_entities"] = previous_summary.get("downstairs_entities")
     previous = previous or {}
     if not previous:
         events.append(
