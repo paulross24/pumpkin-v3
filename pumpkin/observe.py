@@ -205,6 +205,7 @@ def homeassistant_snapshot(
     calendar_limit: int = 10,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, Any]], Dict[str, Any]]:
     events: List[Dict[str, Any]] = []
+    areas_map: Dict[str, Dict[str, Any]] = {}
     result = ha_client.fetch_status(
         base_url=base_url, token=token, timeout=settings.ha_request_timeout_seconds()
     )
@@ -242,6 +243,48 @@ def homeassistant_snapshot(
         )
         return events, previous or {}, {}
 
+    areas_result = ha_client.fetch_areas(
+        base_url=base_url, token=token, timeout=settings.ha_request_timeout_seconds()
+    )
+    if areas_result.get("ok"):
+        for area in areas_result.get("areas", []):
+            if not isinstance(area, dict):
+                continue
+            area_id = area.get("area_id")
+            if area_id:
+                areas_map[area_id] = area
+    else:
+        events.append(
+            {
+                "source": "homeassistant",
+                "type": "homeassistant.areas_failed",
+                "payload": {"error": areas_result.get("error")},
+                "severity": "warn",
+            }
+        )
+
+    registry_result = ha_client.fetch_entity_registry(
+        base_url=base_url, token=token, timeout=settings.ha_request_timeout_seconds()
+    )
+    entity_area_map: Dict[str, str] = {}
+    if registry_result.get("ok"):
+        for entry in registry_result.get("entities", []):
+            if not isinstance(entry, dict):
+                continue
+            eid = entry.get("entity_id")
+            aid = entry.get("area_id")
+            if eid and aid:
+                entity_area_map[eid] = aid
+    else:
+        events.append(
+            {
+                "source": "homeassistant",
+                "type": "homeassistant.entity_registry_failed",
+                "payload": {"error": registry_result.get("error")},
+                "severity": "warn",
+            }
+        )
+
     allowlist = list(attribute_allowlist or _DEFAULT_ATTR_ALLOWLIST)
     current: Dict[str, Dict[str, Any]] = {}
     for entity in states_result.get("states", []):
@@ -260,9 +303,13 @@ def homeassistant_snapshot(
         current[entity_id] = {
             "state": entity.get("state"),
             "attributes": _normalize_attributes(attributes, allowlist),
+            "area_id": entity.get("area_id") or entity_area_map.get(entity_id),
         }
 
     summary = _summarize_states(current, areas_map)
+    summary["areas"] = [
+        {"area_id": aid, "name": area.get("name")} for aid, area in areas_map.items() if isinstance(area, dict)
+    ]
     previous = previous or {}
     if not previous:
         events.append(
@@ -366,26 +413,4 @@ def homeassistant_snapshot(
                     "severity": "warn",
                 }
             )
-    areas_result = ha_client.fetch_areas(
-        base_url=base_url, token=token, timeout=settings.ha_request_timeout_seconds()
-    )
-    if areas_result.get("ok"):
-        areas = []
-        for area in areas_result.get("areas", []):
-            if not isinstance(area, dict):
-                continue
-            area_id = area.get("area_id")
-            name = area.get("name")
-            if area_id and name:
-                areas.append({"area_id": area_id, "name": name})
-        summary["areas"] = areas
-    else:
-        events.append(
-            {
-                "source": "homeassistant",
-                "type": "homeassistant.areas_failed",
-                "payload": {"error": areas_result.get("error")},
-                "severity": "warn",
-            }
-        )
     return events, current, summary
