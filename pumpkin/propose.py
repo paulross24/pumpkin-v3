@@ -276,28 +276,23 @@ def _render_prompt(context_pack: Dict[str, Any]) -> str:
                     "patch": (
                         "--- a/pumpkin/ha_client.py\n"
                         "+++ b/pumpkin/ha_client.py\n"
-                        "@@\n"
-                        " def fetch_status(base_url: str, token: str, timeout: float) -> Dict[str, Any]:\n"
-                        "-    url = base_url.rstrip('/') + \"/api/\"\n"
-                        "+    url = base_url.rstrip('/') + \"/api/\"\n"
-                        "     req = Request(url, method=\"GET\")\n"
-                        "     req.add_header(\"Authorization\", f\"Bearer {token}\")\n"
-                        "     req.add_header(\"Content-Type\", \"application/json\")\n"
-                        " \n"
-                        "     try:\n"
-                        "-        with urlopen(req, timeout=timeout) as resp:\n"
-                        "+        with urlopen(req, timeout=timeout) as resp:\n"
-                        "             raw = resp.read().decode(\"utf-8\")\n"
-                        "         data = json.loads(raw)\n"
-                        "         return {\"ok\": True, \"status\": data}\n"
-                        "-    except HTTPError as exc:\n"
-                        "-        return {\"ok\": False, \"error\": f\"http_{exc.code}\"}\n"
-                        "+    except HTTPError as exc:\n"
-                        "+        return {\"ok\": False, \"error\": f\"http_{exc.code}\"}\n"
-                        "     except URLError as exc:\n"
-                        "         return {\"ok\": False, \"error\": \"url_error\"}\n"
-                        "     except Exception as exc:\n"
-                        "         return {\"ok\": False, \"error\": \"unknown_error\"}\n"
+                        "@@\\n"
+                        " def fetch_status(base_url: str, token: str, timeout: float) -> Dict[str, Any]:\\n"
+                        "     url = base_url.rstrip('/') + \"/api/\"\\n"
+                        "     req = Request(url, method=\"GET\")\\n"
+                        "     req.add_header(\"Authorization\", f\"Bearer {token}\")\\n"
+                        "     req.add_header(\"Content-Type\", \"application/json\")\\n"
+                        "     try:\\n"
+                        "         with urlopen(req, timeout=timeout) as resp:\\n"
+                        "             raw = resp.read().decode(\"utf-8\")\\n"
+                        "         data = json.loads(raw)\\n"
+                        "         return {\"ok\": True, \"status\": data}\\n"
+                        "     except HTTPError as exc:\\n"
+                        "         return {\"ok\": False, \"error\": f\"http_{exc.code}\"}\\n"
+                        "     except URLError as exc:\\n"
+                        "         return {\"ok\": False, \"error\": \"url_error\"}\\n"
+                        "     except Exception as exc:\\n"
+                        "         return {\"ok\": False, \"error\": \"unknown_error\"}\\n"
                     ),
                 },
             },
@@ -309,17 +304,32 @@ def _render_prompt(context_pack: Dict[str, Any]) -> str:
             "source_event_ids": [],
         },
         {
-            "kind": "module.install",
-            "summary": "Add health telemetry module",
+            "kind": "action.request",
+            "summary": "Add standard telemetry collection",
             "details": {
                 "rationale": "Expose richer health metrics for monitoring.",
-                "module_name": "health.telemetry",
+                "action_type": "code.apply_patch",
+                "action_params": {
+                    "repo_root": str(settings.repo_root()),
+                    "patch": (
+                        "--- a/pumpkin/telemetry.py\n"
+                        "+++ b/pumpkin/telemetry.py\n"
+                        "@@\\n"
+                        " def collect_health_metrics() -> Dict[str, Any]:\\n"
+                        "     metrics = {\\n"
+                        "         \"cpu_load_1m\": _get_cpu_usage(),\\n"
+                        "         \"memory\": _get_memory_usage(),\\n"
+                        "         \"disk\": _get_disk_space(),\\n"
+                        "     }\\n"
+                        "     return metrics\\n"
+                    ),
+                },
             },
             "risk": 0.3,
             "expected_outcome": "Better visibility into system health.",
             "needs_new_capability": False,
             "capability_request": None,
-            "steps": ["Install module", "Configure endpoints"],
+            "steps": ["Collect metrics", "Integrate into /health", "Add log line"],
             "source_event_ids": [],
         },
     ]
