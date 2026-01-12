@@ -1,3 +1,13 @@
+def generate_prompt(user_input):
+    return f"User said: {user_input}. How can I assist you further?"
+
+def validate_response(response):
+    if len(response) < 10:
+        return False  # Response too short
+    return True
+
+def process_user_input(user_input):
+    prompt = generate_prompt(user_input)
 """Helper functions for building and validating LLM prompts/responses."""
 
 from __future__ import annotations

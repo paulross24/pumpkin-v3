@@ -6,7 +6,8 @@ import argparse
 import json
 import getpass
 import os
-from typing import Any
+import socket
+from typing import Any, Tuple
 
 from . import core
 from . import policy as policy_mod
@@ -21,7 +22,7 @@ from . import runbook
 from . import module_config_change
 from . import module_config
 from . import voice_server
-from pathlib import Path
+from . import act
 from .db import init_db
 
 
@@ -1159,6 +1160,50 @@ def cmd_ops_systemd_status(_: argparse.Namespace) -> None:
     print("\n".join(commands))
 
 
+def _apply_approved_actions(limit: int = 10) -> Tuple[int, int]:
+    conn = _conn()
+    rows = store.fetch_approved_unexecuted(conn)[:limit]
+    if not rows:
+        print("No approved proposals awaiting execution.")
+        return 0, 0
+    success = 0
+    failed = 0
+    audit_path = str(settings.audit_path())
+    for row in rows:
+        details = json.loads(row["details_json"])
+        action_type = details.get("action_type")
+        params = details.get("action_params") or {}
+        if action_type not in {"code.apply_patch", "notify.local"}:
+            print(f"Skipping proposal {row['id']} (unsupported action_type: {action_type})")
+            continue
+        action_id = store.insert_action(
+            conn,
+            proposal_id=row["id"],
+            action_type=action_type,
+            params=params,
+            status="started",
+            policy_hash=row["policy_hash"],
+        )
+        try:
+            result = act.execute_action(action_type, params, audit_path)
+            store.finish_action(conn, action_id, status="succeeded", result=result)
+            store.update_proposal_status(conn, row["id"], "executed")
+            success += 1
+            print(f"Executed proposal {row['id']} ({row['summary']})")
+        except Exception as exc:  # pragma: no cover
+            store.finish_action(
+                conn, action_id, status="failed", result={"error": str(exc)}
+            )
+            failed += 1
+            print(f"Failed proposal {row['id']}: {exc}")
+    return success, failed
+
+
+def cmd_ops_apply_approved(args: argparse.Namespace) -> None:
+    success, failed = _apply_approved_actions(limit=args.limit)
+    print(f"Completed: {success} succeeded, {failed} failed")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="pumpkin")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -1340,6 +1385,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     ops_systemd_status = ops_sub.add_parser("systemd-status")
     ops_systemd_status.set_defaults(func=cmd_ops_systemd_status)
+
+    ops_apply = ops_sub.add_parser("apply-approved")
+    ops_apply.add_argument("--limit", type=int, default=10)
+    ops_apply.set_defaults(func=cmd_ops_apply_approved)
 
     ops_verify = ops_sub.add_parser("verify")
     ops_verify.set_defaults(func=cmd_ops_verify)
