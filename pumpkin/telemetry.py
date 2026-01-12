@@ -1,18 +1,3 @@
-import logging
-
-def log_health_metrics(metrics):
-    logging.info(f"Health Metrics: {metrics}")
-
-def collect_health_metrics():
-    # Example metrics collection
-    metrics = {
-        'cpu_usage': get_cpu_usage(),
-        'memory_usage': get_memory_usage(),
-        'disk_space': get_disk_space(),
-    }
-    log_health_metrics(metrics)
-    return metrics
-
 """Basic telemetry collection and logging."""
 
 from __future__ import annotations
@@ -31,7 +16,7 @@ def _get_cpu_usage() -> float:
         return 0.0
 
 
-def _get_memory_usage() -> Dict[str, Any]:
+def _read_meminfo() -> Dict[str, Any]:
     info: Dict[str, Any] = {"total_kb": None, "available_kb": None}
     try:
         with open("/proc/meminfo", "r", encoding="utf-8") as f:
@@ -46,9 +31,9 @@ def _get_memory_usage() -> Dict[str, Any]:
                         info["total_kb"] = int(value)
                     if key == "MemAvailable":
                         info["available_kb"] = int(value)
-        return info
     except Exception:
-        return info
+        pass
+    return info
 
 
 def _get_disk_space(path: str = "/") -> Dict[str, Any]:
@@ -66,12 +51,11 @@ def _get_disk_space(path: str = "/") -> Dict[str, Any]:
 
 
 def collect_health_metrics() -> Dict[str, Any]:
-    metrics = {
+    return {
         "cpu_load_1m": _get_cpu_usage(),
-        "memory": _get_memory_usage(),
+        "memory": _read_meminfo(),
         "disk": _get_disk_space(),
     }
-    return metrics
 
 
 def log_health_metrics(metrics: Dict[str, Any]) -> None:
