@@ -74,8 +74,12 @@ def insert_proposal(
     ai_context_hash: Optional[str] = None,
     ai_context_excerpt: Optional[str] = None,
     ts_created: Optional[str] = None,
+    steps: Optional[List[str]] = None,
 ) -> int:
     ts_created = ts_created or utc_now_iso()
+    details_payload = dict(details) if isinstance(details, dict) else {}
+    if steps is not None:
+        details_payload["steps"] = steps
     cur = conn.execute(
         """
         INSERT INTO proposals (
@@ -88,7 +92,7 @@ def insert_proposal(
             ts_created,
             kind,
             summary,
-            json.dumps(details, ensure_ascii=True),
+            json.dumps(details_payload, ensure_ascii=True),
             risk,
             expected_outcome,
             status,

@@ -430,6 +430,12 @@ def _validate_planner_proposal(
             raise ValueError("steps must be list of strings")
         if len(steps) > MAX_STEPS_PER_PROPOSAL:
             raise ValueError("steps exceeds max_steps_per_proposal")
+    if kind == "action.request":
+        if not steps or not any(step.strip() for step in steps):
+            raise ValueError("action.request proposals must include actuation steps")
+        placeholder_markers = ["fill in steps", "actuation plan", "<step>"]
+        if any(marker.lower() in step.lower() for step in steps for marker in placeholder_markers):
+            raise ValueError("actuation steps cannot be placeholders")
 
     if kind == "action.request":
         action_type = details.get("action_type")
