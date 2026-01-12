@@ -250,6 +250,10 @@ def _render_prompt(context_pack: Dict[str, Any]) -> str:
         "risk must be 0.0-1.0. "
         f"Max proposals: {MAX_PROPOSALS_PER_LOOP}; max steps per proposal: {MAX_STEPS_PER_PROPOSAL}. "
         "If you need new capabilities, set needs_new_capability=true and provide capability_request. "
+        "For code.apply_patch: include a concrete unified diff that applies at repo root "
+        f"{settings.repo_root()}, with correct paths and no placeholders (never use <PATCH_TODO> or similar). "
+        "If you cannot provide a real patch, omit that proposal entirely. "
+        "Always include concrete steps that describe how to execute the proposal (no placeholders). "
         "No extra top-level keys. Strict JSON only."
     )
     themes = [
@@ -268,8 +272,33 @@ def _render_prompt(context_pack: Dict[str, Any]) -> str:
                 "rationale": "HA commands can fail; add retry/backoff to improve reliability.",
                 "action_type": "code.apply_patch",
                 "action_params": {
-                    "repo_root": "/home/rossp/pumpkin-v3",
-                    "patch": "<ADD_UNIFIED_DIFF_HERE>",
+                    "repo_root": str(settings.repo_root()),
+                    "patch": (
+                        "--- a/pumpkin/ha_client.py\n"
+                        "+++ b/pumpkin/ha_client.py\n"
+                        "@@\n"
+                        " def fetch_status(base_url: str, token: str, timeout: float) -> Dict[str, Any]:\n"
+                        "-    url = base_url.rstrip('/') + \"/api/\"\n"
+                        "+    url = base_url.rstrip('/') + \"/api/\"\n"
+                        "     req = Request(url, method=\"GET\")\n"
+                        "     req.add_header(\"Authorization\", f\"Bearer {token}\")\n"
+                        "     req.add_header(\"Content-Type\", \"application/json\")\n"
+                        " \n"
+                        "     try:\n"
+                        "-        with urlopen(req, timeout=timeout) as resp:\n"
+                        "+        with urlopen(req, timeout=timeout) as resp:\n"
+                        "             raw = resp.read().decode(\"utf-8\")\n"
+                        "         data = json.loads(raw)\n"
+                        "         return {\"ok\": True, \"status\": data}\n"
+                        "-    except HTTPError as exc:\n"
+                        "-        return {\"ok\": False, \"error\": f\"http_{exc.code}\"}\n"
+                        "+    except HTTPError as exc:\n"
+                        "+        return {\"ok\": False, \"error\": f\"http_{exc.code}\"}\n"
+                        "     except URLError as exc:\n"
+                        "         return {\"ok\": False, \"error\": \"url_error\"}\n"
+                        "     except Exception as exc:\n"
+                        "         return {\"ok\": False, \"error\": \"unknown_error\"}\n"
+                    ),
                 },
             },
             "risk": 0.2,
