@@ -1169,6 +1169,7 @@ def _apply_approved_actions(limit: int = 10) -> Tuple[int, int]:
     success = 0
     failed = 0
     audit_path = str(settings.audit_path())
+    health_url = f"http://127.0.0.1:{settings.voice_server_port()}/health"
     for row in rows:
         details = json.loads(row["details_json"])
         action_type = details.get("action_type")
@@ -1186,7 +1187,10 @@ def _apply_approved_actions(limit: int = 10) -> Tuple[int, int]:
         )
         try:
             result = act.execute_action(action_type, params, audit_path)
-            store.finish_action(conn, action_id, status="succeeded", result=result)
+            # Post-apply health check
+            health = act.verify_health(health_url)
+            combined_result = {"action": result, "health": health}
+            store.finish_action(conn, action_id, status="succeeded", result=combined_result)
             store.update_proposal_status(conn, row["id"], "executed")
             success += 1
             print(f"Executed proposal {row['id']} ({row['summary']})")

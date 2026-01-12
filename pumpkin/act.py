@@ -6,6 +6,7 @@ from typing import Any, Dict, List
 
 import os
 import subprocess
+import urllib.request
 
 from . import settings
 
@@ -64,6 +65,16 @@ def apply_patch_action(params: Dict[str, Any], audit_path: str) -> Dict[str, Any
         },
     )
     return {"applied": True, "repo_root": repo_root}
+
+
+def verify_health(url: str, timeout: float = 5.0) -> Dict[str, Any]:
+    req = urllib.request.Request(url, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            code = resp.getcode()
+            return {"ok": code == 200, "status_code": code}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 def _allowed_roots() -> List[str]:

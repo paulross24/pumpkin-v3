@@ -112,14 +112,25 @@ def _filter_entity(
     return True
 
 
-def _summarize_states(states: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+def _summarize_states(states: Dict[str, Dict[str, Any]], areas: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     counts: Dict[str, int] = {}
     home_people: List[str] = []
     people: List[Dict[str, Any]] = []
     zones: List[Dict[str, Any]] = []
+    entity_areas: Dict[str, str] = {}
+    upstairs = set()
+    downstairs = set()
     for entity_id, payload in states.items():
         domain = entity_id.split(".", 1)[0] if "." in entity_id else ""
         counts[domain] = counts.get(domain, 0) + 1
+        area = payload.get("area_id")
+        if area:
+            entity_areas[entity_id] = area
+            name = areas.get(area, {}).get("name", area)
+            if "upstairs" in name.lower():
+                upstairs.add(entity_id)
+            if "downstairs" in name.lower():
+                downstairs.add(entity_id)
         if domain == "person":
             name = payload.get("attributes", {}).get("friendly_name") or entity_id
             if payload.get("state") == "home":
@@ -151,6 +162,9 @@ def _summarize_states(states: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         "people_home": sorted(home_people),
         "people": sorted(people, key=lambda item: item.get("name", "")),
         "zones": sorted(zones, key=lambda item: item.get("name", "")),
+        "entity_areas": entity_areas,
+        "upstairs_entities": sorted(upstairs),
+        "downstairs_entities": sorted(downstairs),
     }
 
 
@@ -245,7 +259,7 @@ def homeassistant_snapshot(
             "attributes": _normalize_attributes(attributes, allowlist),
         }
 
-    summary = _summarize_states(current)
+    summary = _summarize_states(current, areas_map)
     previous = previous or {}
     if not previous:
         events.append(

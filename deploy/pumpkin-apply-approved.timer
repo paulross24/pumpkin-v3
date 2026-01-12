@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Pumpkin executor periodically
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+Persistent=true
+Unit=pumpkin-apply-approved.service
+
+[Install]
+WantedBy=timers.target

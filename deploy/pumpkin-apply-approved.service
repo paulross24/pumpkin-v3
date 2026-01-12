@@ -1,0 +1,14 @@
+[Unit]
+Description=Pumpkin executor: apply approved proposals
+After=network.target
+
+[Service]
+Type=oneshot
+User=rossp
+WorkingDirectory=/home/rossp/pumpkin-v3
+EnvironmentFile=-/etc/pumpkin/pumpkin.env
+ExecStart=/usr/bin/python3 -m pumpkin ops apply-approved --limit 10
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
