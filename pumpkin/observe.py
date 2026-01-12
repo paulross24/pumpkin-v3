@@ -120,6 +120,8 @@ def _summarize_states(states: Dict[str, Dict[str, Any]], areas: Dict[str, Dict[s
     entity_areas: Dict[str, str] = {}
     upstairs = set()
     downstairs = set()
+    upstairs_tokens = ("upstairs", "first floor", "1st floor", "floor one", "upper")
+    downstairs_tokens = ("downstairs", "ground floor", "groundfloor", "ground level", "lower")
     for entity_id, payload in states.items():
         domain = entity_id.split(".", 1)[0] if "." in entity_id else ""
         counts[domain] = counts.get(domain, 0) + 1
@@ -127,9 +129,10 @@ def _summarize_states(states: Dict[str, Dict[str, Any]], areas: Dict[str, Dict[s
         if area:
             entity_areas[entity_id] = area
             name = areas.get(area, {}).get("name", area)
-            if "upstairs" in name.lower():
+            lowered = name.lower()
+            if any(token in lowered for token in upstairs_tokens):
                 upstairs.add(entity_id)
-            if "downstairs" in name.lower():
+            if any(token in lowered for token in downstairs_tokens):
                 downstairs.add(entity_id)
         if domain == "person":
             name = payload.get("attributes", {}).get("friendly_name") or entity_id

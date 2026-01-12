@@ -1,25 +1,3 @@
-import time
-
-class HACache:
-    def __init__(self, expiration_time=60):
-        self.cache = {}
-        self.expiration_time = expiration_time
-
-    def get(self, key):
-        if key in self.cache:
-            entry = self.cache[key]
-            if time.time() - entry['timestamp'] < self.expiration_time:
-                return entry['value']
-            else:
-                del self.cache[key]  # Remove expired entry
-        return None
-
-    def set(self, key, value):
-        self.cache[key] = {'value': value, 'timestamp': time.time()}
-
-ha_cache = HACache()
-"""Simple in-memory cache helpers for Home Assistant data."""
-
 from __future__ import annotations
 
 import threading

@@ -12,7 +12,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Dict
+from typing import Any, Dict, Iterable, List
 from urllib.parse import parse_qs, urlparse
 
 from . import settings
@@ -635,10 +635,21 @@ def _match_entity(entities: Dict[str, Dict[str, Any]], target: str) -> str | Non
 
 def _match_area(areas: List[Dict[str, Any]], target: str) -> Dict[str, Any] | None:
     needle = target.lower()
+    synonyms = {
+        "downstairs": {"downstairs", "ground floor", "groundfloor", "ground level"},
+        "upstairs": {"upstairs", "first floor", "1st floor", "floor one"},
+    }
     for area in areas:
         name = str(area.get("name") or "").lower()
         if name and name in needle:
             return area
+    # Fallback: match upstairs/downstairs synonyms by area_id/name containing keyword
+    for area in areas:
+        name = str(area.get("name") or "").lower()
+        for key, words in synonyms.items():
+            if any(word in needle for word in words) and name:
+                if key in name or any(word in name for word in words):
+                    return area
     return None
 
 
@@ -668,10 +679,35 @@ def _extract_area_hint(target: str) -> str:
 
 
 def _match_entities_by_area_hint(
-    entities: Dict[str, Dict[str, Any]], domain: str, area_hint: str
+    entities: Dict[str, Dict[str, Any]],
+    domain: str,
+    area_hint: str,
+    area_map: Dict[str, str] | None = None,
+    area_names: Dict[str, str] | None = None,
+    upstairs_entities: set[str] | None = None,
+    downstairs_entities: set[str] | None = None,
 ) -> List[str]:
     matched: List[str] = []
     needle = area_hint.lower()
+    synonyms = {
+        "downstairs": {"downstairs", "ground floor", "groundfloor", "ground level"},
+        "upstairs": {"upstairs", "first floor", "1st floor", "floor one"},
+    }
+    upstairs_entities = upstairs_entities or set()
+    downstairs_entities = downstairs_entities or set()
+    area_map = area_map or {}
+    area_names = {k: v.lower() for k, v in (area_names or {}).items()}
+
+    def _extend(items: Iterable[str]) -> None:
+        for eid in items:
+            if isinstance(eid, str) and eid.startswith(domain + "."):
+                matched.append(eid)
+
+    if any(word in needle for word in synonyms["downstairs"]):
+        _extend(downstairs_entities)
+    if any(word in needle for word in synonyms["upstairs"]):
+        _extend(upstairs_entities)
+
     for entity_id, payload in entities.items():
         if not isinstance(entity_id, str):
             continue
@@ -683,7 +719,28 @@ def _match_entities_by_area_hint(
         name = str(attributes.get("friendly_name") or "").lower()
         if needle and needle in name:
             matched.append(entity_id)
-    return matched
+            continue
+        area_id = area_map.get(entity_id)
+        if area_id:
+            area_name = area_names.get(area_id, "")
+            if area_name and (needle in area_name or area_name in needle):
+                matched.append(entity_id)
+                continue
+            if any(word in area_name for word in synonyms["downstairs"]) and any(
+                word in needle for word in synonyms["downstairs"]
+            ):
+                matched.append(entity_id)
+            if any(word in area_name for word in synonyms["upstairs"]) and any(
+                word in needle for word in synonyms["upstairs"]
+            ):
+                matched.append(entity_id)
+    seen = set()
+    unique: List[str] = []
+    for eid in matched:
+        if eid not in seen:
+            seen.add(eid)
+            unique.append(eid)
+    return unique
 
 
 def _last_target_key(device: str) -> str:
@@ -784,13 +841,25 @@ def _execute_ha_command(text: str, conn, device: str | None) -> str | None:
     entities = store.get_memory(conn, "homeassistant.entities") or {}
     if not isinstance(entities, dict):
         entities = {}
+    summary = store.get_memory(conn, "homeassistant.summary") or {}
+    areas_list = summary.get("areas") or []
+    if not isinstance(areas_list, list):
+        areas_list = []
+    area_map = summary.get("entity_areas") if isinstance(summary, dict) else {}
+    if not isinstance(area_map, dict):
+        area_map = {}
+    area_names = {}
+    for area in areas_list:
+        if isinstance(area, dict):
+            aid = area.get("area_id")
+            name = area.get("name")
+            if aid and name:
+                area_names[aid] = str(name)
+    upstairs_entities = set(summary.get("upstairs_entities") or [])
+    downstairs_entities = set(summary.get("downstairs_entities") or [])
     entity_id = _match_entity(entities, command["target"])
     if not entity_id:
-        summary = store.get_memory(conn, "homeassistant.summary") or {}
-        areas = summary.get("areas") or []
-        if not isinstance(areas, list):
-            areas = []
-        area = _match_area(areas, command["target"])
+        area = _match_area(areas_list, command["target"])
         domain_hint = _area_domain_hint(command["target"])
         if area and domain_hint and _wants_area_control(command["target"]) and command["action"] in {
             "turn_on",
@@ -810,7 +879,15 @@ def _execute_ha_command(text: str, conn, device: str | None) -> str | None:
             acted = result.get("result")
             if isinstance(acted, list) and not acted:
                 area_hint = _extract_area_hint(command["target"])
-                entity_ids = _match_entities_by_area_hint(entities, domain_hint, area_hint)
+                entity_ids = _match_entities_by_area_hint(
+                    entities,
+                    domain_hint,
+                    area_hint,
+                    area_map=area_map,
+                    area_names=area_names,
+                    upstairs_entities=upstairs_entities,
+                    downstairs_entities=downstairs_entities,
+                )
                 if entity_ids:
                     fallback = ha_client.call_service(
                         base_url=base_url,
@@ -849,7 +926,15 @@ def _execute_ha_command(text: str, conn, device: str | None) -> str | None:
             "toggle",
         }:
             area_hint = _extract_area_hint(command["target"])
-            entity_ids = _match_entities_by_area_hint(entities, domain_hint, area_hint)
+            entity_ids = _match_entities_by_area_hint(
+                entities,
+                domain_hint,
+                area_hint,
+                area_map=area_map,
+                area_names=area_names,
+                upstairs_entities=upstairs_entities,
+                downstairs_entities=downstairs_entities,
+            )
             if entity_ids:
                 result = ha_client.call_service(
                     base_url=base_url,
