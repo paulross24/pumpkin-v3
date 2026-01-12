@@ -57,10 +57,65 @@ def _send_json(handler: BaseHTTPRequestHandler, status: int, payload: Dict[str, 
     handler.wfile.write(body)
 
 
+def _log_request(handler: BaseHTTPRequestHandler, status: int, payload: Dict[str, Any]) -> None:
+    """Lightweight request log for observability."""
+    method = getattr(handler, "command", "?")
+    path = getattr(handler, "path", "?")
+    # avoid large dumps; focus on the essentials
+    summary = {
+        "kind": "voice.http",
+        "method": method,
+        "path": path,
+        "status": status,
+        "payload_keys": sorted(payload.keys()),
+    }
+    try:
+        append_jsonl(str(settings.audit_path()), summary)
+    except Exception:
+        # best-effort; don't block the request on logging failures
+        pass
+
+
 def _send_reply(handler: BaseHTTPRequestHandler, reply: str, notice: str | None) -> None:
     if notice:
         reply = f"{reply} {notice}"
-    _send_json(handler, 200, {"status": "ok", "reply": reply})
+    payload = {"status": "ok", "reply": reply}
+    _send_json(handler, 200, payload)
+    _log_request(handler, 200, payload)
+
+
+def _record_reply_event(conn, payload: Dict[str, Any], reply: str, route: str) -> None:
+    """Persist a reply for later analysis."""
+    try:
+        event_payload = {
+            "text": payload.get("text"),
+            "source": payload.get("source"),
+            "device": payload.get("device"),
+            "route": route,
+            "reply": _truncate_text(reply, INGEST_LOG_TEXT_LIMIT),
+        }
+        store.insert_event(
+            conn,
+            source="voice",
+            event_type="voice.reply",
+            payload=event_payload,
+            severity="info",
+        )
+    except Exception:
+        # Do not break the response flow if logging fails.
+        pass
+
+
+def _reply_and_record(
+    handler: BaseHTTPRequestHandler,
+    conn,
+    payload: Dict[str, Any],
+    reply: str,
+    notice: str | None,
+    route: str,
+) -> None:
+    _record_reply_event(conn, payload, reply, route)
+    _send_reply(handler, reply, notice)
 
 
 def _parse_json(body: bytes) -> Dict[str, Any]:
@@ -206,6 +261,10 @@ def _is_improvement_request(text: str) -> bool:
         "self improve",
         "plan improvements",
         "propose improvements",
+        "propose system improvements",
+        "system improvements",
+        "make improvements",
+        "improve the system",
         "make plans",
     ]
     return any(token in lowered for token in triggers)
@@ -671,6 +730,26 @@ def _expansion_notice(device: str | None, conn) -> str | None:
     return f"New expansion idea: #{candidate['id']} {candidate['summary']}."
 
 
+def _log_ha_action(conn, command: Dict[str, Any], domain: str, service: str, payload: Dict[str, Any], result: Dict[str, Any] | None) -> None:
+    try:
+        store.insert_event(
+            conn,
+            source="voice",
+            event_type="voice.ha_action",
+            payload={
+                "action": command.get("action"),
+                "target": command.get("target"),
+                "domain": domain,
+                "service": service,
+                "payload": payload,
+                "result": result,
+            },
+            severity="info",
+        )
+    except Exception:
+        pass
+
+
 def _execute_ha_command(text: str, conn, device: str | None) -> str | None:
     command = _parse_control_command(text)
     if not command:
@@ -734,9 +813,25 @@ def _execute_ha_command(text: str, conn, device: str | None) -> str | None:
                     )
                     if not fallback.get("ok"):
                         return "Home Assistant rejected that command."
+                    _log_ha_action(
+                        conn,
+                        command,
+                        domain_hint,
+                        command["action"],
+                        {"entity_id": entity_ids},
+                        fallback,
+                    )
                     _store_last_target(conn, device, command["target"])
                     return f"Done. {command['action'].replace('_', ' ')} {area_hint} {domain_hint}s."
                 return f"I couldn't find any {domain_hint}s in {area.get('name')}."
+            _log_ha_action(
+                conn,
+                command,
+                domain_hint,
+                command["action"],
+                {"area_id": area.get("area_id")},
+                result,
+            )
             _store_last_target(conn, device, command["target"])
             return f"Done. {command['action'].replace('_', ' ')} {area.get('name')} {domain_hint}s."
         if domain_hint and _wants_area_control(command["target"]) and command["action"] in {
@@ -757,6 +852,14 @@ def _execute_ha_command(text: str, conn, device: str | None) -> str | None:
                 )
                 if not result.get("ok"):
                     return "Home Assistant rejected that command."
+                _log_ha_action(
+                    conn,
+                    command,
+                    domain_hint,
+                    command["action"],
+                    {"entity_id": entity_ids},
+                    result,
+                )
                 _store_last_target(conn, device, command["target"])
                 return f"Done. {command['action'].replace('_', ' ')} {area_hint} {domain_hint}s."
         return f"I couldn't find a device named {command['target']}."
@@ -786,6 +889,7 @@ def _execute_ha_command(text: str, conn, device: str | None) -> str | None:
     )
     if not result.get("ok"):
         return "Home Assistant rejected that command."
+    _log_ha_action(conn, command, domain, service, payload, result)
     _store_last_target(conn, device, command["target"])
     return f"Done. {action.replace('_', ' ')} {command['target']}."
 
@@ -2413,6 +2517,17 @@ class VoiceHandler(BaseHTTPRequestHandler):
             "PumpkinVoice ingest "
             f"source={source!r} device={device!r} text={truncated!r}"
         )
+        try:
+            conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+            store.insert_event(
+                conn,
+                source="voice",
+                event_type="voice.ingest",
+                payload={"text": text, "source": source, "device": device},
+                severity="info",
+            )
+        except Exception:
+            pass
         _send_json(
             self,
             200,
@@ -2467,7 +2582,14 @@ class VoiceHandler(BaseHTTPRequestHandler):
         )
         conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
         llm_config = _load_llm_config(conn)
-        api_key = self.headers.get("X-Pumpkin-OpenAI-Key") or llm_config["api_key"]
+        header_api_key = self.headers.get("X-Pumpkin-OpenAI-Key")
+        api_key = header_api_key or llm_config["api_key"]
+        if header_api_key and not llm_config["api_key"]:
+            # Persist a provided key so future planner calls can run without header.
+            try:
+                store.set_memory(conn, "llm.openai_api_key", header_api_key.strip())
+            except Exception:
+                pass
         notice = _expansion_notice(device, conn)
         store.insert_event(
             conn,
@@ -2479,90 +2601,90 @@ class VoiceHandler(BaseHTTPRequestHandler):
         proposal_followup = _handle_proposal_followup(text, device, conn)
         if proposal_followup:
             print(f"PumpkinVoice ask_reply {proposal_followup!r}", flush=True)
-            _send_reply(self, proposal_followup, notice)
+            _reply_and_record(self, conn, payload, proposal_followup, notice, "proposal_followup")
             return
         presence_reply = _lookup_presence(text)
         if presence_reply:
             print(f"PumpkinVoice ask_reply {presence_reply!r}", flush=True)
-            _send_reply(self, presence_reply, notice)
+            _reply_and_record(self, conn, payload, presence_reply, notice, "presence")
             return
         if _home_query(text):
             home_reply = _local_home_reply(conn)
             if home_reply:
                 print(f"PumpkinVoice ask_reply {home_reply!r}", flush=True)
-                _send_reply(self, home_reply, notice)
+                _reply_and_record(self, conn, payload, home_reply, notice, "home")
                 return
         if _home_summary_query(text):
             summary_reply = _local_house_summary_reply(conn)
             print(f"PumpkinVoice ask_reply {summary_reply!r}", flush=True)
-            _send_reply(self, summary_reply, notice)
+            _reply_and_record(self, conn, payload, summary_reply, notice, "home_summary")
             return
         control_reply = _execute_ha_command(text, conn, device)
         if control_reply:
             print(f"PumpkinVoice ask_reply {control_reply!r}", flush=True)
-            _send_reply(self, control_reply, notice)
+            _reply_and_record(self, conn, payload, control_reply, notice, "ha_control")
             return
         improvement_reply = _maybe_improvement_plan(text, device, conn, api_key)
         if improvement_reply:
             print(f"PumpkinVoice ask_reply {improvement_reply!r}", flush=True)
-            _send_reply(self, improvement_reply, notice)
+            _reply_and_record(self, conn, payload, improvement_reply, notice, "improvement_plan")
             return
         code_reply = _maybe_code_patch(text, device, api_key, conn)
         if code_reply:
             print(f"PumpkinVoice ask_reply {code_reply!r}", flush=True)
-            _send_reply(self, code_reply, notice)
+            _reply_and_record(self, conn, payload, code_reply, notice, "code_patch")
             return
         capability_reply = _maybe_capability_proposal(text, device, payload.get("client_ip"), conn)
         if capability_reply:
             print(f"PumpkinVoice ask_reply {capability_reply!r}", flush=True)
-            _send_reply(self, capability_reply, notice)
+            _reply_and_record(self, conn, payload, capability_reply, notice, "capability_proposal")
             return
         if _recent_query(text):
             reply = _recent_events_reply(conn, limit=5)
             print(f"PumpkinVoice ask_reply {reply!r}", flush=True)
-            _send_reply(self, reply, notice)
+            _reply_and_record(self, conn, payload, reply, notice, "recent_events")
             return
         if "last ha event" in text.lower() or "last home assistant" in text.lower():
             reply = _last_ha_event_reply(conn)
             print(f"PumpkinVoice ask_reply {reply!r}", flush=True)
-            _send_reply(self, reply, notice)
+            _reply_and_record(self, conn, payload, reply, notice, "ha_last_event")
             return
         if _inventory_query(text):
             reply = _inventory_reply(conn, text)
             print(f"PumpkinVoice ask_reply {reply!r}", flush=True)
-            _send_reply(self, reply, notice)
+            _reply_and_record(self, conn, payload, reply, notice, "inventory")
             return
         if _health_query(text):
             reply = _health_report_reply(conn)
             print(f"PumpkinVoice ask_reply {reply!r}", flush=True)
-            _send_reply(self, reply, notice)
+            _reply_and_record(self, conn, payload, reply, notice, "health")
             return
         name = _parse_speaker_name(text)
         if name:
             error = _store_speaker_name(conn, device, name)
             reply = error or f"Thanks, {name}. I'll remember you."
             print(f"PumpkinVoice ask_reply {reply!r}", flush=True)
-            _send_reply(self, reply, notice)
+            _reply_and_record(self, conn, payload, reply, notice, "speaker_name")
             return
         preference_reply = _handle_preference_update(text, device, conn)
         if preference_reply:
             print(f"PumpkinVoice ask_reply {preference_reply!r}", flush=True)
-            _send_reply(self, preference_reply, notice)
+            _reply_and_record(self, conn, payload, preference_reply, notice, "preferences")
             return
         if _memory_query(text):
             reply = _memory_reply(conn, device, text)
             print(f"PumpkinVoice ask_reply {reply!r}", flush=True)
-            _send_reply(self, reply, notice)
+            _reply_and_record(self, conn, payload, reply, notice, "memory")
             return
         calendar_reply = _lookup_calendar(text, device, conn)
         if calendar_reply:
             print(f"PumpkinVoice ask_reply {calendar_reply!r}", flush=True)
-            _send_reply(self, calendar_reply, notice)
+            _reply_and_record(self, conn, payload, calendar_reply, notice, "calendar")
             return
         if _status_query(text):
             status_reply = _local_status_reply(conn)
             print(f"PumpkinVoice ask_reply {status_reply!r}", flush=True)
-            _send_reply(self, status_reply, notice)
+            _reply_and_record(self, conn, payload, status_reply, notice, "status")
             return
         context = _build_llm_context(conn, device)
         prompt = (
@@ -2591,7 +2713,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
             f"PumpkinVoice ask_reply { _truncate_text(reply, INGEST_LOG_TEXT_LIMIT)!r}",
             flush=True,
         )
-        _send_reply(self, reply, notice)
+        _reply_and_record(self, conn, payload, reply, notice, "llm_fallback")
 
     def _handle_errors(self) -> None:
         length = int(self.headers.get("Content-Length", "0"))

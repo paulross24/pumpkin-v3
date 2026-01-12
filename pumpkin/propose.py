@@ -239,14 +239,66 @@ def _context_pack(
 def _render_prompt(context_pack: Dict[str, Any]) -> str:
     instructions = (
         "You are Pumpkin v3's planning module. "
-        "Return a JSON object with a top-level 'proposals' list. "
-        "Each proposal must follow the contract defined in the context. "
-        "Do not execute actions; only propose. "
-        "If you need new capabilities, set needs_new_capability true and add capability_request. "
-        f"Caps: max_proposals_per_loop={MAX_PROPOSALS_PER_LOOP}, "
-        f"max_steps_per_proposal={MAX_STEPS_PER_PROPOSAL}."
+        "Improve efficiency, reliability, and usability of the existing system. "
+        "Prioritize concrete fixes and upgrades (retry/backoff, caching, telemetry, validations, better prompts). "
+        "Return ONLY JSON (no prose) with a top-level key 'proposals' (list). "
+        "Each proposal object MUST include keys: kind, summary, details, risk, expected_outcome, "
+        "needs_new_capability, capability_request, steps, source_event_ids. "
+        "Allowed kinds: action.request, hardware.recommendation, module.install, policy.change, capability.offer. "
+        "Disallowed: any other kind (do not emit). "
+        "details.rationale MUST be a non-empty string. "
+        "risk must be 0.0-1.0. "
+        f"Max proposals: {MAX_PROPOSALS_PER_LOOP}; max steps per proposal: {MAX_STEPS_PER_PROPOSAL}. "
+        "If you need new capabilities, set needs_new_capability=true and provide capability_request. "
+        "No extra top-level keys. Strict JSON only."
     )
-    return f"{instructions}\n\nCONTEXT_PACK:\n{json.dumps(context_pack, ensure_ascii=True)}"
+    themes = [
+        "HA reliability (retry/backoff, timeouts, graceful errors)",
+        "Caching HA entities/areas for faster intent resolution",
+        "Health/metrics exports and self-checks",
+        "LLM robustness (better prompts, response validation)",
+        "User feedback logging and summaries",
+        "Security/credential hygiene",
+    ]
+    examples = [
+        {
+            "kind": "action.request",
+            "summary": "Add HA service retry/backoff",
+            "details": {
+                "rationale": "HA commands can fail; add retry/backoff to improve reliability.",
+                "action_type": "code.apply_patch",
+                "action_params": {
+                    "repo_root": "/home/rossp/pumpkin-v3",
+                    "patch": "<ADD_UNIFIED_DIFF_HERE>",
+                },
+            },
+            "risk": 0.2,
+            "expected_outcome": "Fewer transient HA failures.",
+            "needs_new_capability": False,
+            "capability_request": None,
+            "steps": ["Patch ha_client", "Add tests"],
+            "source_event_ids": [],
+        },
+        {
+            "kind": "module.install",
+            "summary": "Add health telemetry module",
+            "details": {
+                "rationale": "Expose richer health metrics for monitoring.",
+                "module_name": "health.telemetry",
+            },
+            "risk": 0.3,
+            "expected_outcome": "Better visibility into system health.",
+            "needs_new_capability": False,
+            "capability_request": None,
+            "steps": ["Install module", "Configure endpoints"],
+            "source_event_ids": [],
+        },
+    ]
+    return (
+        f"{instructions}\n\nEXAMPLES:\n{json.dumps(examples, ensure_ascii=True)}\n\n"
+        f"THEMES:\n{json.dumps(themes, ensure_ascii=True)}\n\n"
+        f"CONTEXT_PACK:\n{json.dumps(context_pack, ensure_ascii=True)}"
+    )
 
 
 def _hash_and_excerpt(prompt: str, max_bytes: int = 2048) -> Tuple[str, str]:
@@ -300,12 +352,30 @@ def _validate_planner_proposal(
 
     kind = proposal.get("kind", "general")
     if kind not in ALLOWED_KINDS:
-        raise ValueError(f"invalid kind: {kind}")
+        # Rewrite unknown kinds to action.request with a rationale, so we can surface them instead of discarding.
+        proposal = dict(proposal)
+        details = proposal.get("details", {}) or {}
+        if not isinstance(details, dict):
+            details = {"rationale": f"Remapped from unsupported kind {kind}."}
+        else:
+            details = dict(details)
+            if not details.get("rationale"):
+                details["rationale"] = f"Remapped from unsupported kind {kind}."
+        proposal["kind"] = "action.request"
+        proposal["summary"] = proposal.get("summary") or f"Remapped proposal ({kind})"
+        proposal["details"] = details
+        kind = "action.request"
 
     summary = proposal.get("summary")
     expected_outcome = proposal.get("expected_outcome")
     details = proposal.get("details")
     risk = proposal.get("risk")
+
+    # Ensure defaults for missing optional fields
+    if "steps" not in proposal or not isinstance(proposal.get("steps"), list):
+        proposal["steps"] = []
+    if "source_event_ids" not in proposal or not isinstance(proposal.get("source_event_ids"), list):
+        proposal["source_event_ids"] = []
 
     _parse_json_field(summary, "summary", str)
     _parse_json_field(expected_outcome, "expected_outcome", str)
@@ -313,6 +383,30 @@ def _validate_planner_proposal(
     rationale = details.get("rationale") if isinstance(details, dict) else None
     if not isinstance(rationale, str) or not rationale.strip():
         raise ValueError("rationale must be non-empty string")
+    if proposal.get("kind") == "action.request":
+        if not details.get("action_type"):
+            raise ValueError("missing required param: action_type")
+        params = details.get("action_params") or {}
+        if not isinstance(params, dict):
+            raise ValueError("action_params must be object")
+        if details.get("action_type") == "code.apply_patch":
+            if not params.get("repo_root"):
+                params["repo_root"] = str(settings.repo_root())
+            patch_text = params.get("patch")
+            # Require a real patch, not a placeholder.
+            if not isinstance(patch_text, str) or not patch_text.strip():
+                raise ValueError("code.apply_patch requires non-empty patch")
+            placeholder_markers = [
+                "<PATCH_TODO>",
+                "<ADD_UNIFIED_DIFF_HERE>",
+                "<ADD_PATCH_HERE>",
+            ]
+            if any(marker in patch_text for marker in placeholder_markers):
+                raise ValueError("code.apply_patch patch cannot contain placeholder text")
+            proposal["details"]["action_params"] = params
+        # Require an actuation plan so we can see how it will be executed.
+        if not proposal["steps"]:
+            proposal["steps"] = ["Actuation plan: fill in steps to execute this action."]
     if not isinstance(risk, (int, float)) or not (0.0 <= float(risk) <= 1.0):
         raise ValueError("risk must be 0.0-1.0")
 
@@ -1211,6 +1305,7 @@ def build_proposals(events: List[Any], conn) -> List[Dict[str, Any]]:
         "summary": "Planner output invalid",
         "details": {
             "rationale": "Planner output did not meet validation rules.",
+            "last_error": last_error,
             "action_type": "notify.local",
             "action_params": {"message": "Planner output invalid; check audit log."},
         },

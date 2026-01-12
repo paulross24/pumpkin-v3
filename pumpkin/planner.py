@@ -13,6 +13,50 @@ from . import settings
 from . import store
 from .db import init_db
 
+
+def _safe_append_log(message: Dict[str, Any]) -> None:
+    from .audit import append_jsonl
+    try:
+        append_jsonl(str(settings.audit_path()), message)
+    except Exception:
+        pass
+
+
+def _repair_json_with_openai(raw: str, api_key: str, model: str, base_url: str, timeout: float) -> Optional[Dict[str, Any]]:
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are a JSON repair tool. Return ONLY valid JSON object with top-level 'proposals' list. "
+                    "Fix the provided content; if unusable, return {\"proposals\": []}."
+                ),
+            },
+            {"role": "user", "content": raw or "null"},
+        ],
+        "temperature": 0.0,
+        "response_format": {"type": "json_object"},
+    }
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(base_url, data=data, method="POST")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("Authorization", f"Bearer {api_key}")
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        repaired_raw = resp.read().decode("utf-8")
+    decoded = json.loads(repaired_raw)
+    choices = decoded.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return None
+    message = choices[0].get("message", {})
+    content = message.get("content")
+    if not isinstance(content, str):
+        return None
+    try:
+        return json.loads(content)
+    except Exception:
+        return None
+
 @dataclass(frozen=True)
 class PlannerResult:
     proposals: List[Dict[str, Any]]
@@ -214,11 +258,16 @@ class OpenAIPlanner(Planner):
             "messages": [
                 {
                     "role": "system",
-                    "content": "Return ONLY JSON with a top-level 'proposals' list.",
+                    "content": (
+                        "You MUST return ONLY valid JSON with a top-level 'proposals' list. "
+                        "Do not include code fences or prose. If unsure, return an empty list."
+                    ),
                 },
                 {"role": "user", "content": prompt},
             ],
             "temperature": 0.4,
+            # Enforce structured JSON output if the model supports it.
+            "response_format": {"type": "json_object"},
         }
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(self.base_url, data=data, method="POST")
@@ -237,10 +286,20 @@ class OpenAIPlanner(Planner):
         try:
             parsed = json.loads(content)
         except json.JSONDecodeError as exc:
-            raise ValueError(f"openai content invalid JSON: {exc}")
+            snippet = content[:200]
+            # Attempt auto-repair
+            repaired = _repair_json_with_openai(content, self.api_key, self.model, self.base_url, self.timeout)
+            if repaired is None:
+                raise ValueError(f"openai content invalid JSON: {exc}: {snippet!r}")
+            parsed = repaired
         proposals = parsed.get("proposals")
         if not isinstance(proposals, list):
-            raise ValueError("openai response missing proposals list")
+            # Attempt to repair missing proposals list
+            repaired = _repair_json_with_openai(content, self.api_key, self.model, self.base_url, self.timeout)
+            if repaired and isinstance(repaired.get("proposals"), list):
+                proposals = repaired.get("proposals")
+            else:
+                raise ValueError("openai response missing proposals list")
         return PlannerResult(proposals=proposals, raw_response=content)
 
 
