@@ -34,6 +34,8 @@ ALLOWED_KINDS = {
 }
 
 SPEAKER_SESSION_WINDOW_SECONDS = 30 * 60
+CPU_LOAD_WARN_THRESHOLD = 2.0
+MEM_AVAILABLE_WARN_KB = 200_000
 
 
 def _speaker_key(payload: Dict[str, Any]) -> Optional[str]:
@@ -246,7 +248,8 @@ def _render_prompt(context_pack: Dict[str, Any]) -> str:
         "needs_new_capability, capability_request, steps, source_event_ids. "
         "Allowed kinds: action.request, hardware.recommendation, module.install, policy.change, capability.offer. "
         "Disallowed: any other kind (do not emit). "
-        "details.rationale MUST be a non-empty string. "
+        "details.rationale, details.implementation, details.verification, details.rollback_plan "
+        "MUST be non-empty strings. "
         "risk must be 0.0-1.0. "
         f"Max proposals: {MAX_PROPOSALS_PER_LOOP}; max steps per proposal: {MAX_STEPS_PER_PROPOSAL}. "
         "If you need new capabilities, set needs_new_capability=true and provide capability_request. "
@@ -383,6 +386,92 @@ def _parse_json_field(value: Any, field: str, expected_type: type) -> Any:
     return value
 
 
+def _default_rigor_details(kind: str, summary: str) -> Dict[str, str]:
+    base = summary.strip() if isinstance(summary, str) else "this change"
+    if kind == "module.install":
+        return {
+            "implementation": "Follow the module runbook and apply config changes.",
+            "verification": "Confirm the module is enabled and health checks pass.",
+            "rollback_plan": "Disable the module and revert config to the previous state.",
+        }
+    if kind == "policy.change":
+        return {
+            "implementation": "Apply the proposed policy change through the policy CLI.",
+            "verification": "Confirm policy diff applied and no validation errors.",
+            "rollback_plan": "Restore the previous policy snapshot.",
+        }
+    if kind == "hardware.recommendation":
+        return {
+            "implementation": "Review the recommendation and approve procurement.",
+            "verification": "Confirm the hardware resolves the identified issue.",
+            "rollback_plan": "Defer or cancel the recommendation.",
+        }
+    if kind == "capability.offer":
+        return {
+            "implementation": "Review the offered capability and decide whether to install.",
+            "verification": "Confirm the new capability is listed and usable.",
+            "rollback_plan": "Skip or remove the capability if it is not needed.",
+        }
+    return {
+        "implementation": f"Execute {base} as described.",
+        "verification": "Confirm expected outcome and check related logs.",
+        "rollback_plan": "Revert the change or disable the action if issues appear.",
+    }
+
+
+def _ensure_rigor_fields(details: Dict[str, Any], kind: str, summary: str) -> Dict[str, Any]:
+    defaults = _default_rigor_details(kind, summary)
+    for key, value in defaults.items():
+        if not isinstance(details.get(key), str) or not str(details.get(key)).strip():
+            details[key] = value
+    if not isinstance(details.get("rationale"), str) or not str(details.get("rationale")).strip():
+        details["rationale"] = summary or "Provide a clear rationale for this proposal."
+    return details
+
+
+def _ensure_rigor_steps(steps: List[str]) -> List[str]:
+    normalized = " ".join(steps).lower()
+    if "verify" not in normalized:
+        steps.append("Verify the expected outcome and check logs.")
+    if "rollback" not in normalized:
+        steps.append("Rollback the change if verification fails.")
+    return steps
+
+
+def _apply_rigor_defaults(proposals: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    updated: List[Dict[str, Any]] = []
+    for proposal in proposals:
+        if not isinstance(proposal, dict):
+            continue
+        item = dict(proposal)
+        kind = item.get("kind", "general")
+        summary = item.get("summary") or "proposal"
+        details = item.get("details") if isinstance(item.get("details"), dict) else {}
+        details = _ensure_rigor_fields(details, kind, summary)
+        item["details"] = details
+        steps = item.get("steps")
+        if not isinstance(steps, list):
+            steps = []
+        if kind == "action.request" and not steps:
+            steps = [
+                "Execute the action using the provided parameters.",
+                "Verify the expected outcome and check logs.",
+                "Rollback the change if verification fails.",
+            ]
+        if kind != "action.request" and not steps:
+            steps = [
+                "Review the proposal details and confirm intent.",
+                "Execute the implementation plan.",
+                "Verify the expected outcome and rollback if needed.",
+            ]
+        if steps:
+            if kind == "action.request":
+                steps = _ensure_rigor_steps(steps)
+        item["steps"] = steps
+        updated.append(item)
+    return updated
+
+
 def _validate_planner_proposal(
     policy: policy_mod.Policy, proposal: Dict[str, Any]
 ) -> Dict[str, Any]:
@@ -419,9 +508,15 @@ def _validate_planner_proposal(
     _parse_json_field(summary, "summary", str)
     _parse_json_field(expected_outcome, "expected_outcome", str)
     _parse_json_field(details, "details", dict)
-    rationale = details.get("rationale") if isinstance(details, dict) else None
+    details = _ensure_rigor_fields(details, kind, summary)
+    rationale = details.get("rationale")
     if not isinstance(rationale, str) or not rationale.strip():
         raise ValueError("rationale must be non-empty string")
+    for key in ("implementation", "verification", "rollback_plan"):
+        value = details.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{key} must be non-empty string")
+    proposal["details"] = details
     if proposal.get("kind") == "action.request":
         if not details.get("action_type"):
             raise ValueError("missing required param: action_type")
@@ -445,7 +540,18 @@ def _validate_planner_proposal(
             proposal["details"]["action_params"] = params
         # Require an actuation plan so we can see how it will be executed.
         if not proposal["steps"]:
-            proposal["steps"] = ["Actuation plan: fill in steps to execute this action."]
+            proposal["steps"] = [
+                "Execute the action using the provided parameters.",
+                "Verify the expected outcome and check logs.",
+                "Rollback the change if verification fails.",
+            ]
+        proposal["steps"] = _ensure_rigor_steps(proposal["steps"])
+    elif not proposal["steps"]:
+        proposal["steps"] = [
+            "Review the proposal details and confirm intent.",
+            "Execute the implementation plan.",
+            "Verify the expected outcome and rollback if needed.",
+        ]
     if not isinstance(risk, (int, float)) or not (0.0 <= float(risk) <= 1.0):
         raise ValueError("risk must be 0.0-1.0")
 
@@ -1225,39 +1331,87 @@ def _rule_based_proposals(events: List[Any], conn) -> List[Dict[str, Any]]:
         payload = json.loads(row["payload_json"])
         disk = payload.get("disk", {})
         used_percent = disk.get("used_percent")
-        if used_percent is None:
-            continue
-
         threshold = 0.9
-        if used_percent < threshold:
-            continue
+        if isinstance(used_percent, (int, float)) and used_percent >= threshold:
+            summary = f"Disk usage high on {disk.get('path', '/')}"
+            if not store.proposal_exists(conn, summary, statuses=["pending", "approved"]):
+                proposals.append(
+                    {
+                        "kind": "action.request",
+                        "summary": summary,
+                        "details": {
+                            "rationale": "Disk usage exceeded threshold.",
+                            "observed": {"used_percent": used_percent, "threshold": threshold},
+                            "action_type": "notify.local",
+                            "action_params": {
+                                "message": (
+                                    f"Disk usage is {used_percent:.0%} on {disk.get('path', '/')}"
+                                )
+                            },
+                        },
+                        "risk": 0.7,
+                        "expected_outcome": "Human is notified of high disk usage.",
+                        "source_event_ids": [row["id"]],
+                        "needs_new_capability": False,
+                        "capability_request": None,
+                        "steps": ["Emit a local notification"],
+                    }
+                )
 
-        summary = f"Disk usage high on {disk.get('path', '/')}"
-        if store.proposal_exists(conn, summary, statuses=["pending", "approved"]):
-            continue
+        loadavg = payload.get("loadavg", {})
+        load_1m = loadavg.get("1m")
+        if isinstance(load_1m, (int, float)) and load_1m >= CPU_LOAD_WARN_THRESHOLD:
+            summary = "CPU load high"
+            if not store.proposal_exists(conn, summary, statuses=["pending", "approved"]):
+                proposals.append(
+                    {
+                        "kind": "action.request",
+                        "summary": summary,
+                        "details": {
+                            "rationale": "CPU load exceeded threshold.",
+                            "observed": {"load_1m": load_1m, "threshold": CPU_LOAD_WARN_THRESHOLD},
+                            "action_type": "notify.local",
+                            "action_params": {
+                                "message": f"CPU load 1m is {load_1m:.2f} (threshold {CPU_LOAD_WARN_THRESHOLD})."
+                            },
+                        },
+                        "risk": 0.6,
+                        "expected_outcome": "Human is notified of high CPU load.",
+                        "source_event_ids": [row["id"]],
+                        "needs_new_capability": False,
+                        "capability_request": None,
+                        "steps": ["Emit a local notification"],
+                    }
+                )
 
-        proposals.append(
-            {
-                "kind": "action.request",
-                "summary": summary,
-                "details": {
-                    "rationale": "Disk usage exceeded threshold.",
-                    "observed": {"used_percent": used_percent, "threshold": threshold},
-                    "action_type": "notify.local",
-                    "action_params": {
-                        "message": (
-                            f"Disk usage is {used_percent:.0%} on {disk.get('path', '/')}"
-                        )
-                    },
-                },
-                "risk": 0.7,
-                "expected_outcome": "Human is notified of high disk usage.",
-                "source_event_ids": [row["id"]],
-                "needs_new_capability": False,
-                "capability_request": None,
-                "steps": ["Emit a local notification"],
-            }
-        )
+        meminfo = payload.get("meminfo_kb", {})
+        mem_available = meminfo.get("MemAvailable")
+        if isinstance(mem_available, int) and mem_available <= MEM_AVAILABLE_WARN_KB:
+            summary = "Memory available low"
+            if not store.proposal_exists(conn, summary, statuses=["pending", "approved"]):
+                proposals.append(
+                    {
+                        "kind": "action.request",
+                        "summary": summary,
+                        "details": {
+                            "rationale": "Memory available dropped below threshold.",
+                            "observed": {"mem_available_kb": mem_available, "threshold_kb": MEM_AVAILABLE_WARN_KB},
+                            "action_type": "notify.local",
+                            "action_params": {
+                                "message": (
+                                    f"Memory available is {mem_available}KB "
+                                    f"(threshold {MEM_AVAILABLE_WARN_KB}KB)."
+                                )
+                            },
+                        },
+                        "risk": 0.6,
+                        "expected_outcome": "Human is notified of low available memory.",
+                        "source_event_ids": [row["id"]],
+                        "needs_new_capability": False,
+                        "capability_request": None,
+                        "steps": ["Emit a local notification"],
+                    }
+                )
 
     return proposals
 
@@ -1307,7 +1461,7 @@ def build_proposals(events: List[Any], conn) -> List[Dict[str, Any]]:
     )
 
     plan = planner.load_planner()
-    rule_based = _rule_based_proposals(events, conn)
+    rule_based = _apply_rigor_defaults(_rule_based_proposals(events, conn))
     retry_limit = settings.planner_retry_count()
     last_error: str | None = None
 
@@ -1362,7 +1516,7 @@ def build_proposals(events: List[Any], conn) -> List[Dict[str, Any]]:
         "steps": ["Emit a local notification"],
     }
 
-    combined = rule_based + [notify]
+    combined = rule_based + _apply_rigor_defaults([notify])
     return combined[:MAX_PROPOSALS_PER_LOOP]
 
 

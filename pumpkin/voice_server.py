@@ -118,8 +118,15 @@ def _reply_and_record(
     reply: str,
     notice: str | None,
     route: str,
+    memory_ctx: Dict[str, Any] | None = None,
 ) -> None:
     _record_reply_event(conn, payload, reply, route)
+    if memory_ctx is None:
+        memory_ctx = {}
+    try:
+        _update_conversation_memory(conn, payload, reply, memory_ctx)
+    except Exception:
+        pass
     _send_reply(handler, reply, notice)
 
 
@@ -139,6 +146,141 @@ def _truncate_text(text: str, limit: int) -> str:
         return text
     return text[:limit] + "..."
 
+
+def _conversation_key(device: str | None, profile: Dict[str, Any] | None) -> str | None:
+    if isinstance(profile, dict):
+        person_id = profile.get("ha_person_id")
+        if isinstance(person_id, str) and person_id.strip():
+            return f"memory.conversation.person:{person_id.strip()}"
+    if isinstance(device, str) and device.strip():
+        return f"memory.conversation.device:{device.strip()}"
+    return None
+
+
+def _load_conversation_memory(conn, key: str) -> Dict[str, Any]:
+    data = store.get_memory(conn, key)
+    if isinstance(data, dict):
+        return data
+    return {"summary": "", "facts": [], "recent": [], "last_summary_ts": 0.0}
+
+
+def _store_conversation_memory(conn, key: str, memory: Dict[str, Any]) -> None:
+    store.set_memory(conn, key, memory)
+
+
+def _append_recent_turn(memory: Dict[str, Any], role: str, text: str) -> None:
+    recent = memory.get("recent")
+    if not isinstance(recent, list):
+        recent = []
+    recent.append({"role": role, "text": _truncate_text(text, 400), "ts": time.time()})
+    memory["recent"] = recent[-12:]
+
+
+def _extract_facts_simple(text: str) -> List[str]:
+    facts: List[str] = []
+    lowered = text.lower()
+    if "turn on" in lowered or "turn off" in lowered:
+        return facts
+    patterns = [
+        r"\bmy favorite ([a-z ]{3,20}) is ([a-z0-9 '._-]{2,40})\b",
+        r"\bmy (timezone|time zone) is ([a-z0-9/_+-]{2,30})\b",
+        r"\bi (?:like|love|prefer) ([a-z0-9 '._-]{2,40})\b",
+        r"\bmy (?:job|role) is ([a-z0-9 '._-]{2,40})\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, lowered)
+        if match:
+            if match.lastindex and match.lastindex >= 2:
+                facts.append(f"{match.group(1).strip()}: {match.group(2).strip()}")
+            else:
+                facts.append(match.group(0).strip())
+    return facts
+
+
+def _merge_facts(existing: List[str], new: List[str]) -> List[str]:
+    seen = {item.strip().lower() for item in existing if isinstance(item, str)}
+    merged = list(existing)
+    for fact in new:
+        norm = fact.strip().lower()
+        if norm and norm not in seen:
+            merged.append(fact.strip())
+            seen.add(norm)
+    return merged[-50:]
+
+
+def _should_summarize(memory: Dict[str, Any]) -> bool:
+    last_ts = memory.get("last_summary_ts", 0.0)
+    if not isinstance(last_ts, (int, float)):
+        last_ts = 0.0
+    recent = memory.get("recent")
+    if not isinstance(recent, list) or len(recent) < 6:
+        return False
+    return (time.time() - float(last_ts)) > 6 * 3600
+
+
+def _summarize_conversation(memory: Dict[str, Any], llm_ctx: Dict[str, Any]) -> str | None:
+    api_key = llm_ctx.get("api_key")
+    if not api_key:
+        return None
+    recent = memory.get("recent", [])
+    if not isinstance(recent, list):
+        recent = []
+    prompt = (
+        "Summarize the following conversation in 3-5 short sentences. "
+        "Highlight preferences, goals, and relevant facts. Keep it under 600 characters.\n\n"
+        f"CURRENT_SUMMARY: {memory.get('summary', '')}\n\n"
+        f"RECENT_TURNS: {json.dumps(recent, ensure_ascii=True)}"
+    )
+    try:
+        return _call_openai(
+            prompt,
+            api_key=api_key,
+            model=llm_ctx.get("model"),
+            base_url=llm_ctx.get("base_url"),
+        )
+    except Exception:
+        return None
+
+
+def _update_conversation_memory(
+    conn,
+    payload: Dict[str, Any],
+    reply: str,
+    llm_ctx: Dict[str, Any],
+) -> None:
+    device = payload.get("device")
+    profile = _speaker_profile_from_device(conn, device)
+    key = _conversation_key(device, profile)
+    if not key:
+        return
+    memory = _load_conversation_memory(conn, key)
+    _append_recent_turn(memory, "user", str(payload.get("text", "")))
+    _append_recent_turn(memory, "assistant", reply)
+    new_facts = _extract_facts_simple(str(payload.get("text", "")))
+    facts = memory.get("facts") if isinstance(memory.get("facts"), list) else []
+    if new_facts:
+        memory["facts"] = _merge_facts(facts, new_facts)
+    if _should_summarize(memory):
+        summary = _summarize_conversation(memory, llm_ctx)
+        if summary:
+            memory["summary"] = _truncate_text(summary, 800)
+            memory["last_summary_ts"] = time.time()
+    memory["updated_ts"] = time.time()
+    _store_conversation_memory(conn, key, memory)
+    try:
+        store.insert_event(
+            conn,
+            source="voice",
+            event_type="memory.updated",
+            payload={
+                "key": key,
+                "facts_count": len(memory.get("facts", [])),
+                "summary_len": len(memory.get("summary", "")),
+            },
+            severity="info",
+        )
+    except Exception:
+        pass
 
 def _effective_bind(handler: BaseHTTPRequestHandler) -> tuple[str, int]:
     try:
@@ -354,6 +496,9 @@ def _maybe_code_patch(
     rationale = result.get("rationale") or "Requested code change."
     details = {
         "rationale": rationale,
+        "implementation": "Apply the patch with the code runner after approval.",
+        "verification": "Verify the change and check service health.",
+        "rollback_plan": "Revert the patch if verification fails.",
         "action_type": "code.apply_patch",
         "action_params": {"repo_root": repo_root, "patch": patch},
     }
@@ -1386,6 +1531,16 @@ def _build_llm_context(conn, device: str | None) -> Dict[str, Any]:
             "preferences": profile.get("preferences", {}),
             "voice_recognition_opt_in": profile.get("voice_recognition_opt_in", False),
         }
+    memory_key = _conversation_key(device, profile)
+    memory_snapshot = None
+    if memory_key:
+        stored = store.get_memory(conn, memory_key)
+        if isinstance(stored, dict):
+            memory_snapshot = {
+                "summary": stored.get("summary"),
+                "facts": stored.get("facts"),
+                "last_updated": stored.get("updated_ts"),
+            }
     return {
         "system_snapshot": system_snapshot,
         "issues": issues,
@@ -1396,6 +1551,7 @@ def _build_llm_context(conn, device: str | None) -> Dict[str, Any]:
         ],
         "recent_errors": errors,
         "speaker_profile": profile_summary,
+        "conversation_memory": memory_snapshot,
     }
 
 
@@ -1655,7 +1811,11 @@ def _memory_reply(conn, device: str | None, text: str) -> str:
     if "forget" in lowered:
         if not isinstance(device, str) or not device.strip():
             return "I need a device ID to forget you."
+        profile = _speaker_profile_from_device(conn, device)
         store.set_memory(conn, f"speaker.profile.device:{device.strip()}", {"state": "guest"})
+        key = _conversation_key(device, profile)
+        if key:
+            store.set_memory(conn, key, None)
         return "Done. I've cleared what I stored about you."
     profile = _speaker_profile_from_device(conn, device)
     if not isinstance(profile, dict):
@@ -2769,6 +2929,11 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 store.set_memory(conn, "llm.openai_api_key", header_api_key.strip())
             except Exception:
                 pass
+        memory_ctx = {
+            "api_key": api_key,
+            "model": llm_config["model"],
+            "base_url": llm_config["base_url"],
+        }
         notice = _expansion_notice(device, conn)
         store.insert_event(
             conn,
@@ -2780,90 +2945,96 @@ class VoiceHandler(BaseHTTPRequestHandler):
         proposal_followup = _handle_proposal_followup(text, device, conn)
         if proposal_followup:
             print(f"PumpkinVoice ask_reply {proposal_followup!r}", flush=True)
-            _reply_and_record(self, conn, payload, proposal_followup, notice, "proposal_followup")
+            _reply_and_record(
+                self, conn, payload, proposal_followup, notice, "proposal_followup", memory_ctx
+            )
             return
         presence_reply = _lookup_presence(text)
         if presence_reply:
             print(f"PumpkinVoice ask_reply {presence_reply!r}", flush=True)
-            _reply_and_record(self, conn, payload, presence_reply, notice, "presence")
+            _reply_and_record(self, conn, payload, presence_reply, notice, "presence", memory_ctx)
             return
         if _home_query(text):
             home_reply = _local_home_reply(conn)
             if home_reply:
                 print(f"PumpkinVoice ask_reply {home_reply!r}", flush=True)
-                _reply_and_record(self, conn, payload, home_reply, notice, "home")
+                _reply_and_record(self, conn, payload, home_reply, notice, "home", memory_ctx)
                 return
         if _home_summary_query(text):
             summary_reply = _local_house_summary_reply(conn)
             print(f"PumpkinVoice ask_reply {summary_reply!r}", flush=True)
-            _reply_and_record(self, conn, payload, summary_reply, notice, "home_summary")
+            _reply_and_record(self, conn, payload, summary_reply, notice, "home_summary", memory_ctx)
             return
         control_reply = _execute_ha_command(text, conn, device)
         if control_reply:
             print(f"PumpkinVoice ask_reply {control_reply!r}", flush=True)
-            _reply_and_record(self, conn, payload, control_reply, notice, "ha_control")
+            _reply_and_record(self, conn, payload, control_reply, notice, "ha_control", memory_ctx)
             return
         improvement_reply = _maybe_improvement_plan(text, device, conn, api_key)
         if improvement_reply:
             print(f"PumpkinVoice ask_reply {improvement_reply!r}", flush=True)
-            _reply_and_record(self, conn, payload, improvement_reply, notice, "improvement_plan")
+            _reply_and_record(
+                self, conn, payload, improvement_reply, notice, "improvement_plan", memory_ctx
+            )
             return
         code_reply = _maybe_code_patch(text, device, api_key, conn)
         if code_reply:
             print(f"PumpkinVoice ask_reply {code_reply!r}", flush=True)
-            _reply_and_record(self, conn, payload, code_reply, notice, "code_patch")
+            _reply_and_record(self, conn, payload, code_reply, notice, "code_patch", memory_ctx)
             return
         capability_reply = _maybe_capability_proposal(text, device, payload.get("client_ip"), conn)
         if capability_reply:
             print(f"PumpkinVoice ask_reply {capability_reply!r}", flush=True)
-            _reply_and_record(self, conn, payload, capability_reply, notice, "capability_proposal")
+            _reply_and_record(
+                self, conn, payload, capability_reply, notice, "capability_proposal", memory_ctx
+            )
             return
         if _recent_query(text):
             reply = _recent_events_reply(conn, limit=5)
             print(f"PumpkinVoice ask_reply {reply!r}", flush=True)
-            _reply_and_record(self, conn, payload, reply, notice, "recent_events")
+            _reply_and_record(self, conn, payload, reply, notice, "recent_events", memory_ctx)
             return
         if "last ha event" in text.lower() or "last home assistant" in text.lower():
             reply = _last_ha_event_reply(conn)
             print(f"PumpkinVoice ask_reply {reply!r}", flush=True)
-            _reply_and_record(self, conn, payload, reply, notice, "ha_last_event")
+            _reply_and_record(self, conn, payload, reply, notice, "ha_last_event", memory_ctx)
             return
         if _inventory_query(text):
             reply = _inventory_reply(conn, text)
             print(f"PumpkinVoice ask_reply {reply!r}", flush=True)
-            _reply_and_record(self, conn, payload, reply, notice, "inventory")
+            _reply_and_record(self, conn, payload, reply, notice, "inventory", memory_ctx)
             return
         if _health_query(text):
             reply = _health_report_reply(conn)
             print(f"PumpkinVoice ask_reply {reply!r}", flush=True)
-            _reply_and_record(self, conn, payload, reply, notice, "health")
+            _reply_and_record(self, conn, payload, reply, notice, "health", memory_ctx)
             return
         name = _parse_speaker_name(text)
         if name:
             error = _store_speaker_name(conn, device, name)
             reply = error or f"Thanks, {name}. I'll remember you."
             print(f"PumpkinVoice ask_reply {reply!r}", flush=True)
-            _reply_and_record(self, conn, payload, reply, notice, "speaker_name")
+            _reply_and_record(self, conn, payload, reply, notice, "speaker_name", memory_ctx)
             return
         preference_reply = _handle_preference_update(text, device, conn)
         if preference_reply:
             print(f"PumpkinVoice ask_reply {preference_reply!r}", flush=True)
-            _reply_and_record(self, conn, payload, preference_reply, notice, "preferences")
+            _reply_and_record(self, conn, payload, preference_reply, notice, "preferences", memory_ctx)
             return
         if _memory_query(text):
             reply = _memory_reply(conn, device, text)
             print(f"PumpkinVoice ask_reply {reply!r}", flush=True)
-            _reply_and_record(self, conn, payload, reply, notice, "memory")
+            _reply_and_record(self, conn, payload, reply, notice, "memory", memory_ctx)
             return
         calendar_reply = _lookup_calendar(text, device, conn)
         if calendar_reply:
             print(f"PumpkinVoice ask_reply {calendar_reply!r}", flush=True)
-            _reply_and_record(self, conn, payload, calendar_reply, notice, "calendar")
+            _reply_and_record(self, conn, payload, calendar_reply, notice, "calendar", memory_ctx)
             return
         if _status_query(text):
             status_reply = _local_status_reply(conn)
             print(f"PumpkinVoice ask_reply {status_reply!r}", flush=True)
-            _reply_and_record(self, conn, payload, status_reply, notice, "status")
+            _reply_and_record(self, conn, payload, status_reply, notice, "status", memory_ctx)
             return
         context = _build_llm_context(conn, device)
         prompt = (
@@ -2892,7 +3063,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
             f"PumpkinVoice ask_reply { _truncate_text(reply, INGEST_LOG_TEXT_LIMIT)!r}",
             flush=True,
         )
-        _reply_and_record(self, conn, payload, reply, notice, "llm_fallback")
+        _reply_and_record(self, conn, payload, reply, notice, "llm_fallback", memory_ctx)
 
     def _handle_errors(self) -> None:
         length = int(self.headers.get("Content-Length", "0"))
