@@ -1259,6 +1259,59 @@ def _handle_proposal_followup(text: str, device: str | None, conn) -> str | None
     return f"Rejected proposal #{proposal_id}."
 
 
+def _ensure_proposal_rigor(proposal: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(proposal, dict):
+        return proposal
+    item = dict(proposal)
+    kind = item.get("kind", "general")
+    summary = item.get("summary") or "proposal"
+    details = item.get("details") if isinstance(item.get("details"), dict) else {}
+    defaults = {
+        "implementation": "Execute the plan as described.",
+        "verification": "Confirm the expected outcome and review logs.",
+        "rollback_plan": "Revert or disable the change if verification fails.",
+    }
+    if kind == "module.install":
+        defaults.update(
+            {
+                "implementation": "Follow the module runbook and apply config changes.",
+                "verification": "Confirm the module is enabled and health checks pass.",
+                "rollback_plan": "Disable the module and revert config to the previous state.",
+            }
+        )
+    if kind == "policy.change":
+        defaults.update(
+            {
+                "implementation": "Apply the policy change through the policy CLI.",
+                "verification": "Confirm the policy diff applied and no validation errors.",
+                "rollback_plan": "Restore the previous policy snapshot.",
+            }
+        )
+    for key, value in defaults.items():
+        if not isinstance(details.get(key), str) or not str(details.get(key)).strip():
+            details[key] = value
+    if not isinstance(details.get("rationale"), str) or not str(details.get("rationale")).strip():
+        details["rationale"] = summary or "Provide a clear rationale for this proposal."
+    item["details"] = details
+    steps = item.get("steps")
+    if not isinstance(steps, list):
+        steps = []
+    if kind == "action.request" and not steps:
+        steps = [
+            "Execute the action using the provided parameters.",
+            "Verify the expected outcome and check logs.",
+            "Rollback the change if verification fails.",
+        ]
+    if steps:
+        normalized = " ".join(steps).lower()
+        if "verify" not in normalized:
+            steps.append("Verify the expected outcome and check logs.")
+        if "rollback" not in normalized:
+            steps.append("Rollback the change if verification fails.")
+    item["steps"] = steps
+    return item
+
+
 def _is_capability_request(text: str) -> bool:
     lowered = text.lower()
     triggers = [
@@ -1286,6 +1339,7 @@ def _record_voice_proposals(conn, proposals: list[dict[str, Any]]) -> list[tuple
     module_install_ids: Dict[str, int] = {}
     ordered = sorted(proposals, key=lambda p: 0 if p.get("kind") == "module.install" else 1)
     for proposal in ordered:
+        proposal = _ensure_proposal_rigor(proposal)
         summary = proposal.get("summary", "")
         if summary and store.proposal_exists(conn, summary, statuses=["pending", "approved"]):
             existing_id = _find_pending_proposal_id(conn, summary)
@@ -1350,6 +1404,7 @@ def _maybe_capability_proposal(text: str, device: str | None, client_ip: str | N
         "payload_json": json.dumps(payload, ensure_ascii=True),
     }
     proposals = propose._rule_based_proposals([fake_row], conn)
+    proposals = [_ensure_proposal_rigor(item) for item in proposals if isinstance(item, dict)]
     created = _record_voice_proposals(conn, proposals)
     if not created:
         return "I couldn't draft a proposal for that yet."
