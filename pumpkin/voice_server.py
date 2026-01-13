@@ -2673,6 +2673,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 ha_last_event = store.get_memory(conn, "homeassistant.last_event")
                 home_state = _home_state_summary(conn)
                 issues = _summarize_issues(system_snapshot)
+                network_discovery = store.get_memory(conn, "network.discovery.snapshot")
                 _send_json(
                     self,
                     200,
@@ -2683,6 +2684,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "homeassistant": ha_summary,
                         "homeassistant_last_event": ha_last_event,
                         "home_state": home_state,
+                        "network_discovery": network_discovery,
                         "issues": issues,
                         "proposals": proposal_items,
                         "proposal_count": len(proposal_items),
