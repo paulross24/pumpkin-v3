@@ -13,6 +13,20 @@ from . import settings
 from .audit import append_jsonl
 
 
+ACTION_METADATA = {
+    "notify.local": {
+        "description": "Emit a local notification into the audit log.",
+        "verification": "Confirm the notification entry exists in the audit log.",
+        "rollback": "No rollback needed; the message is informational.",
+    },
+    "code.apply_patch": {
+        "description": "Apply a unified diff patch to an allowed repository root.",
+        "verification": "Verify patch applied cleanly and service health is OK.",
+        "rollback": "Revert the patch or restore from backup if needed.",
+    },
+}
+
+
 def notify_local(message: str, audit_path: str) -> Dict[str, Any]:
     entry = {
         "kind": "notify.local",

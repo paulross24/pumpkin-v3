@@ -9,11 +9,13 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from . import planner
 from . import policy as policy_mod
+from . import capabilities
 from . import module_registry
 from . import catalog as catalog_mod
 from . import module_config_change
 from . import intent
 from . import runbook
+from . import retrieval
 from . import settings
 from . import store
 from .audit import append_jsonl
@@ -157,6 +159,21 @@ def _context_pack(
     registry = module_registry.load_registry(str(settings.modules_registry_path()))
     voice_events = store.list_voice_events(conn, settings.voice_event_limit())
     voice_payloads = {row["id"]: json.loads(row["payload_json"]) for row in voice_events}
+    latest_voice_text = None
+    if voice_events:
+        latest_payload = voice_payloads.get(voice_events[0]["id"], {})
+        if isinstance(latest_payload, dict):
+            latest_voice_text = latest_payload.get("text")
+    retrieved = retrieval.retrieve_context(
+        latest_voice_text or "",
+        settings.audit_path(),
+        [
+            settings.modules_config_path(),
+            settings.modules_registry_path(),
+            settings.policy_path(),
+        ],
+        max_results=5,
+    )
     voice_speakers: Dict[int, Dict[str, Any]] = {}
     for row in voice_events:
         payload = voice_payloads.get(row["id"], {})
@@ -184,8 +201,10 @@ def _context_pack(
             ],
             "policy_text": policy_excerpt,
         },
-        "modules_registry": module_registry.registry_summary(registry),
+        "modules_registry": module_registry.registry_summary(registry, include_provides=True),
+        "capabilities_snapshot": capabilities.snapshot(),
         "system_snapshot": system_snapshot,
+        "retrieved_context": retrieved,
         "recent_events": [
             {
                 "id": row["id"],

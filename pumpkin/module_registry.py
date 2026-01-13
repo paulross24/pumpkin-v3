@@ -118,16 +118,17 @@ def validate_module_enable_details(
     return module
 
 
-def registry_summary(registry: Dict[str, Any]) -> List[Dict[str, Any]]:
+def registry_summary(registry: Dict[str, Any], include_provides: bool = False) -> List[Dict[str, Any]]:
     modules = registry.get("modules", [])
     summary = []
     for module in modules:
-        summary.append(
-            {
-                "name": module.get("name"),
-                "type": module.get("type"),
-                "description": module.get("description"),
-                "safety_level": module.get("safety_level"),
-            }
-        )
+        entry = {
+            "name": module.get("name"),
+            "type": module.get("type"),
+            "description": module.get("description"),
+            "safety_level": module.get("safety_level"),
+        }
+        if include_provides:
+            entry["provides"] = module.get("provides", [])
+        summary.append(entry)
     return summary

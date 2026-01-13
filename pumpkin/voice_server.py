@@ -21,6 +21,8 @@ from . import store
 from . import module_config
 from . import ha_client
 from . import catalog as catalog_mod
+from . import capabilities
+from . import retrieval
 from . import intent
 from . import policy as policy_mod
 from . import propose
@@ -1600,6 +1602,7 @@ def _build_llm_context(conn, device: str | None) -> Dict[str, Any]:
         "system_snapshot": system_snapshot,
         "issues": issues,
         "homeassistant": trimmed_ha,
+        "capabilities_snapshot": capabilities.snapshot(),
         "pending_proposals": [
             {"id": row["id"], "summary": row["summary"], "kind": row["kind"]}
             for row in pending
@@ -2283,12 +2286,13 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "endpoints": [
                             "GET /",
                             "GET /health",
-                            "GET /config",
-                            "GET /catalog",
-                            "GET /openapi.json",
-                            "GET /proposals",
-                            "GET /summary",
-                            "GET /timeline",
+                        "GET /config",
+                        "GET /catalog",
+                        "GET /capabilities",
+                        "GET /openapi.json",
+                        "GET /proposals",
+                        "GET /summary",
+                        "GET /timeline",
                             "GET /errors",
                             "GET /llm/config",
                             "POST /ask",
@@ -2357,6 +2361,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "modules": catalog.get("modules", []),
                     },
                 )
+                return
+            if path == "/capabilities":
+                _send_json(self, 200, capabilities.snapshot())
                 return
             if path == "/proposals":
                 status = params.get("status", [None])[0]
@@ -2520,6 +2527,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "/health": {"get": {"summary": "Health check"}},
                             "/config": {"get": {"summary": "Runtime config"}},
                             "/catalog": {"get": {"summary": "Module catalog"}},
+                            "/capabilities": {"get": {"summary": "Capability snapshot"}},
                             "/summary": {
                                 "get": {
                                     "summary": "System summary",
@@ -3092,6 +3100,16 @@ class VoiceHandler(BaseHTTPRequestHandler):
             _reply_and_record(self, conn, payload, status_reply, notice, "status", memory_ctx)
             return
         context = _build_llm_context(conn, device)
+        context["retrieved_context"] = retrieval.retrieve_context(
+            text,
+            settings.audit_path(),
+            [
+                settings.modules_config_path(),
+                settings.modules_registry_path(),
+                settings.policy_path(),
+            ],
+            max_results=5,
+        )
         prompt = (
             "Answer the user question using the context when relevant. "
             "If the context lacks the answer, say so briefly.\n\n"
