@@ -138,6 +138,30 @@ def _collect_module_events(conn) -> List[Dict[str, Any]]:
         if any(ev["type"] in {"homeassistant.request_failed", "homeassistant.states_failed"} for ev in ha_events):
             _record_cooldown(conn, "ha.request")
 
+    if "network.discovery" in enabled:
+        module_cfg = modules_cfg.get("network.discovery", {})
+        subnet = module_cfg.get("subnet")
+        tcp_ports = module_cfg.get("tcp_ports", [])
+        timeout_seconds = float(module_cfg.get("timeout_seconds", 0.2))
+        max_hosts = int(module_cfg.get("max_hosts", 128))
+        if _cooldown_elapsed(conn, "network.discovery", settings.ha_error_cooldown_seconds()):
+            snapshot = observe.network_discovery(
+                subnet=subnet,
+                tcp_ports=tcp_ports if isinstance(tcp_ports, list) else [],
+                timeout_seconds=timeout_seconds,
+                max_hosts=max_hosts,
+            )
+            events.append(
+                {
+                    "source": "network",
+                    "type": "network.discovery",
+                    "payload": snapshot,
+                    "severity": "info",
+                }
+            )
+            store.set_memory(conn, "network.discovery.snapshot", snapshot)
+            _record_cooldown(conn, "network.discovery")
+
     return events
 
 

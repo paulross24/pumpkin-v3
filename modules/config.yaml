@@ -2,6 +2,7 @@ version: 1
 enabled:
   - homeassistant.observer
   - code.assistant
+  - network.discovery
 modules:
   homeassistant.observer:
     base_url: "http://192.168.1.140:8123"
@@ -31,3 +32,13 @@ modules:
   code.assistant:
     repo_root: "/home/rossp"
     require_approval: true
+  network.discovery:
+    subnet: "auto"
+    tcp_ports:
+      - 22
+      - 80
+      - 443
+      - 8123
+      - 9000
+    timeout_seconds: 0.2
+    max_hosts: 128

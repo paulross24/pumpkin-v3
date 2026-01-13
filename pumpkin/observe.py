@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import shutil
+import socket
+import ipaddress
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -61,6 +63,96 @@ def system_snapshot() -> List[Dict[str, Any]]:
     )
 
     return events
+
+
+def _detect_local_ip() -> Optional[str]:
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.connect(("8.8.8.8", 80))
+            return sock.getsockname()[0]
+        finally:
+            sock.close()
+    except Exception:
+        return None
+
+
+def _read_arp_table() -> List[Dict[str, str]]:
+    entries: List[Dict[str, str]] = []
+    try:
+        with open("/proc/net/arp", "r", encoding="utf-8") as f:
+            next(f, None)
+            for line in f:
+                parts = line.split()
+                if len(parts) < 6:
+                    continue
+                ip, _, _, mac, _, device = parts[:6]
+                if mac == "00:00:00:00:00:00":
+                    continue
+                entries.append({"ip": ip, "mac": mac.lower(), "device": device})
+    except FileNotFoundError:
+        pass
+    return entries
+
+
+def _probe_port(ip: str, port: int, timeout: float) -> bool:
+    try:
+        with socket.create_connection((ip, port), timeout=timeout):
+            return True
+    except Exception:
+        return False
+
+
+def network_discovery(
+    subnet: Optional[str],
+    tcp_ports: Iterable[int],
+    timeout_seconds: float,
+    max_hosts: int,
+) -> Dict[str, Any]:
+    local_ip = _detect_local_ip()
+    network = None
+    if isinstance(subnet, str) and subnet.strip() and subnet.strip().lower() != "auto":
+        try:
+            network = ipaddress.ip_network(subnet.strip(), strict=False)
+        except ValueError:
+            network = None
+    if network is None and local_ip:
+        network = ipaddress.ip_network(f"{local_ip}/24", strict=False)
+
+    arp_entries = _read_arp_table()
+    devices: List[Dict[str, Any]] = []
+    ports = [int(p) for p in tcp_ports if isinstance(p, int) or str(p).isdigit()]
+    for entry in arp_entries:
+        ip = entry.get("ip")
+        if not ip:
+            continue
+        if network:
+            try:
+                if ipaddress.ip_address(ip) not in network:
+                    continue
+            except ValueError:
+                continue
+        open_ports: List[int] = []
+        for port in ports:
+            if _probe_port(ip, port, timeout_seconds):
+                open_ports.append(port)
+        devices.append(
+            {
+                "ip": ip,
+                "mac": entry.get("mac"),
+                "device": entry.get("device"),
+                "open_ports": open_ports,
+            }
+        )
+        if len(devices) >= max_hosts:
+            break
+
+    return {
+        "local_ip": local_ip,
+        "subnet": str(network) if network else None,
+        "device_count": len(devices),
+        "devices": devices,
+    }
 
 
 _DEFAULT_ATTR_ALLOWLIST = [

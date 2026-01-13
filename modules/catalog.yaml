@@ -64,3 +64,18 @@ modules:
         signals:
           - patch.proposed
           - patch.approved
+
+  - name: network.discovery
+    type: observer
+    description: Discover active devices on the local network for capability planning.
+    status: available
+    safety_level: med
+    prerequisites:
+      packages: []
+      services: []
+      network_access:
+        - lan
+    provides:
+      - source: network
+        signals:
+          - device.discovered
