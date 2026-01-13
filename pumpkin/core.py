@@ -19,6 +19,14 @@ from .db import init_db
 from .act import execute_action
 
 
+def _append_recent_memory(conn, key: str, item: Dict[str, Any], limit: int = 25) -> None:
+    current = store.get_memory(conn, key)
+    if not isinstance(current, list):
+        current = []
+    current.append(item)
+    store.set_memory(conn, key, current[-limit:])
+
+
 def _record_policy_snapshot_if_changed(conn, policy: policy_mod.Policy) -> None:
     last_hash = store.get_memory(conn, "policy.last_hash")
     if last_hash != policy.policy_hash:
@@ -252,6 +260,7 @@ def _record_proposals(conn, policy: policy_mod.Policy, proposals: List[Dict[str,
                 "source_event_ids": proposal.get("source_event_ids", []),
             },
         )
+        _maybe_auto_approve_action(conn, policy, proposal_id, proposal)
         if proposal.get("kind") == "capability.offer":
             audit.append_jsonl(
                 str(settings.audit_path()),
@@ -262,6 +271,48 @@ def _record_proposals(conn, policy: policy_mod.Policy, proposals: List[Dict[str,
                     "policy_hash": policy.policy_hash,
                 },
             )
+
+
+def _maybe_auto_approve_action(
+    conn, policy: policy_mod.Policy, proposal_id: int, proposal: Dict[str, Any]
+) -> bool:
+    if proposal.get("kind") != "action.request":
+        return False
+    details = proposal.get("details", {})
+    if not isinstance(details, dict):
+        return False
+    action_type = details.get("action_type")
+    action_params = details.get("action_params", {})
+    if not isinstance(action_type, str) or not isinstance(action_params, dict):
+        return False
+    try:
+        decision = policy_mod.evaluate_action(
+            policy, action_type, action_params, risk=proposal.get("risk")
+        )
+    except Exception:
+        return False
+    if decision != "auto_approve":
+        return False
+    if not store.approval_exists(conn, proposal_id, "approved"):
+        store.insert_approval(
+            conn,
+            proposal_id=proposal_id,
+            actor="policy.auto",
+            decision="approved",
+            reason="auto_approved_low_risk",
+            policy_hash=policy.policy_hash,
+        )
+    store.update_proposal_status(conn, proposal_id, "approved")
+    audit.append_jsonl(
+        str(settings.audit_path()),
+        {
+            "kind": "proposal.auto_approved",
+            "proposal_id": proposal_id,
+            "action_type": action_type,
+            "policy_hash": policy.policy_hash,
+        },
+    )
+    return True
 
 
 def _execute_approved(conn, policy: policy_mod.Policy) -> None:
@@ -361,6 +412,17 @@ def _execute_approved(conn, policy: policy_mod.Policy) -> None:
                     "policy_hash": policy.policy_hash,
                 },
             )
+            _append_recent_memory(
+                conn,
+                "actions.recent",
+                {
+                    "ts": datetime.now().isoformat(),
+                    "proposal_id": proposal_id,
+                    "action_id": action_id,
+                    "action_type": action_type,
+                    "status": "succeeded",
+                },
+            )
         except Exception as exc:
             store.finish_action(conn, action_id, "failed", result={"error": str(exc)})
             store.update_proposal_status(conn, proposal_id, "failed")
@@ -373,6 +435,18 @@ def _execute_approved(conn, policy: policy_mod.Policy) -> None:
                     "action_type": action_type,
                     "error": str(exc),
                     "policy_hash": policy.policy_hash,
+                },
+            )
+            _append_recent_memory(
+                conn,
+                "actions.recent",
+                {
+                    "ts": datetime.now().isoformat(),
+                    "proposal_id": proposal_id,
+                    "action_id": action_id,
+                    "action_type": action_type,
+                    "status": "failed",
+                    "error": str(exc),
                 },
             )
 

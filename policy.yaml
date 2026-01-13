@@ -2,7 +2,11 @@
 version: 1
 mode: strict
 defaults:
-  require_approval: true
+  require_approval: false
+approval:
+  max_auto_approve_risk: 0.35
+  risky_action_types:
+    - code.apply_patch
 auto_approve: []
 actions:
   - action_type: notify.local

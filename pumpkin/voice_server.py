@@ -91,6 +91,14 @@ def _send_reply(handler: BaseHTTPRequestHandler, reply: str, notice: str | None)
     _log_request(handler, 200, payload)
 
 
+def _append_recent_memory(conn, key: str, item: Dict[str, Any], limit: int = 25) -> None:
+    current = store.get_memory(conn, key)
+    if not isinstance(current, list):
+        current = []
+    current.append(item)
+    store.set_memory(conn, key, current[-limit:])
+
+
 def _record_reply_event(conn, payload: Dict[str, Any], reply: str, route: str) -> None:
     """Persist a reply for later analysis."""
     try:
@@ -107,6 +115,16 @@ def _record_reply_event(conn, payload: Dict[str, Any], reply: str, route: str) -
             event_type="voice.reply",
             payload=event_payload,
             severity="info",
+        )
+        _append_recent_memory(
+            conn,
+            "voice.recent_replies",
+            {
+                "ts": datetime.now().isoformat(),
+                "route": route,
+                "text": _truncate_text(str(payload.get("text", "")), INGEST_LOG_TEXT_LIMIT),
+                "reply": _truncate_text(reply, INGEST_LOG_TEXT_LIMIT),
+            },
         )
     except Exception:
         # Do not break the response flow if logging fails.
@@ -1376,8 +1394,50 @@ def _record_voice_proposals(conn, proposals: list[dict[str, Any]]) -> list[tuple
         if proposal.get("kind") == "module.install" and link_key:
             module_install_ids[link_key] = proposal_id
         created.append((proposal_id, proposal))
+        _maybe_auto_approve_action_proposal(conn, policy, proposal_id, proposal)
     return created
 
+
+def _maybe_auto_approve_action_proposal(
+    conn, policy: policy_mod.Policy, proposal_id: int, proposal: Dict[str, Any]
+) -> bool:
+    if proposal.get("kind") != "action.request":
+        return False
+    details = proposal.get("details", {})
+    if not isinstance(details, dict):
+        return False
+    action_type = details.get("action_type")
+    action_params = details.get("action_params", {})
+    if not isinstance(action_type, str) or not isinstance(action_params, dict):
+        return False
+    try:
+        decision = policy_mod.evaluate_action(
+            policy, action_type, action_params, risk=proposal.get("risk")
+        )
+    except Exception:
+        return False
+    if decision != "auto_approve":
+        return False
+    if not store.approval_exists(conn, proposal_id, "approved"):
+        store.insert_approval(
+            conn,
+            proposal_id=proposal_id,
+            actor="policy.auto",
+            decision="approved",
+            reason="auto_approved_low_risk",
+            policy_hash=policy.policy_hash,
+        )
+    store.update_proposal_status(conn, proposal_id, "approved")
+    append_jsonl(
+        str(settings.audit_path()),
+        {
+            "kind": "proposal.auto_approved",
+            "proposal_id": proposal_id,
+            "action_type": action_type,
+            "policy_hash": policy.policy_hash,
+        },
+    )
+    return True
 
 def _find_pending_proposal_id(conn, summary: str) -> int | None:
     if not summary:

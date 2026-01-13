@@ -82,6 +82,22 @@ def validate_policy(data: Dict[str, Any]) -> None:
     ):
         raise ValueError("defaults.require_approval must be boolean")
 
+    approval = data.get("approval", {})
+    if approval is not None:
+        if not isinstance(approval, dict):
+            raise ValueError("approval must be a mapping")
+        max_auto = approval.get("max_auto_approve_risk")
+        if max_auto is not None:
+            if not isinstance(max_auto, (int, float)) or not (0.0 <= max_auto <= 1.0):
+                raise ValueError("approval.max_auto_approve_risk must be 0.0-1.0")
+        risky = approval.get("risky_action_types", [])
+        if risky is not None:
+            if not isinstance(risky, list) or not all(isinstance(x, str) for x in risky):
+                raise ValueError("approval.risky_action_types must be a list of strings")
+        for key in approval.keys():
+            if key not in {"max_auto_approve_risk", "risky_action_types"}:
+                raise ValueError(f"unsupported approval setting: {key}")
+
     auto_approve = data.get("auto_approve", [])
     if not isinstance(auto_approve, list):
         raise ValueError("auto_approve must be a list")
@@ -187,6 +203,11 @@ def evaluate_action(
     defaults = policy.data.get("defaults", {})
     require_approval = defaults.get("require_approval", True)
 
+    approval = policy.data.get("approval", {}) or {}
+    risky_types = approval.get("risky_action_types", []) or []
+    if action_type in risky_types:
+        return "require_approval"
+
     auto_approve = policy.data.get("auto_approve", [])
     for entry in auto_approve:
         if entry.get("action_type") != action_type:
@@ -199,6 +220,14 @@ def evaluate_action(
             if risk > max_risk:
                 continue
         return "auto_approve"
+
+    max_auto = approval.get("max_auto_approve_risk")
+    if isinstance(max_auto, (int, float)):
+        if risk is None:
+            return "require_approval"
+        if risk < float(max_auto):
+            return "auto_approve"
+        return "require_approval"
 
     if mode == "strict":
         return "require_approval"
@@ -213,5 +242,6 @@ def policy_summary(policy: Policy) -> Dict[str, Any]:
         "mode": policy.data.get("mode", "strict"),
         "action_types": [a.get("action_type") for a in policy.data.get("actions", [])],
         "auto_approve": policy.data.get("auto_approve", []),
+        "approval": policy.data.get("approval", {}),
         "defaults": policy.data.get("defaults", {}),
     }
