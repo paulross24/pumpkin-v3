@@ -593,7 +593,15 @@ def _validate_planner_proposal(
         if not isinstance(steps, list) or not all(isinstance(x, str) for x in steps):
             raise ValueError("steps must be list of strings")
         if len(steps) > MAX_STEPS_PER_PROPOSAL:
-            raise ValueError("steps exceeds max_steps_per_proposal")
+            steps = steps[:MAX_STEPS_PER_PROPOSAL]
+            proposal["steps"] = steps
+            if isinstance(details, dict):
+                rationale = details.get("rationale")
+                suffix = f"(Steps truncated to {MAX_STEPS_PER_PROPOSAL}.)"
+                if isinstance(rationale, str) and rationale.strip():
+                    details["rationale"] = f"{rationale} {suffix}".strip()
+                else:
+                    details["rationale"] = suffix
     if kind == "action.request":
         if not steps or not any(step.strip() for step in steps):
             raise ValueError("action.request proposals must include actuation steps")
@@ -1518,25 +1526,14 @@ def build_proposals(events: List[Any], conn) -> List[Dict[str, Any]]:
                 },
             )
 
-    notify = {
-        "kind": "action.request",
-        "summary": "Planner output invalid",
-        "details": {
-            "rationale": "Planner output did not meet validation rules.",
-            "last_error": last_error,
-            "action_type": "notify.local",
-            "action_params": {"message": "Planner output invalid; check audit log."},
+    append_jsonl(
+        str(settings.audit_path()),
+        {
+            "kind": "planner.output_invalid",
+            "error": last_error,
         },
-        "risk": 0.9,
-        "expected_outcome": "Human is alerted to planner validation issues.",
-        "source_event_ids": [],
-        "needs_new_capability": False,
-        "capability_request": None,
-        "steps": ["Emit a local notification"],
-    }
-
-    combined = rule_based + _apply_rigor_defaults([notify])
-    return combined[:MAX_PROPOSALS_PER_LOOP]
+    )
+    return rule_based[:MAX_PROPOSALS_PER_LOOP]
 
 
 def build_improvement_proposals(conn) -> List[Dict[str, Any]]:
