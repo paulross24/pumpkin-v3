@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Pumpkin Proposal Desk</title>
+    <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='29' y='10' width='6' height='12' fill='%235b4b41'/><circle cx='32' cy='36' r='20' fill='%23e67c2e'/><circle cx='20' cy='36' r='14' fill='%23f08a3a' opacity='0.85'/><circle cx='44' cy='36' r='14' fill='%23f08a3a' opacity='0.85'/></svg>" />
     <style>
       :root {
         --bg: #f6efe8;
@@ -43,12 +44,10 @@
         font-size: 26px;
         font-weight: 700;
       }
-      .title .dot {
-        width: 12px;
-        height: 12px;
-        background: var(--pumpkin);
-        border-radius: 50%;
-        box-shadow: 0 0 0 6px rgba(230, 124, 46, 0.15);
+      .pumpkin-icon {
+        width: 24px;
+        height: 24px;
+        flex: 0 0 auto;
       }
       .sub {
         color: var(--muted);
@@ -127,7 +126,12 @@
   <body>
     <header>
       <div class="title">
-        <span class="dot"></span>
+        <svg class="pumpkin-icon" viewBox="0 0 64 64" aria-hidden="true">
+          <rect x="29" y="10" width="6" height="12" fill="var(--muted)" />
+          <circle cx="32" cy="36" r="20" fill="var(--pumpkin)" />
+          <circle cx="20" cy="36" r="14" fill="#f08a3a" opacity="0.85" />
+          <circle cx="44" cy="36" r="14" fill="#f08a3a" opacity="0.85" />
+        </svg>
         Proposal Desk
       </div>
       <div class="sub">
