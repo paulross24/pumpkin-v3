@@ -519,10 +519,35 @@ def _validate_planner_proposal(
     risk = proposal.get("risk")
 
     # Ensure defaults for missing optional fields
-    if "steps" not in proposal or not isinstance(proposal.get("steps"), list):
+    if "steps" not in proposal:
         proposal["steps"] = []
+    steps = proposal.get("steps")
+    if not isinstance(steps, list):
+        steps = [steps]
+    normalized_steps: List[str] = []
+    for step in steps:
+        if isinstance(step, str):
+            normalized_steps.append(step)
+        elif isinstance(step, dict):
+            normalized_steps.append(str(step.get("step") or step))
+        elif step is not None:
+            normalized_steps.append(str(step))
+    proposal["steps"] = normalized_steps
     if "source_event_ids" not in proposal or not isinstance(proposal.get("source_event_ids"), list):
         proposal["source_event_ids"] = []
+
+    if not isinstance(expected_outcome, str):
+        if isinstance(expected_outcome, list):
+            expected_outcome = " ".join(
+                str(item) for item in expected_outcome if item is not None
+            ).strip()
+        elif isinstance(expected_outcome, dict):
+            expected_outcome = json.dumps(expected_outcome, ensure_ascii=True)
+        elif expected_outcome is None:
+            expected_outcome = summary or "Expected outcome not provided."
+        else:
+            expected_outcome = str(expected_outcome)
+        proposal["expected_outcome"] = expected_outcome
 
     _parse_json_field(summary, "summary", str)
     _parse_json_field(expected_outcome, "expected_outcome", str)

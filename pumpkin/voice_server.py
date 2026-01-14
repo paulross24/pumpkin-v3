@@ -3191,6 +3191,12 @@ class VoiceHandler(BaseHTTPRequestHandler):
         )
         try:
             conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+            header_api_key = self.headers.get("X-Pumpkin-OpenAI-Key")
+            if header_api_key:
+                try:
+                    store.set_memory(conn, "llm.openai_api_key", header_api_key.strip())
+                except Exception:
+                    pass
             store.insert_event(
                 conn,
                 source="voice",
@@ -3471,10 +3477,22 @@ def _apply_approved_actions(limit: int = 5) -> None:
     if not rows:
         return
     audit_path = str(settings.audit_path())
+    allow_patch = _parse_bool(os.getenv("PUMPKIN_EXECUTOR_ALLOW_PATCH", "0"))
     for row in rows:
         details = json.loads(row["details_json"])
         action_type = details.get("action_type")
         params = details.get("action_params") or {}
+        if action_type == "code.apply_patch" and not allow_patch:
+            append_jsonl(
+                audit_path,
+                {
+                    "kind": "executor.skipped",
+                    "proposal_id": row["id"],
+                    "action_type": action_type,
+                    "reason": "patches_disabled",
+                },
+            )
+            continue
         if action_type not in {"code.apply_patch", "notify.local"}:
             continue
         action_id = store.insert_action(
