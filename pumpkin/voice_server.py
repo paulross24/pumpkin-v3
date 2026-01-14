@@ -371,8 +371,8 @@ def _effective_bind(handler: BaseHTTPRequestHandler) -> tuple[str, int]:
         return settings.voice_server_host(), settings.voice_server_port()
 
 
-def _load_voice_ui() -> str:
-    ui_path = settings.repo_root() / "pumpkin" / "web" / "voice_ui.html"
+def _load_voice_ui_asset(name: str) -> str:
+    ui_path = settings.repo_root() / "pumpkin" / "web" / name
     try:
         return ui_path.read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -2531,7 +2531,10 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 )
                 return
             if path in {"/ui", "/ui/"}:
-                _send_html(self, 200, _load_voice_ui())
+                _send_html(self, 200, _load_voice_ui_asset("voice_ui.html"))
+                return
+            if path == "/ui/proposals":
+                _send_html(self, 200, _load_voice_ui_asset("voice_ui_proposals.html"))
                 return
             if path == "/config":
                 bind_host, bind_port = _effective_bind(self)

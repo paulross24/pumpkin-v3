@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pumpkin Proposal Desk</title>
+    <style>
+      :root {
+        --bg: #f6efe8;
+        --bg-accent: #f2d6b5;
+        --ink: #2a1b12;
+        --muted: #5b4b41;
+        --pumpkin: #e67c2e;
+        --pumpkin-dark: #b95519;
+        --card: #fff8f2;
+        --line: #e5d6c6;
+        --ok: #2f9d57;
+        --warn: #c27b1d;
+        --bad: #c43b2b;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: "Iowan Old Style", "Palatino", "Bookman", "Georgia", serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at 10% 10%, rgba(230, 124, 46, 0.15), transparent 40%),
+          linear-gradient(160deg, var(--bg), var(--bg-accent));
+        min-height: 100vh;
+      }
+      header {
+        padding: 28px 24px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .title {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 26px;
+        font-weight: 700;
+      }
+      .title .dot {
+        width: 12px;
+        height: 12px;
+        background: var(--pumpkin);
+        border-radius: 50%;
+        box-shadow: 0 0 0 6px rgba(230, 124, 46, 0.15);
+      }
+      .sub {
+        color: var(--muted);
+      }
+      main {
+        padding: 12px 24px 40px;
+        display: grid;
+        gap: 16px;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 16px;
+        box-shadow: 0 12px 32px rgba(50, 33, 22, 0.08);
+      }
+      .card h3 {
+        margin: 0 0 8px;
+        font-size: 16px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+      }
+      .proposal {
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: #fffdf9;
+        display: grid;
+        gap: 8px;
+      }
+      .proposal-title {
+        font-weight: 700;
+        font-size: 16px;
+      }
+      .meta {
+        font-size: 13px;
+        color: var(--muted);
+        display: grid;
+        gap: 4px;
+      }
+      .actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      button {
+        border: 1px solid var(--line);
+        background: var(--card);
+        color: var(--ink);
+        padding: 8px 12px;
+        border-radius: 10px;
+        cursor: pointer;
+      }
+      .pill {
+        display: inline-block;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: rgba(230, 124, 46, 0.12);
+        color: var(--pumpkin-dark);
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      a {
+        color: var(--pumpkin-dark);
+        text-decoration: none;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="title">
+        <span class="dot"></span>
+        Proposal Desk
+      </div>
+      <div class="sub">
+        Review, approve, or reject pending proposals.
+        <a href="/ui">Back to dashboard →</a>
+      </div>
+    </header>
+    <main>
+      <section class="card">
+        <h3>Pending Proposals</h3>
+        <div class="row" style="margin-bottom: 8px;">
+          <span class="pill" id="count">0 pending</span>
+          <button id="refresh">Refresh</button>
+        </div>
+        <div id="list"></div>
+      </section>
+    </main>
+    <script>
+      const listNode = document.getElementById("list");
+      const countNode = document.getElementById("count");
+
+      const render = (items) => {
+        listNode.innerHTML = "";
+        if (!items.length) {
+          const empty = document.createElement("div");
+          empty.textContent = "No pending proposals.";
+          listNode.appendChild(empty);
+          return;
+        }
+        items.forEach((proposal) => {
+          const card = document.createElement("div");
+          card.className = "proposal";
+
+          const title = document.createElement("div");
+          title.className = "proposal-title";
+          title.textContent = proposal.summary || "Untitled proposal";
+
+          const meta = document.createElement("div");
+          meta.className = "meta";
+          meta.innerHTML = `
+            <div>Kind: ${proposal.kind || "unknown"} • Status: ${proposal.status || "pending"}</div>
+            <div>Risk: ${proposal.risk ?? "n/a"} • Expected: ${proposal.expected_outcome || "n/a"}</div>
+            <div>Needs capability: ${proposal.needs_new_capability ? "yes" : "no"}</div>
+            <div>Capability request: ${proposal.capability_request || "none"}</div>
+            <div>Created: ${proposal.ts_created || "unknown"}</div>
+          `;
+
+          const details = document.createElement("pre");
+          details.style.whiteSpace = "pre-wrap";
+          details.style.fontSize = "12px";
+          details.style.background = "#fff7ef";
+          details.style.padding = "8px";
+          details.style.borderRadius = "8px";
+          details.textContent = proposal.details ? JSON.stringify(proposal.details, null, 2) : "No details payload.";
+
+          const actions = document.createElement("div");
+          actions.className = "actions";
+
+          const approve = document.createElement("button");
+          approve.textContent = "Approve";
+          approve.addEventListener("click", () => sendDecision(proposal.id, "approved"));
+
+          const reject = document.createElement("button");
+          reject.textContent = "Reject";
+          reject.addEventListener("click", () => sendDecision(proposal.id, "rejected"));
+
+          actions.appendChild(approve);
+          actions.appendChild(reject);
+
+          card.appendChild(title);
+          card.appendChild(meta);
+          card.appendChild(details);
+          card.appendChild(actions);
+          listNode.appendChild(card);
+        });
+      };
+
+      const load = async () => {
+        try {
+          const res = await fetch("/proposals?status=pending&limit=25");
+          const data = await res.json();
+          const items = Array.isArray(data.proposals) ? data.proposals : [];
+          countNode.textContent = `${data.count ?? items.length} pending`;
+          render(items);
+        } catch (err) {
+          listNode.innerHTML = "Failed to load proposals.";
+        }
+      };
+
+      const sendDecision = async (id, decision) => {
+        const reason = window.prompt("Reason (optional):") || "";
+        const payload = { id, actor: "web", reason: reason.trim() || null };
+        const url = decision === "approved" ? "/proposals/approve" : "/proposals/reject";
+        try {
+          const res = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) {
+            throw new Error("Request failed");
+          }
+          await load();
+        } catch (err) {
+          window.alert("Failed to update proposal.");
+        }
+      };
+
+      document.getElementById("refresh").addEventListener("click", load);
+      load();
+    </script>
+  </body>
+</html>
