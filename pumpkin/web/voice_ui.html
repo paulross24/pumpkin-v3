@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pumpkin Voice UI</title>
+    <style>
+      :root {
+        --bg: #f6efe8;
+        --bg-accent: #f2d6b5;
+        --ink: #2a1b12;
+        --muted: #5b4b41;
+        --pumpkin: #e67c2e;
+        --pumpkin-dark: #b95519;
+        --card: #fff8f2;
+        --line: #e5d6c6;
+        --ok: #2f9d57;
+        --warn: #c27b1d;
+        --bad: #c43b2b;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: "Iowan Old Style", "Palatino", "Bookman", "Georgia", serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at 15% 10%, rgba(230, 124, 46, 0.15), transparent 40%),
+          radial-gradient(circle at 80% 20%, rgba(178, 85, 25, 0.1), transparent 45%),
+          linear-gradient(160deg, var(--bg), var(--bg-accent));
+        min-height: 100vh;
+      }
+      header {
+        padding: 32px 24px 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .title {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 28px;
+        font-weight: 700;
+      }
+      .title .dot {
+        width: 12px;
+        height: 12px;
+        background: var(--pumpkin);
+        border-radius: 50%;
+        box-shadow: 0 0 0 6px rgba(230, 124, 46, 0.15);
+      }
+      .sub {
+        color: var(--muted);
+      }
+      .actions {
+        margin-top: 8px;
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      button {
+        border: 1px solid var(--line);
+        background: var(--card);
+        color: var(--ink);
+        padding: 8px 12px;
+        border-radius: 10px;
+        cursor: pointer;
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+      }
+      button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 8px 16px rgba(0, 0, 0, 0.08);
+      }
+      main {
+        padding: 16px 24px 40px;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: 16px;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 16px;
+        box-shadow: 0 12px 32px rgba(50, 33, 22, 0.08);
+        animation: fadeUp 0.4s ease both;
+      }
+      .card h3 {
+        margin: 0 0 8px;
+        font-size: 16px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+      }
+      .stat {
+        font-size: 22px;
+        font-weight: 700;
+      }
+      .list {
+        margin: 8px 0 0;
+        padding: 0;
+        list-style: none;
+        display: grid;
+        gap: 6px;
+        font-size: 14px;
+        color: var(--muted);
+      }
+      .pill {
+        display: inline-block;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: rgba(230, 124, 46, 0.12);
+        color: var(--pumpkin-dark);
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .status-ok {
+        color: var(--ok);
+      }
+      .status-warn {
+        color: var(--warn);
+      }
+      .status-bad {
+        color: var(--bad);
+      }
+      .grid-span {
+        grid-column: span 2;
+      }
+      @media (max-width: 720px) {
+        .grid-span {
+          grid-column: span 1;
+        }
+      }
+      @keyframes fadeUp {
+        from {
+          opacity: 0;
+          transform: translateY(10px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="title">
+        <span class="dot"></span>
+        Pumpkin Voice Control
+      </div>
+      <div class="sub" id="subtitle">Loading status...</div>
+      <div class="actions">
+        <button id="refresh">Refresh now</button>
+        <span class="pill" id="heartbeat">Waiting for heartbeat</span>
+      </div>
+    </header>
+    <main>
+      <section class="card">
+        <h3>Health</h3>
+        <div class="stat" id="health-status">...</div>
+        <ul class="list" id="health-details"></ul>
+      </section>
+      <section class="card">
+        <h3>Proposals</h3>
+        <div class="stat" id="proposal-count">0</div>
+        <ul class="list" id="proposal-list"></ul>
+      </section>
+      <section class="card">
+        <h3>Issues</h3>
+        <div class="stat" id="issues-count">0</div>
+        <ul class="list" id="issues-list"></ul>
+      </section>
+      <section class="card">
+        <h3>Network Scan</h3>
+        <div class="stat" id="network-count">0 devices</div>
+        <ul class="list" id="network-list"></ul>
+      </section>
+      <section class="card">
+        <h3>SSDP Devices</h3>
+        <div class="stat" id="ssdp-count">0</div>
+        <ul class="list" id="ssdp-list"></ul>
+      </section>
+      <section class="card grid-span">
+        <h3>Latest Home Assistant Event</h3>
+        <div class="stat" id="ha-last">none</div>
+        <ul class="list" id="ha-meta"></ul>
+      </section>
+    </main>
+    <script>
+      const byId = (id) => document.getElementById(id);
+      const subtitle = byId("subtitle");
+      const heartbeat = byId("heartbeat");
+      const healthStatus = byId("health-status");
+      const healthDetails = byId("health-details");
+      const proposalCount = byId("proposal-count");
+      const proposalList = byId("proposal-list");
+      const issuesCount = byId("issues-count");
+      const issuesList = byId("issues-list");
+      const networkCount = byId("network-count");
+      const networkList = byId("network-list");
+      const ssdpCount = byId("ssdp-count");
+      const ssdpList = byId("ssdp-list");
+      const haLast = byId("ha-last");
+      const haMeta = byId("ha-meta");
+
+      const setList = (node, items) => {
+        node.innerHTML = "";
+        if (!items.length) {
+          const li = document.createElement("li");
+          li.textContent = "None";
+          node.appendChild(li);
+          return;
+        }
+        items.forEach((item) => {
+          const li = document.createElement("li");
+          li.textContent = item;
+          node.appendChild(li);
+        });
+      };
+
+      const formatIssue = (issue) => `${issue.kind}: ${issue.message}`;
+      const formatProposal = (proposal) => `${proposal.summary} (${proposal.status})`;
+      const formatDevice = (device) => {
+        const ip = device.ip || "unknown";
+        const ports = Array.isArray(device.open_ports) && device.open_ports.length
+          ? device.open_ports.join(",")
+          : "no ports";
+        const hints = Array.isArray(device.hints) && device.hints.length
+          ? ` | ${device.hints.join(", ")}`
+          : "";
+        return `${ip} - ${ports}${hints}`;
+      };
+
+      const load = async () => {
+        try {
+          const [healthRes, summaryRes, configRes] = await Promise.all([
+            fetch("/health"),
+            fetch("/summary"),
+            fetch("/config"),
+          ]);
+          const health = await healthRes.json();
+          const summary = await summaryRes.json();
+          const config = await configRes.json();
+
+          subtitle.textContent = `${config.service?.name || "Pumpkin"} ${config.service?.version || ""} at ${config.http?.host || "host"}:${config.http?.port || "port"}`;
+          heartbeat.textContent = summary.heartbeat ? `Heartbeat ${summary.heartbeat.ts}` : "No heartbeat yet";
+
+          healthStatus.textContent = health.status || "unknown";
+          healthStatus.className = "stat " + (health.status === "ok" ? "status-ok" : "status-warn");
+          const metrics = health.metrics || {};
+          setList(healthDetails, [
+            `load: ${metrics.loadavg?.["1m"] ?? "-"}`,
+            `disk: ${metrics.disk?.used_percent ?? "-"}`,
+            `mem: ${metrics.meminfo_kb?.MemAvailable ?? "-"} KB`,
+          ]);
+
+          proposalCount.textContent = summary.proposal_count || 0;
+          setList(proposalList, (summary.proposals || []).slice(0, 3).map(formatProposal));
+
+          issuesCount.textContent = (summary.issues || []).length;
+          setList(issuesList, (summary.issues || []).slice(0, 4).map(formatIssue));
+
+          const discovery = summary.network_discovery || {};
+          networkCount.textContent = `${discovery.device_count || 0} devices`;
+          setList(networkList, (discovery.devices || []).slice(0, 6).map(formatDevice));
+
+          const ssdp = discovery.ssdp || [];
+          ssdpCount.textContent = ssdp.length;
+          setList(
+            ssdpList,
+            ssdp.slice(0, 6).map((entry) => `${entry.ip || "unknown"} - ${(entry.service_type || entry.server || "ssdp").slice(0, 60)}`)
+          );
+
+          const last = summary.homeassistant_last_event;
+          if (last) {
+            haLast.textContent = `${last.event_type || "event"} at ${last.time_fired || "unknown"}`;
+            const payload = last.payload || {};
+            setList(haMeta, [
+              `entity: ${payload.entity_id || "n/a"}`,
+              `state: ${payload.state || "n/a"}`,
+            ]);
+          } else {
+            haLast.textContent = "none";
+            setList(haMeta, []);
+          }
+        } catch (err) {
+          subtitle.textContent = "Failed to load status.";
+        }
+      };
+
+      document.getElementById("refresh").addEventListener("click", load);
+      load();
+      setInterval(load, 15000);
+    </script>
+  </body>
+</html>

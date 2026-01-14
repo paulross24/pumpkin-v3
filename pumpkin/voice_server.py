@@ -64,6 +64,15 @@ def _send_json(handler: BaseHTTPRequestHandler, status: int, payload: Dict[str, 
     handler.wfile.write(body)
 
 
+def _send_html(handler: BaseHTTPRequestHandler, status: int, body: str) -> None:
+    data = body.encode("utf-8")
+    handler.send_response(status)
+    handler.send_header("Content-Type", "text/html; charset=utf-8")
+    handler.send_header("Content-Length", str(len(data)))
+    handler.end_headers()
+    handler.wfile.write(data)
+
+
 def _log_request(handler: BaseHTTPRequestHandler, status: int, payload: Dict[str, Any]) -> None:
     """Lightweight request log for observability."""
     method = getattr(handler, "command", "?")
@@ -360,6 +369,14 @@ def _effective_bind(handler: BaseHTTPRequestHandler) -> tuple[str, int]:
         return address[0], int(address[1])
     except Exception:
         return settings.voice_server_host(), settings.voice_server_port()
+
+
+def _load_voice_ui() -> str:
+    ui_path = settings.repo_root() / "pumpkin" / "web" / "voice_ui.html"
+    try:
+        return ui_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return "<!doctype html><title>Pumpkin UI missing</title><h1>UI file not found</h1>"
 
 
 def _rate_limited(rate_key: str | None, cooldown: int) -> bool:
@@ -2489,6 +2506,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "endpoints": [
                             "GET /",
                             "GET /health",
+                            "GET /ui",
                         "GET /config",
                         "GET /catalog",
                         "GET /capabilities",
@@ -2511,6 +2529,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         ],
                     },
                 )
+                return
+            if path in {"/ui", "/ui/"}:
+                _send_html(self, 200, _load_voice_ui())
                 return
             if path == "/config":
                 bind_host, bind_port = _effective_bind(self)
