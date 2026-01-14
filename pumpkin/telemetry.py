@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
-from typing import Dict, Any
+from typing import Any, Dict
 
 
 def _get_cpu_usage() -> float:
