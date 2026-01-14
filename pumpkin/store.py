@@ -147,6 +147,23 @@ def insert_approval(
 def update_proposal_status(conn: sqlite3.Connection, proposal_id: int, status: str) -> None:
     conn.execute("UPDATE proposals SET status = ? WHERE id = ?", (status, proposal_id))
     conn.commit()
+    if status == "approved":
+        row = conn.execute(
+            "SELECT summary FROM proposals WHERE id = ?",
+            (proposal_id,),
+        ).fetchone()
+        if row and row["summary"]:
+            conn.execute(
+                """
+                UPDATE proposals
+                SET status = 'rejected'
+                WHERE summary = ?
+                  AND status = 'pending'
+                  AND id != ?
+                """,
+                (row["summary"], proposal_id),
+            )
+            conn.commit()
 
 
 def insert_action(

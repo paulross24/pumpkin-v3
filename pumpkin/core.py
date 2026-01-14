@@ -254,10 +254,20 @@ def _record_proposals(conn, policy: policy_mod.Policy, proposals: List[Dict[str,
             proposal = dict(proposal)
             proposal["details"] = details
 
+        summary = proposal["summary"]
+        if store.proposal_exists(conn, summary, statuses=["pending", "approved"]):
+            audit.append_jsonl(
+                str(settings.audit_path()),
+                {
+                    "kind": "proposal.skipped_duplicate",
+                    "summary": summary,
+                },
+            )
+            continue
         proposal_id = store.insert_proposal(
             conn,
             kind=proposal.get("kind", "general"),
-            summary=proposal["summary"],
+            summary=summary,
             details=proposal["details"],
             steps=proposal.get("steps"),
             risk=proposal["risk"],
