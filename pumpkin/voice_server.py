@@ -462,6 +462,46 @@ def _compute_ask_reply(
         return calendar_reply, "calendar", None
     if _status_query(text):
         return _local_status_reply(conn), "status", None
+    router = _llm_route_text(
+        text,
+        api_key=api_key,
+        llm_config=llm_config,
+        device=device,
+        client_ip=payload.get("client_ip"),
+    )
+    if router:
+        confidence = router.get("confidence")
+        try:
+            confidence = float(confidence)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        if confidence >= 0.55:
+            if router.get("needs_clarification"):
+                questions = router.get("questions") or []
+                if isinstance(questions, list) and questions:
+                    return (
+                        "I need a bit more detail: " + " ".join(str(q) for q in questions),
+                        "llm_router_clarify",
+                        None,
+                    )
+            route = router.get("route")
+            normalized = router.get("normalized_request")
+            response = router.get("response")
+            if route == "ha_control" and isinstance(normalized, str) and normalized.strip():
+                reply = _execute_ha_command(normalized, conn, device)
+                if reply:
+                    return reply, "llm_router_control", None
+            if route == "capability":
+                reply = _maybe_capability_proposal(
+                    normalized if isinstance(normalized, str) and normalized.strip() else text,
+                    device,
+                    payload.get("client_ip"),
+                    conn,
+                )
+                if reply:
+                    return reply, "llm_router_capability", None
+            if route == "answer" and isinstance(response, str) and response.strip():
+                return response.strip(), "llm_router_answer", None
     context = _build_llm_context(conn, device)
     context["retrieved_context"] = retrieval.retrieve_context(
         text,
@@ -546,6 +586,37 @@ def _call_openai_json(prompt: str, api_key: str | None, model: str | None, base_
         return _parse_json(content.encode("utf-8"))
     except ValueError:
         return {"error": "invalid_json", "raw": content}
+
+
+def _llm_route_text(
+    text: str,
+    api_key: str | None,
+    llm_config: Dict[str, Any],
+    device: str | None,
+    client_ip: str | None,
+) -> Dict[str, Any]:
+    if not api_key:
+        return {}
+    route_key = device or client_ip or "unknown"
+    if _rate_limited(f"llm.route:{route_key}", cooldown=10):
+        return {}
+    prompt = (
+        "You are routing a home assistant voice request. "
+        "Return ONLY JSON with keys: route, normalized_request, response, "
+        "needs_clarification, questions, confidence. "
+        "route must be one of: ha_control, capability, answer, ignore. "
+        "normalized_request should be a canonical command string when route=ha_control. "
+        "If the request is ambiguous, set needs_clarification true and provide questions. "
+        "confidence must be a number 0-1.\n\n"
+        f"REQUEST: {text}"
+    )
+    payload = _call_openai_json(
+        prompt,
+        api_key=api_key,
+        model=llm_config["model"],
+        base_url=llm_config["base_url"],
+    )
+    return payload if isinstance(payload, dict) else {}
 
 
 def _code_assistant_enabled(conn) -> tuple[bool, Dict[str, Any]]:
