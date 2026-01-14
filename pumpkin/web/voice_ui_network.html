@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pumpkin Network Desk</title>
+    <style>
+      :root {
+        --bg: #f6efe8;
+        --bg-accent: #f2d6b5;
+        --ink: #2a1b12;
+        --muted: #5b4b41;
+        --pumpkin: #e67c2e;
+        --pumpkin-dark: #b95519;
+        --card: #fff8f2;
+        --line: #e5d6c6;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Iowan Old Style", "Palatino", "Bookman", "Georgia", serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at 10% 10%, rgba(230, 124, 46, 0.15), transparent 40%),
+          linear-gradient(160deg, var(--bg), var(--bg-accent));
+        min-height: 100vh;
+      }
+      header {
+        padding: 28px 24px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .title {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 26px;
+        font-weight: 700;
+      }
+      .title .dot {
+        width: 12px;
+        height: 12px;
+        background: var(--pumpkin);
+        border-radius: 50%;
+        box-shadow: 0 0 0 6px rgba(230, 124, 46, 0.15);
+      }
+      .sub { color: var(--muted); }
+      main {
+        padding: 12px 24px 40px;
+        display: grid;
+        gap: 16px;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 16px;
+        box-shadow: 0 12px 32px rgba(50, 33, 22, 0.08);
+      }
+      .device {
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: #fffdf9;
+        display: grid;
+        gap: 8px;
+      }
+      .device-title { font-weight: 700; font-size: 15px; }
+      .meta { font-size: 13px; color: var(--muted); display: grid; gap: 4px; }
+      .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+      button {
+        border: 1px solid var(--line);
+        background: var(--card);
+        color: var(--ink);
+        padding: 8px 12px;
+        border-radius: 10px;
+        cursor: pointer;
+      }
+      pre {
+        white-space: pre-wrap;
+        font-size: 12px;
+        background: #fff7ef;
+        padding: 8px;
+        border-radius: 8px;
+      }
+      a { color: var(--pumpkin-dark); text-decoration: none; }
+      .pill {
+        display: inline-block;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: rgba(230, 124, 46, 0.12);
+        color: var(--pumpkin-dark);
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="title"><span class="dot"></span>Network Desk</div>
+      <div class="sub">
+        Review discovered devices and mark useful ones for Pumpkin.
+        <a href="/ui">Back to dashboard →</a>
+      </div>
+    </header>
+    <main>
+      <section class="card">
+        <div class="row" style="margin-bottom: 8px;">
+          <span class="pill" id="count">0 devices</span>
+          <button id="refresh">Refresh</button>
+        </div>
+        <div id="list"></div>
+      </section>
+    </main>
+    <script>
+      const listNode = document.getElementById("list");
+      const countNode = document.getElementById("count");
+
+      const load = async () => {
+        try {
+          const res = await fetch("/summary");
+          const data = await res.json();
+          const discovery = data.network_discovery || {};
+          const devices = Array.isArray(discovery.devices) ? discovery.devices : [];
+          countNode.textContent = `${discovery.device_count || devices.length} devices`;
+          render(devices);
+        } catch (err) {
+          listNode.innerHTML = "Failed to load network discovery.";
+        }
+      };
+
+      const render = (devices) => {
+        listNode.innerHTML = "";
+        if (!devices.length) {
+          listNode.textContent = "No devices detected.";
+          return;
+        }
+        devices.forEach((device) => {
+          const card = document.createElement("div");
+          card.className = "device";
+
+          const title = document.createElement("div");
+          title.className = "device-title";
+          title.textContent = device.ip || "unknown device";
+
+          const meta = document.createElement("div");
+          meta.className = "meta";
+          meta.innerHTML = `
+            <div>MAC: ${device.mac || "n/a"} • IF: ${device.device || "n/a"}</div>
+            <div>Ports: ${(device.open_ports || []).join(", ") || "none"}</div>
+            <div>Hints: ${(device.hints || []).join(", ") || "none"}</div>
+          `;
+
+          const services = document.createElement("pre");
+          services.textContent = device.services && device.services.length
+            ? JSON.stringify(device.services, null, 2)
+            : "No service details.";
+
+          const actions = document.createElement("div");
+          actions.className = "actions";
+
+          const mark = document.createElement("button");
+          mark.textContent = "Mark useful";
+          mark.addEventListener("click", () => markUseful(device));
+
+          actions.appendChild(mark);
+
+          card.appendChild(title);
+          card.appendChild(meta);
+          card.appendChild(services);
+          card.appendChild(actions);
+          listNode.appendChild(card);
+        });
+      };
+
+      const markUseful = async (device) => {
+        const label = window.prompt("Label (e.g., camera, speaker, tv):", "useful") || "useful";
+        const note = window.prompt("Notes (optional):", "") || "";
+        const payload = { ip: device.ip, label, note };
+        try {
+          const res = await fetch("/network/mark", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) {
+            throw new Error("Request failed");
+          }
+          window.alert("Marked as useful.");
+        } catch (err) {
+          window.alert("Failed to mark device.");
+        }
+      };
+
+      document.getElementById("refresh").addEventListener("click", load);
+      load();
+    </script>
+  </body>
+</html>

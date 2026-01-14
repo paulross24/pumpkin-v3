@@ -2390,6 +2390,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
             if self.path == "/llm/config":
                 self._handle_llm_config()
                 return
+            if self.path == "/network/mark":
+                self._handle_network_mark()
+                return
             self.send_response(404)
             self.end_headers()
             return
@@ -2535,6 +2538,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 return
             if path == "/ui/proposals":
                 _send_html(self, 200, _load_voice_ui_asset("voice_ui_proposals.html"))
+                return
+            if path == "/ui/network":
+                _send_html(self, 200, _load_voice_ui_asset("voice_ui_network.html"))
                 return
             if path == "/config":
                 bind_host, bind_port = _effective_bind(self)
@@ -3466,6 +3472,50 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 "enabled": bool(llm_config["api_key"]),
             },
         )
+
+    def _handle_network_mark(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+        try:
+            data = _parse_json(body)
+        except ValueError:
+            _bad_request(self, "invalid JSON")
+            return
+        if not isinstance(data, dict):
+            _bad_request(self, "JSON body must be an object")
+            return
+        ip = data.get("ip")
+        label = data.get("label")
+        note = data.get("note")
+        if not isinstance(ip, str) or not ip.strip():
+            _bad_request(self, "ip must be a string")
+            return
+        if label is not None and not isinstance(label, str):
+            _bad_request(self, "label must be a string")
+            return
+        if note is not None and not isinstance(note, str):
+            _bad_request(self, "note must be a string")
+            return
+        conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+        item = {
+            "ip": ip.strip(),
+            "label": (label or "useful").strip(),
+            "note": (note or "").strip(),
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }
+        current = store.get_memory(conn, "network.discovery.useful")
+        if not isinstance(current, list):
+            current = []
+        current.append(item)
+        store.set_memory(conn, "network.discovery.useful", current[-200:])
+        store.insert_event(
+            conn,
+            source="network",
+            event_type="network.discovery.marked",
+            payload=item,
+            severity="info",
+        )
+        _send_json(self, 200, {"status": "ok", "marked": item})
 
     def log_message(self, fmt: str, *args: Any) -> None:
         return
