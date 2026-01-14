@@ -476,6 +476,7 @@ def _compute_ask_reply(
         except (TypeError, ValueError):
             confidence = 0.0
         if confidence >= 0.55:
+            _log_router_decision(text, router, router.get("route") or "unknown", device)
             if router.get("needs_clarification"):
                 questions = router.get("questions") or []
                 if isinstance(questions, list) and questions:
@@ -484,8 +485,10 @@ def _compute_ask_reply(
                         "llm_router_clarify",
                         None,
                     )
+                if router.get("action") and not (router.get("target") or router.get("area")):
+                    return "Which device or room should I use?", "llm_router_clarify", None
             route = router.get("route")
-            normalized = router.get("normalized_request")
+            normalized = _normalize_router_request(router)
             response = router.get("response")
             if route == "ha_control" and isinstance(normalized, str) and normalized.strip():
                 reply = _execute_ha_command(normalized, conn, device)
@@ -588,6 +591,51 @@ def _call_openai_json(prompt: str, api_key: str | None, model: str | None, base_
         return {"error": "invalid_json", "raw": content}
 
 
+def _normalize_router_request(router: Dict[str, Any]) -> str | None:
+    normalized = router.get("normalized_request")
+    if isinstance(normalized, str) and normalized.strip():
+        return normalized.strip()
+    action = router.get("action")
+    if not isinstance(action, str) or not action.strip():
+        return None
+    target = router.get("target")
+    area = router.get("area")
+    domain = router.get("domain")
+    if isinstance(target, str) and target.strip():
+        return f"{action} {target}".strip()
+    if isinstance(area, str) and area.strip() and isinstance(domain, str) and domain.strip():
+        return f"{action} {area} {domain}s".strip()
+    return None
+
+
+def _log_router_decision(text: str, router: Dict[str, Any], route: str, device: str | None) -> None:
+    payload = {
+        "route": route,
+        "confidence": router.get("confidence"),
+        "needs_clarification": router.get("needs_clarification"),
+        "action": router.get("action"),
+        "target": router.get("target"),
+        "area": router.get("area"),
+        "device": router.get("device"),
+        "domain": router.get("domain"),
+    }
+    print(
+        "PumpkinVoice router "
+        + repr(_truncate_text(text, INGEST_LOG_TEXT_LIMIT))
+        + f" -> {json.dumps(payload, ensure_ascii=True)}",
+        flush=True,
+    )
+    append_jsonl(
+        str(settings.audit_path()),
+        {
+            "kind": "voice.router",
+            "text": _truncate_text(text, INGEST_LOG_TEXT_LIMIT),
+            "device": device,
+            "payload": payload,
+        },
+    )
+
+
 def _llm_route_text(
     text: str,
     api_key: str | None,
@@ -603,9 +651,11 @@ def _llm_route_text(
     prompt = (
         "You are routing a home assistant voice request. "
         "Return ONLY JSON with keys: route, normalized_request, response, "
-        "needs_clarification, questions, confidence. "
+        "needs_clarification, questions, confidence, action, target, area, device, domain. "
         "route must be one of: ha_control, capability, answer, ignore. "
         "normalized_request should be a canonical command string when route=ha_control. "
+        "action should be one of: turn_on, turn_off, toggle, open, close, lock, unlock, set_temperature. "
+        "target is a device or entity name; area is a room/area name; domain is light/switch/fan/cover/lock. "
         "If the request is ambiguous, set needs_clarification true and provide questions. "
         "confidence must be a number 0-1.\n\n"
         f"REQUEST: {text}"
