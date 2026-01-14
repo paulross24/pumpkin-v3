@@ -743,10 +743,10 @@ def _rule_based_proposals(events: List[Any], conn) -> List[Dict[str, Any]]:
                                     "opt_in": "remember_me",
                                 },
                             )
-                                proposals.append(
-                                    {
-                                        "kind": "action.request",
-                                        "summary": "Acknowledged memory preference",
+                            proposals.append(
+                                {
+                                    "kind": "action.request",
+                                    "summary": "Acknowledged memory preference",
                                     "details": {
                                         "rationale": "Speaker declined to be remembered.",
                                         "action_type": "notify.local",
@@ -760,8 +760,8 @@ def _rule_based_proposals(events: List[Any], conn) -> List[Dict[str, Any]]:
                                     "needs_new_capability": False,
                                     "capability_request": None,
                                     "steps": ["Confirm memory preference"],
-                                    }
-                                )
+                                }
+                            )
                         else:
                             session["pending_remember_name"] = True
                             append_jsonl(
