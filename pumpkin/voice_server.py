@@ -3121,6 +3121,25 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 home_state = _home_state_summary(conn)
                 issues = _summarize_issues(system_snapshot)
                 network_discovery = store.get_memory(conn, "network.discovery.snapshot")
+                router_rows = store.list_events(
+                    conn,
+                    limit=5,
+                    source="voice",
+                    event_type="voice.router",
+                )
+                router_events = []
+                for row in router_rows:
+                    try:
+                        payload = json.loads(row["payload_json"])
+                    except Exception:
+                        payload = {}
+                    router_events.append(
+                        {
+                            "id": row["id"],
+                            "ts": row["ts"],
+                            "payload": payload,
+                        }
+                    )
                 _send_json(
                     self,
                     200,
@@ -3134,6 +3153,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "home_state": home_state,
                         "network_discovery": network_discovery,
                         "issues": issues,
+                        "router_events": router_events,
                         "proposals": proposal_items,
                         "proposal_count": len(proposal_items),
                     },

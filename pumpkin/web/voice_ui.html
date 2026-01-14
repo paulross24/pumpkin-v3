@@ -203,6 +203,11 @@
         <div class="stat" id="ssdp-count">0</div>
         <ul class="list" id="ssdp-list"></ul>
       </section>
+      <section class="card">
+        <h3>Recent Decisions</h3>
+        <div class="stat" id="decision-count">0</div>
+        <ul class="list" id="decision-list"></ul>
+      </section>
       <section class="card grid-span">
         <h3>Latest Home Assistant Event</h3>
         <div class="stat" id="ha-last">none</div>
@@ -228,6 +233,8 @@
       const identityName = byId("identity-name");
       const identityMeta = byId("identity-meta");
       const memoryMeta = byId("memory-meta");
+      const decisionCount = byId("decision-count");
+      const decisionList = byId("decision-list");
 
       const setList = (node, items) => {
         node.innerHTML = "";
@@ -255,6 +262,16 @@
           ? ` | ${device.hints.join(", ")}`
           : "";
         return `${ip} - ${ports}${hints}`;
+      };
+      const formatDecision = (item) => {
+        const payload = item.payload || {};
+        const route = payload.route || "unknown";
+        const confidence = payload.confidence ?? "n/a";
+        const action = payload.action || "";
+        const target = payload.target || payload.area || payload.device || "";
+        const domain = payload.domain ? ` ${payload.domain}` : "";
+        const detail = [action, target].filter(Boolean).join(" ");
+        return `${route} (${confidence}) ${detail}${domain}`.trim();
       };
 
       const load = async () => {
@@ -313,6 +330,10 @@
             ssdpList,
             ssdp.slice(0, 6).map((entry) => `${entry.ip || "unknown"} - ${(entry.service_type || entry.server || "ssdp").slice(0, 60)}`)
           );
+
+          const decisions = summary.router_events || [];
+          decisionCount.textContent = decisions.length;
+          setList(decisionList, decisions.map(formatDecision));
 
           const last = summary.homeassistant_last_event;
           if (last) {
