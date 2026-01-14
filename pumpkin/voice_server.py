@@ -3121,6 +3121,12 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 home_state = _home_state_summary(conn)
                 issues = _summarize_issues(system_snapshot)
                 network_discovery = store.get_memory(conn, "network.discovery.snapshot")
+                insights_latest = store.get_memory(conn, "insights.latest")
+                if not isinstance(insights_latest, list):
+                    insights_latest = []
+                briefing = store.get_memory(conn, "insights.last_briefing")
+                if not isinstance(briefing, dict):
+                    briefing = None
                 router_rows = store.list_events(
                     conn,
                     limit=5,
@@ -3153,6 +3159,8 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "home_state": home_state,
                         "network_discovery": network_discovery,
                         "issues": issues,
+                        "insights": insights_latest[-5:],
+                        "briefing": briefing,
                         "router_events": router_events,
                         "proposals": proposal_items,
                         "proposal_count": len(proposal_items),

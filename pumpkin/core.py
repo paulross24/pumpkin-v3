@@ -14,6 +14,7 @@ from . import settings
 from . import observe
 from . import propose
 from . import store
+from . import insights
 from . import module_config
 from .db import init_db
 from .act import execute_action
@@ -46,6 +47,26 @@ def _insert_events(conn, events: List[Dict[str, Any]]) -> List[int]:
         )
         event_ids.append(event_id)
     return event_ids
+
+
+def _latest_event(conn, event_type: str) -> Dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT * FROM events WHERE type = ? ORDER BY id DESC LIMIT 1", (event_type,)
+    ).fetchone()
+    if not row:
+        return None
+    try:
+        payload = json.loads(row["payload_json"])
+    except Exception:
+        payload = {}
+    return {
+        "id": row["id"],
+        "ts": row["ts"],
+        "source": row["source"],
+        "type": row["type"],
+        "payload": payload,
+        "severity": row["severity"],
+    }
 
 
 def _cooldown_elapsed(conn, key: str, cooldown_seconds: int) -> bool:
@@ -493,12 +514,37 @@ def run_once() -> None:
     policy = policy_mod.load_policy(str(settings.policy_path()))
     _record_policy_snapshot_if_changed(conn, policy)
 
+    prev_entities = store.get_memory(conn, "homeassistant.entities") or {}
+    prev_network = store.get_memory(conn, "network.discovery.snapshot") or {}
+
     _create_heartbeat(conn, policy.policy_hash)
 
     events = observe.system_snapshot()
     _insert_events(conn, events)
     module_events = _collect_module_events(conn)
     _insert_events(conn, module_events)
+
+    snapshot_event = _latest_event(conn, "system.snapshot")
+    system_snapshot = snapshot_event.get("payload") if snapshot_event else None
+    ha_entities = store.get_memory(conn, "homeassistant.entities") or {}
+    ha_summary = store.get_memory(conn, "homeassistant.summary") or {}
+    network_snapshot = store.get_memory(conn, "network.discovery.snapshot") or {}
+    insight_items = insights.build_insights(
+        system_snapshot=system_snapshot,
+        ha_entities=ha_entities if isinstance(ha_entities, dict) else {},
+        ha_summary=ha_summary if isinstance(ha_summary, dict) else {},
+        prev_entities=prev_entities if isinstance(prev_entities, dict) else {},
+        network_snapshot=network_snapshot if isinstance(network_snapshot, dict) else {},
+        prev_network_snapshot=prev_network if isinstance(prev_network, dict) else {},
+    )
+    insights.record_insights(conn, insight_items)
+    insights.maybe_daily_briefing(
+        conn,
+        ha_summary=ha_summary if isinstance(ha_summary, dict) else {},
+        system_snapshot=system_snapshot,
+        insights=insight_items,
+        in_quiet_hours=_in_quiet_hours(conn),
+    )
 
     new_events = _load_events_since_last(conn)
     proposals = propose.build_proposals(new_events, conn)

@@ -208,6 +208,12 @@
         <div class="stat" id="decision-count">0</div>
         <ul class="list" id="decision-list"></ul>
       </section>
+      <section class="card">
+        <h3>Insights</h3>
+        <div class="stat" id="insight-count">0</div>
+        <div class="sub" id="briefing-text">No briefing yet.</div>
+        <ul class="list" id="insight-list"></ul>
+      </section>
       <section class="card grid-span">
         <h3>Latest Home Assistant Event</h3>
         <div class="stat" id="ha-last">none</div>
@@ -235,6 +241,9 @@
       const memoryMeta = byId("memory-meta");
       const decisionCount = byId("decision-count");
       const decisionList = byId("decision-list");
+      const insightCount = byId("insight-count");
+      const insightList = byId("insight-list");
+      const briefingText = byId("briefing-text");
 
       const setList = (node, items) => {
         node.innerHTML = "";
@@ -272,6 +281,11 @@
         const domain = payload.domain ? ` ${payload.domain}` : "";
         const detail = [action, target].filter(Boolean).join(" ");
         return `${route} (${confidence}) ${detail}${domain}`.trim();
+      };
+      const formatInsight = (item) => {
+        const title = item.title || "Insight";
+        const detail = item.detail ? ` - ${item.detail}` : "";
+        return `${title}${detail}`;
       };
 
       const load = async () => {
@@ -334,6 +348,15 @@
           const decisions = summary.router_events || [];
           decisionCount.textContent = decisions.length;
           setList(decisionList, decisions.map(formatDecision));
+
+          const insights = summary.insights || [];
+          insightCount.textContent = insights.length;
+          setList(insightList, insights.map(formatInsight));
+          if (summary.briefing && summary.briefing.summary) {
+            briefingText.textContent = summary.briefing.summary;
+          } else {
+            briefingText.textContent = "No briefing yet.";
+          }
 
           const last = summary.homeassistant_last_event;
           if (last) {
