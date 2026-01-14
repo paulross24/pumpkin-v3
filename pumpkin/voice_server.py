@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, urlparse
 from . import settings
 from . import store
 from . import module_config
+from . import module_registry
 from . import ha_client
 from . import catalog as catalog_mod
 from . import capabilities
@@ -474,6 +475,9 @@ def _compute_ask_reply(
     proposal_followup = _handle_proposal_followup(text, device, conn)
     if proposal_followup:
         return proposal_followup, "proposal_followup", None
+    action_followup = _handle_action_confirmation(text, device, conn)
+    if action_followup:
+        return action_followup, "action_confirm", None
     target_followup = _handle_target_followup(text, device, conn)
     if target_followup:
         return target_followup, "target_followup", None
@@ -551,6 +555,21 @@ def _compute_ask_reply(
             normalized = _normalize_router_request(router)
             response = router.get("response")
             if route == "ha_control" and isinstance(normalized, str) and normalized.strip():
+                if 0.55 <= confidence < 0.7 and device:
+                    _store_pending_action(
+                        conn,
+                        device,
+                        {
+                            "command_text": normalized.strip(),
+                            "action": router.get("action"),
+                            "target": router.get("target"),
+                        },
+                    )
+                    return (
+                        f"I think you want me to {normalized.strip()}. Proceed? (yes/no)",
+                        "llm_router_confirm",
+                        None,
+                    )
                 reply = _execute_ha_command(normalized, conn, device)
                 if reply:
                     return reply, "llm_router_control", None
@@ -1149,6 +1168,21 @@ def _build_entity_label(entities: Dict[str, Dict[str, Any]], entity_id: str) -> 
     return entity_id.split(".", 1)[-1] if "." in entity_id else entity_id
 
 
+def _bulk_action_prompt(
+    entities: Dict[str, Dict[str, Any]],
+    entity_ids: List[str],
+    action: str,
+    target: str,
+) -> str:
+    sample = [_build_entity_label(entities, eid) for eid in entity_ids[:4]]
+    joined = ", ".join(sample)
+    total = len(entity_ids)
+    verb = action.replace("_", " ")
+    if joined:
+        return f"This will {verb} {total} devices ({joined}). Proceed? (yes/no)"
+    return f"This will {verb} {total} devices for {target}. Proceed? (yes/no)"
+
+
 def _find_entity_candidates(
     entities: Dict[str, Dict[str, Any]], target: str, domain_hint: str | None = None
 ) -> List[str]:
@@ -1524,6 +1558,34 @@ def _execute_ha_command(text: str, conn, device: str | None) -> str | None:
             "turn_off",
             "toggle",
         }:
+            area_hint = area.get("name") or command["target"]
+            area_entities = _match_entities_by_area_hint(
+                entities,
+                domain_hint,
+                str(area_hint),
+                area_map=area_map,
+                area_names=area_names,
+                upstairs_entities=upstairs_entities,
+                downstairs_entities=downstairs_entities,
+            )
+            if (
+                area_entities
+                and device
+                and _should_confirm_bulk(command["action"], command["target"], area_entities)
+            ):
+                _store_pending_action(
+                    conn,
+                    device,
+                    {
+                        "action": command["action"],
+                        "domain": domain_hint,
+                        "target": command["target"],
+                        "entity_ids": area_entities,
+                    },
+                )
+                return _bulk_action_prompt(
+                    entities, area_entities, command["action"], command["target"]
+                )
             result = ha_client.call_service(
                 base_url=base_url,
                 token=token,
@@ -1594,6 +1656,23 @@ def _execute_ha_command(text: str, conn, device: str | None) -> str | None:
                 downstairs_entities=downstairs_entities,
             )
             if entity_ids:
+                if (
+                    device
+                    and _should_confirm_bulk(command["action"], command["target"], entity_ids)
+                ):
+                    _store_pending_action(
+                        conn,
+                        device,
+                        {
+                            "action": command["action"],
+                            "domain": domain_hint,
+                            "target": command["target"],
+                            "entity_ids": entity_ids,
+                        },
+                    )
+                    return _bulk_action_prompt(
+                        entities, entity_ids, command["action"], command["target"]
+                    )
                 result = ha_client.call_service(
                     base_url=base_url,
                     token=token,
@@ -1712,6 +1791,29 @@ def _clear_pending_target(conn, device: str | None) -> None:
     store.set_memory(conn, _pending_target_key(device), None)
 
 
+def _pending_action_key(device: str) -> str:
+    return f"voice.pending_action.{device}"
+
+
+def _load_pending_action(conn, device: str | None) -> Dict[str, Any] | None:
+    if not device:
+        return None
+    value = store.get_memory(conn, _pending_action_key(device))
+    return value if isinstance(value, dict) else None
+
+
+def _store_pending_action(conn, device: str | None, payload: Dict[str, Any]) -> None:
+    if not device:
+        return
+    store.set_memory(conn, _pending_action_key(device), payload)
+
+
+def _clear_pending_action(conn, device: str | None) -> None:
+    if not device:
+        return
+    store.set_memory(conn, _pending_action_key(device), None)
+
+
 def _handle_proposal_followup(text: str, device: str | None, conn) -> str | None:
     decision = intent.parse_affirmation(text)
     if decision not in {"yes", "no"}:
@@ -1807,6 +1909,55 @@ def _handle_target_followup(text: str, device: str | None, conn) -> str | None:
     _store_last_target(conn, device, pending.get("target") or entity_id)
     label = choice.get("label") or entity_id
     return f"Done. {service.replace('_', ' ')} {label}."
+
+
+def _should_confirm_bulk(action: str, target: str, entity_ids: List[str]) -> bool:
+    if action not in {"turn_on", "turn_off", "toggle"}:
+        return False
+    if len(entity_ids) >= 3:
+        return True
+    lowered = target.lower()
+    return "all" in lowered or "everything" in lowered
+
+
+def _handle_action_confirmation(text: str, device: str | None, conn) -> str | None:
+    pending = _load_pending_action(conn, device)
+    if not pending:
+        return None
+    decision = intent.parse_affirmation(text)
+    if decision not in {"yes", "no"}:
+        return None
+    _clear_pending_action(conn, device)
+    if decision == "no":
+        return "Okay, cancelled."
+    command_text = pending.get("command_text")
+    if isinstance(command_text, str) and command_text.strip():
+        return _execute_ha_command(command_text.strip(), conn, device) or "Done."
+    base_url, token, error = _load_ha_connection(conn)
+    if error:
+        return error
+    entity_ids = pending.get("entity_ids")
+    if not isinstance(entity_ids, list) or not entity_ids:
+        return "I couldn't find any devices to act on."
+    domain = pending.get("domain")
+    if not isinstance(domain, str):
+        domain = str(entity_ids[0]).split(".", 1)[0]
+    action = pending.get("action")
+    service, payload = _ha_service_payload(str(action), entity_ids[0], None)
+    if not service:
+        return "I couldn't map that command to a Home Assistant service."
+    payload = {"entity_id": entity_ids}
+    result = ha_client.call_service(
+        base_url=base_url,
+        token=token,
+        domain=domain,
+        service=service,
+        payload=payload,
+        timeout=settings.ha_request_timeout_seconds(),
+    )
+    if not result.get("ok"):
+        return "Home Assistant rejected that command."
+    return f"Done. {service.replace('_', ' ')} {pending.get('target', 'devices')}."
 
 
 def _ensure_proposal_rigor(proposal: Dict[str, Any]) -> Dict[str, Any]:
@@ -2017,12 +2168,16 @@ def _maybe_capability_proposal(text: str, device: str | None, client_ip: str | N
     details = proposal.get("details", {}) if isinstance(proposal.get("details"), dict) else {}
     rationale = details.get("rationale")
     summary = proposal.get("summary", "Proposal ready")
+    suggestions = _suggest_capability_modules(text)
+    suggestion_text = ""
+    if suggestions:
+        suggestion_text = " Suggested modules: " + ", ".join(suggestions) + "."
     if rationale:
         return (
             f"Proposal #{proposal_id}: {summary}. "
-            f"Rationale: {rationale}. Reply yes to approve or no to skip."
+            f"Rationale: {rationale}.{suggestion_text} Reply yes to approve or no to skip."
         )
-    return f"Proposal #{proposal_id}: {summary}. Reply yes to approve or no to skip."
+    return f"Proposal #{proposal_id}: {summary}.{suggestion_text} Reply yes to approve or no to skip."
 
 
 def _recent_query(text: str) -> bool:
@@ -2055,6 +2210,34 @@ def _memory_query(text: str) -> bool:
         or "forget me" in lowered
         or "forget everything" in lowered
     )
+
+
+def _suggest_capability_modules(text: str) -> List[str]:
+    registry = module_registry.load_registry(str(settings.modules_registry_path()))
+    registry_summary = module_registry.registry_summary(registry)
+    catalog_summary: List[Dict[str, Any]] = []
+    catalog_path = settings.modules_catalog_path()
+    if catalog_path.exists():
+        try:
+            catalog = catalog_mod.load_catalog(str(catalog_path))
+            for entry in catalog.get("modules", []):
+                if isinstance(entry, dict):
+                    catalog_summary.append(
+                        {
+                            "name": entry.get("name"),
+                            "description": entry.get("description"),
+                        }
+                    )
+        except Exception:
+            catalog_summary = []
+    suggestions = intent.suggest_modules(text, registry_summary + catalog_summary)
+    unique = []
+    seen = set()
+    for name in suggestions:
+        if name not in seen:
+            unique.append(name)
+            seen.add(name)
+    return unique[:4]
 
 
 def _health_query(text: str) -> bool:
