@@ -414,6 +414,9 @@ def _compute_ask_reply(
     proposal_followup = _handle_proposal_followup(text, device, conn)
     if proposal_followup:
         return proposal_followup, "proposal_followup", None
+    target_followup = _handle_target_followup(text, device, conn)
+    if target_followup:
+        return target_followup, "target_followup", None
     presence_reply = _lookup_presence(text)
     if presence_reply:
         return presence_reply, "presence", None
@@ -936,6 +939,64 @@ def _parse_control_command(text: str) -> Dict[str, Any] | None:
     return None
 
 
+def _match_entity_exact(
+    entities: Dict[str, Dict[str, Any]], target: str, domain_hint: str | None = None
+) -> str | None:
+    needle = target.lower().strip()
+    for entity_id, payload in entities.items():
+        if not isinstance(entity_id, str):
+            continue
+        if domain_hint and not entity_id.startswith(domain_hint + "."):
+            continue
+        if needle == entity_id.lower() or needle == entity_id.split(".", 1)[-1].lower():
+            return entity_id
+        attributes = payload.get("attributes", {}) if isinstance(payload, dict) else {}
+        if isinstance(attributes, dict):
+            friendly = str(attributes.get("friendly_name") or "").lower()
+            if friendly and needle == friendly:
+                return entity_id
+    return None
+
+
+def _build_entity_label(entities: Dict[str, Dict[str, Any]], entity_id: str) -> str:
+    payload = entities.get(entity_id) if isinstance(entities, dict) else None
+    attributes = payload.get("attributes", {}) if isinstance(payload, dict) else {}
+    if isinstance(attributes, dict):
+        friendly = attributes.get("friendly_name")
+        if isinstance(friendly, str) and friendly.strip():
+            return friendly.strip()
+    return entity_id.split(".", 1)[-1] if "." in entity_id else entity_id
+
+
+def _find_entity_candidates(
+    entities: Dict[str, Dict[str, Any]], target: str, domain_hint: str | None = None
+) -> List[str]:
+    needle = target.lower().strip()
+    needles = [needle]
+    for prefix in ("the ", "a ", "an "):
+        if needle.startswith(prefix):
+            needles.append(needle[len(prefix) :])
+    matches: List[str] = []
+    for entity_id, payload in entities.items():
+        if not isinstance(entity_id, str):
+            continue
+        if domain_hint and not entity_id.startswith(domain_hint + "."):
+            continue
+        tail = entity_id.split(".", 1)[-1].lower()
+        attributes = payload.get("attributes", {}) if isinstance(payload, dict) else {}
+        name = ""
+        if isinstance(attributes, dict):
+            name = str(attributes.get("friendly_name") or "").lower()
+        for candidate in needles:
+            if candidate == entity_id.lower() or candidate == tail:
+                matches.append(entity_id)
+                break
+            if name and candidate in name:
+                matches.append(entity_id)
+                break
+    return sorted(set(matches))
+
+
 def _match_entity(entities: Dict[str, Dict[str, Any]], target: str) -> str | None:
     needle = target.lower().strip()
     needles = [needle]
@@ -1137,6 +1198,40 @@ def _resolve_followup_target(target: str, device: str | None, conn) -> str:
     return target
 
 
+def _load_ha_connection(conn) -> tuple[str | None, str | None, str | None]:
+    config_path = settings.modules_config_path()
+    if not config_path.exists():
+        return None, None, "Home Assistant is not configured."
+    try:
+        config = module_config.load_config(str(config_path))
+    except Exception:
+        return None, None, "Home Assistant config is invalid."
+    enabled = set(config.get("enabled", []))
+    if "homeassistant.observer" not in enabled:
+        return None, None, "Home Assistant integration is not enabled."
+    module_cfg = config.get("modules", {}).get("homeassistant.observer", {})
+    base_url = module_cfg.get("base_url")
+    token_env = module_cfg.get("token_env", "PUMPKIN_HA_TOKEN")
+    token = os.getenv(token_env)
+    if not base_url or not token:
+        return None, None, "Home Assistant credentials are missing."
+    return base_url, token, None
+
+
+def _ha_service_payload(action: str, entity_id: str, value: int | None) -> tuple[str | None, Dict[str, Any]]:
+    payload: Dict[str, Any] = {"entity_id": entity_id}
+    if action in {"turn_on", "turn_off", "toggle"}:
+        return action, payload
+    if action in {"open", "close"}:
+        return ("open_cover" if action == "open" else "close_cover"), payload
+    if action in {"lock", "unlock"}:
+        return action, payload
+    if action == "set_temperature":
+        payload["temperature"] = value
+        return "set_temperature", payload
+    return None, payload
+
+
 def _expansion_notice(device: str | None, conn) -> str | None:
     if not device:
         return None
@@ -1185,26 +1280,14 @@ def _execute_ha_command(text: str, conn, device: str | None) -> str | None:
     if not command:
         return None
     command["target"] = _resolve_followup_target(command["target"], device, conn)
-    config_path = settings.modules_config_path()
-    if not config_path.exists():
-        return "Home Assistant is not configured."
-    try:
-        config = module_config.load_config(str(config_path))
-    except Exception:
-        return "Home Assistant config is invalid."
-    enabled = set(config.get("enabled", []))
-    if "homeassistant.observer" not in enabled:
-        return "Home Assistant integration is not enabled."
-    module_cfg = config.get("modules", {}).get("homeassistant.observer", {})
-    base_url = module_cfg.get("base_url")
-    token_env = module_cfg.get("token_env", "PUMPKIN_HA_TOKEN")
-    token = os.getenv(token_env)
-    if not base_url or not token:
-        return "Home Assistant credentials are missing."
+    base_url, token, error = _load_ha_connection(conn)
+    if error:
+        return error
 
     entities = store.get_memory(conn, "homeassistant.entities") or {}
     if not isinstance(entities, dict):
         entities = {}
+    domain_hint = _area_domain_hint(command["target"])
     synonym = _load_entity_synonym(conn, command["target"])
     if synonym:
         entity = entities.get(synonym)
@@ -1231,10 +1314,30 @@ def _execute_ha_command(text: str, conn, device: str | None) -> str | None:
                 area_names[aid] = str(name)
     upstairs_entities = set(summary.get("upstairs_entities") or [])
     downstairs_entities = set(summary.get("downstairs_entities") or [])
+    if not entity_id:
+        entity_id = _match_entity_exact(entities, command["target"], domain_hint=domain_hint)
+    if not entity_id and not _wants_area_control(command["target"]):
+        candidates = _find_entity_candidates(entities, command["target"], domain_hint=domain_hint)
+        if len(candidates) > 1:
+            labeled = [
+                {"entity_id": candidate, "label": _build_entity_label(entities, candidate)}
+                for candidate in candidates[:5]
+            ]
+            _store_pending_target(
+                conn,
+                device,
+                {
+                    "target": command["target"],
+                    "action": command["action"],
+                    "value": command.get("value"),
+                    "choices": labeled,
+                },
+            )
+            labels = ", ".join(item["label"] for item in labeled)
+            return f"I found multiple matches for {command['target']}: {labels}. Which one?"
     entity_id = entity_id or _match_entity(entities, command["target"])
     if not entity_id:
         area = _match_area(areas_list, command["target"])
-        domain_hint = _area_domain_hint(command["target"])
         if area and domain_hint and _wants_area_control(command["target"]) and command["action"] in {
             "turn_on",
             "turn_off",
@@ -1337,18 +1440,8 @@ def _execute_ha_command(text: str, conn, device: str | None) -> str | None:
             available = ", ".join(list(entities.keys())[:5])
             return f"I couldn't find {command['target']}. I can see: {available}."
     domain = entity_id.split(".", 1)[0]
-    service = None
-    payload = {"entity_id": entity_id}
     action = command["action"]
-    if action in {"turn_on", "turn_off", "toggle"}:
-        service = action
-    elif action in {"open", "close"}:
-        service = "open_cover" if action == "open" else "close_cover"
-    elif action in {"lock", "unlock"}:
-        service = action
-    elif action == "set_temperature":
-        service = "set_temperature"
-        payload["temperature"] = command.get("value")
+    service, payload = _ha_service_payload(action, entity_id, command.get("value"))
     if not service:
         return "I couldn't map that command to a Home Assistant service."
 
@@ -1415,6 +1508,29 @@ def _clear_pending_proposal(conn, device: str | None) -> None:
     store.set_memory(conn, _pending_proposal_key(device), None)
 
 
+def _pending_target_key(device: str) -> str:
+    return f"voice.pending_target.{device}"
+
+
+def _load_pending_target(conn, device: str | None) -> Dict[str, Any] | None:
+    if not device:
+        return None
+    value = store.get_memory(conn, _pending_target_key(device))
+    return value if isinstance(value, dict) else None
+
+
+def _store_pending_target(conn, device: str | None, payload: Dict[str, Any]) -> None:
+    if not device:
+        return
+    store.set_memory(conn, _pending_target_key(device), payload)
+
+
+def _clear_pending_target(conn, device: str | None) -> None:
+    if not device:
+        return
+    store.set_memory(conn, _pending_target_key(device), None)
+
+
 def _handle_proposal_followup(text: str, device: str | None, conn) -> str | None:
     decision = intent.parse_affirmation(text)
     if decision not in {"yes", "no"}:
@@ -1437,6 +1553,79 @@ def _handle_proposal_followup(text: str, device: str | None, conn) -> str | None
     if status == "approved":
         return f"Approved proposal #{proposal_id}. I'll start the install."
     return f"Rejected proposal #{proposal_id}."
+
+
+def _handle_target_followup(text: str, device: str | None, conn) -> str | None:
+    pending = _load_pending_target(conn, device)
+    if not pending:
+        return None
+    choices = pending.get("choices")
+    if not isinstance(choices, list) or not choices:
+        _clear_pending_target(conn, device)
+        return None
+    normalized = text.strip().lower()
+    if normalized in {"cancel", "never mind", "nevermind", "stop"}:
+        _clear_pending_target(conn, device)
+        return "Okay, cancelled."
+    index = None
+    ordinal_map = {
+        "first": 0,
+        "1": 0,
+        "one": 0,
+        "second": 1,
+        "2": 1,
+        "two": 1,
+        "third": 2,
+        "3": 2,
+        "three": 2,
+    }
+    for token, idx in ordinal_map.items():
+        if token in normalized:
+            index = idx
+            break
+    if index is None:
+        for idx, choice in enumerate(choices):
+            label = str(choice.get("label", "")).lower()
+            entity_id = str(choice.get("entity_id", "")).lower()
+            if label and label in normalized:
+                index = idx
+                break
+            if entity_id and entity_id in normalized:
+                index = idx
+                break
+    if index is None or index >= len(choices):
+        labels = [str(choice.get("label") or choice.get("entity_id")) for choice in choices[:5]]
+        joined = ", ".join(labels)
+        return f"Which one did you mean? Options: {joined}."
+    base_url, token, error = _load_ha_connection(conn)
+    if error:
+        _clear_pending_target(conn, device)
+        return error
+    choice = choices[index]
+    entity_id = choice.get("entity_id")
+    if not isinstance(entity_id, str):
+        _clear_pending_target(conn, device)
+        return "I couldn't resolve that device."
+    action = pending.get("action")
+    value = pending.get("value")
+    service, payload = _ha_service_payload(str(action), entity_id, value if isinstance(value, int) else None)
+    if not service:
+        _clear_pending_target(conn, device)
+        return "I couldn't map that follow-up command."
+    result = ha_client.call_service(
+        base_url=base_url,
+        token=token,
+        domain=entity_id.split(".", 1)[0],
+        service=service,
+        payload=payload,
+        timeout=settings.ha_request_timeout_seconds(),
+    )
+    _clear_pending_target(conn, device)
+    if not result.get("ok"):
+        return "Home Assistant rejected that command."
+    _store_last_target(conn, device, pending.get("target") or entity_id)
+    label = choice.get("label") or entity_id
+    return f"Done. {service.replace('_', ' ')} {label}."
 
 
 def _ensure_proposal_rigor(proposal: Dict[str, Any]) -> Dict[str, Any]:
@@ -1822,7 +2011,7 @@ def _build_llm_context(conn, device: str | None) -> Dict[str, Any]:
         "system_snapshot": system_snapshot,
         "issues": issues,
         "homeassistant": trimmed_ha,
-        "capabilities_snapshot": capabilities.snapshot(),
+        "capabilities_snapshot": capabilities.snapshot(conn),
         "pending_proposals": [
             {"id": row["id"], "summary": row["summary"], "kind": row["kind"]}
             for row in pending
@@ -2600,7 +2789,8 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 )
                 return
             if path == "/capabilities":
-                _send_json(self, 200, capabilities.snapshot())
+                conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+                _send_json(self, 200, capabilities.snapshot(conn))
                 return
             if path == "/proposals":
                 status = params.get("status", [None])[0]
