@@ -50,6 +50,7 @@ modules:
       - 62078
     timeout_seconds: 0.2
     max_hosts: 128
+    scan_interval_seconds: 3600
     active:
       enabled: true
       scan_subnet: true
