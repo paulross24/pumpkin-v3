@@ -38,7 +38,25 @@ modules:
       - 22
       - 80
       - 443
+      - 554
+      - 8008
+      - 8009
       - 8123
+      - 8443
       - 9000
+      - 9100
+      - 9443
+      - 1400
+      - 62078
     timeout_seconds: 0.2
     max_hosts: 128
+    active:
+      enabled: true
+      scan_subnet: true
+      ssdp: true
+      http: true
+      rtsp: true
+      ssh: true
+      max_banner_bytes: 256
+      max_http_bytes: 2048
+      max_ssdp_responses: 32

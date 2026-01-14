@@ -103,11 +103,159 @@ def _probe_port(ip: str, port: int, timeout: float) -> bool:
         return False
 
 
+def _read_tcp_banner(ip: str, port: int, timeout: float, max_bytes: int) -> Optional[str]:
+    try:
+        with socket.create_connection((ip, port), timeout=timeout) as sock:
+            sock.settimeout(timeout)
+            data = sock.recv(max_bytes)
+            if not data:
+                return None
+            return data.decode(errors="ignore").strip()
+    except Exception:
+        return None
+
+
+def _probe_ssh(ip: str, port: int, timeout: float, max_bytes: int) -> Optional[Dict[str, Any]]:
+    banner = _read_tcp_banner(ip, port, timeout, max_bytes)
+    if not banner:
+        return None
+    return {"type": "ssh", "port": port, "banner": banner}
+
+
+def _probe_rtsp(ip: str, port: int, timeout: float, max_bytes: int) -> Optional[Dict[str, Any]]:
+    payload = b"OPTIONS * RTSP/1.0\r\nCSeq: 1\r\nUser-Agent: Pumpkin\r\n\r\n"
+    try:
+        with socket.create_connection((ip, port), timeout=timeout) as sock:
+            sock.settimeout(timeout)
+            sock.sendall(payload)
+            data = sock.recv(max_bytes)
+        if not data:
+            return None
+        text = data.decode(errors="ignore")
+        status_line = text.splitlines()[0] if text else ""
+        return {"type": "rtsp", "port": port, "status": status_line.strip()}
+    except Exception:
+        return None
+
+
+def _probe_http(
+    ip: str,
+    port: int,
+    timeout: float,
+    max_bytes: int,
+    use_tls: bool,
+) -> Optional[Dict[str, Any]]:
+    request = (
+        f"GET / HTTP/1.1\r\nHost: {ip}\r\nUser-Agent: Pumpkin\r\nConnection: close\r\n\r\n"
+    ).encode("ascii")
+    try:
+        with socket.create_connection((ip, port), timeout=timeout) as sock:
+            sock.settimeout(timeout)
+            if use_tls:
+                import ssl
+
+                context = ssl._create_unverified_context()
+                with context.wrap_socket(sock, server_hostname=ip) as tls_sock:
+                    tls_sock.sendall(request)
+                    data = tls_sock.recv(max_bytes)
+            else:
+                sock.sendall(request)
+                data = sock.recv(max_bytes)
+        if not data:
+            return None
+        text = data.decode(errors="ignore")
+        lines = text.splitlines()
+        status_line = lines[0] if lines else ""
+        server = ""
+        title = ""
+        for line in lines[1:]:
+            if not line.strip():
+                break
+            if line.lower().startswith("server:"):
+                server = line.split(":", 1)[1].strip()
+        if "<title>" in text.lower():
+            lower = text.lower()
+            start = lower.find("<title>")
+            end = lower.find("</title>", start + 7)
+            if start != -1 and end != -1:
+                title = text[start + 7 : end].strip()
+        return {
+            "type": "https" if use_tls else "http",
+            "port": port,
+            "status": status_line.strip(),
+            "server": server,
+            "title": title,
+        }
+    except Exception:
+        return None
+
+
+def _ssdp_discover(timeout: float, max_responses: int) -> List[Dict[str, str]]:
+    responses: List[Dict[str, str]] = []
+    message = (
+        "M-SEARCH * HTTP/1.1\r\n"
+        "HOST: 239.255.255.250:1900\r\n"
+        "MAN: \"ssdp:discover\"\r\n"
+        "MX: 1\r\n"
+        "ST: ssdp:all\r\n"
+        "USER-AGENT: Pumpkin\r\n\r\n"
+    ).encode("ascii")
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        sock.settimeout(timeout)
+        sock.sendto(message, ("239.255.255.250", 1900))
+        while len(responses) < max_responses:
+            try:
+                data, addr = sock.recvfrom(2048)
+            except socket.timeout:
+                break
+            text = data.decode(errors="ignore")
+            headers: Dict[str, str] = {"_raw": text}
+            for line in text.splitlines():
+                if ":" not in line:
+                    continue
+                key, value = line.split(":", 1)
+                headers[key.strip().lower()] = value.strip()
+            headers["ip"] = addr[0]
+            responses.append(headers)
+    except Exception:
+        pass
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+    return responses
+
+
+def _classify_services(open_ports: List[int], services: List[Dict[str, Any]]) -> List[str]:
+    hints: List[str] = []
+    if 8123 in open_ports:
+        hints.append("homeassistant")
+    if 554 in open_ports or 8554 in open_ports:
+        hints.append("rtsp_camera")
+    if 8008 in open_ports or 8009 in open_ports:
+        hints.append("chromecast")
+    if 1400 in open_ports:
+        hints.append("sonos")
+    if 62078 in open_ports:
+        hints.append("airplay")
+    if 9100 in open_ports:
+        hints.append("printer")
+    if 22 in open_ports:
+        hints.append("ssh")
+    for service in services:
+        if service.get("type") in {"http", "https"} and service.get("title"):
+            hints.append(f"http:{service['title']}")
+    return sorted(set(hints))
+
+
 def network_discovery(
     subnet: Optional[str],
     tcp_ports: Iterable[int],
     timeout_seconds: float,
     max_hosts: int,
+    active: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     local_ip = _detect_local_ip()
     network = None
@@ -122,6 +270,21 @@ def network_discovery(
     arp_entries = _read_arp_table()
     devices: List[Dict[str, Any]] = []
     ports = [int(p) for p in tcp_ports if isinstance(p, int) or str(p).isdigit()]
+    active_cfg = active if isinstance(active, dict) else {}
+    active_enabled = bool(active_cfg.get("enabled", False))
+    scan_subnet = bool(active_cfg.get("scan_subnet", False))
+    ssdp_enabled = bool(active_cfg.get("ssdp", False))
+    http_enabled = bool(active_cfg.get("http", False))
+    rtsp_enabled = bool(active_cfg.get("rtsp", False))
+    ssh_enabled = bool(active_cfg.get("ssh", False))
+    max_banner_bytes = int(active_cfg.get("max_banner_bytes", 256))
+    max_http_bytes = int(active_cfg.get("max_http_bytes", 2048))
+    max_ssdp_responses = int(active_cfg.get("max_ssdp_responses", 32))
+
+    ssdp_services = _ssdp_discover(timeout_seconds, max_ssdp_responses) if active_enabled and ssdp_enabled else []
+
+    seen_ips: set[str] = set()
+    candidates: List[Tuple[str, Optional[Dict[str, str]]]] = []
     for entry in arp_entries:
         ip = entry.get("ip")
         if not ip:
@@ -132,18 +295,55 @@ def network_discovery(
                     continue
             except ValueError:
                 continue
+        if ip in seen_ips:
+            continue
+        seen_ips.add(ip)
+        candidates.append((ip, entry))
+
+    if scan_subnet and network:
+        for host in network.hosts():
+            ip = str(host)
+            if ip in seen_ips:
+                continue
+            seen_ips.add(ip)
+            candidates.append((ip, None))
+            if len(candidates) >= max_hosts * 2:
+                break
+
+    for ip, entry in candidates:
         open_ports: List[int] = []
         for port in ports:
             if _probe_port(ip, port, timeout_seconds):
                 open_ports.append(port)
-        devices.append(
-            {
-                "ip": ip,
-                "mac": entry.get("mac"),
-                "device": entry.get("device"),
-                "open_ports": open_ports,
-            }
-        )
+
+        if entry is None and not open_ports:
+            continue
+
+        services: List[Dict[str, Any]] = []
+        if active_enabled and open_ports:
+            for port in open_ports:
+                if http_enabled and port in {80, 443, 8000, 8080, 8081, 8123, 8443, 9000, 9443}:
+                    service = _probe_http(ip, port, timeout_seconds, max_http_bytes, port in {443, 8443, 9443})
+                    if service:
+                        services.append(service)
+                if rtsp_enabled and port in {554, 8554}:
+                    service = _probe_rtsp(ip, port, timeout_seconds, max_banner_bytes)
+                    if service:
+                        services.append(service)
+                if ssh_enabled and port == 22:
+                    service = _probe_ssh(ip, port, timeout_seconds, max_banner_bytes)
+                    if service:
+                        services.append(service)
+
+        device_payload = {
+            "ip": ip,
+            "mac": entry.get("mac") if entry else None,
+            "device": entry.get("device") if entry else None,
+            "open_ports": open_ports,
+            "services": services,
+        }
+        device_payload["hints"] = _classify_services(open_ports, services)
+        devices.append(device_payload)
         if len(devices) >= max_hosts:
             break
 
@@ -152,6 +352,7 @@ def network_discovery(
         "subnet": str(network) if network else None,
         "device_count": len(devices),
         "devices": devices,
+        "ssdp": ssdp_services,
     }
 
 
