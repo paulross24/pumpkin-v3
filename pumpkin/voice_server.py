@@ -242,11 +242,59 @@ def _load_conversation_memory(conn, key: str) -> Dict[str, Any]:
     data = store.get_memory(conn, key)
     if isinstance(data, dict):
         return data
-    return {"summary": "", "facts": [], "recent": [], "last_summary_ts": 0.0}
+    return {
+        "summary": "",
+        "facts": [],
+        "recent": [],
+        "last_summary_ts": 0.0,
+        "turns": 0,
+    }
 
 
 def _store_conversation_memory(conn, key: str, memory: Dict[str, Any]) -> None:
     store.set_memory(conn, key, memory)
+
+
+def _update_profile_activity(
+    conn,
+    device: str | None,
+    user_text: str,
+    reply: str,
+) -> None:
+    if not isinstance(device, str) or not device.strip():
+        return
+    key = f"speaker.profile.device:{device.strip()}"
+    profile = store.get_memory(conn, key)
+    if not isinstance(profile, dict):
+        return
+    profile["last_seen_ts"] = datetime.now(timezone.utc).isoformat()
+    profile["last_text"] = _truncate_text(user_text, 160)
+    profile["last_reply"] = _truncate_text(reply, 160)
+    profile["last_device"] = device.strip()
+    turns = profile.get("turns_count")
+    try:
+        turns = int(turns) if turns is not None else 0
+    except (TypeError, ValueError):
+        turns = 0
+    profile["turns_count"] = turns + 1
+    if not profile.get("created_ts"):
+        profile["created_ts"] = profile["last_seen_ts"]
+    store.set_memory(conn, key, profile)
+    try:
+        store.insert_event(
+            conn,
+            source="voice",
+            event_type="profile.updated",
+            payload={
+                "device": device.strip(),
+                "name": profile.get("name"),
+                "turns_count": profile.get("turns_count"),
+                "last_seen_ts": profile.get("last_seen_ts"),
+            },
+            severity="info",
+        )
+    except Exception:
+        pass
 
 
 def _append_recent_turn(memory: Dict[str, Any], role: str, text: str) -> None:
@@ -337,6 +385,14 @@ def _update_conversation_memory(
     memory = _load_conversation_memory(conn, key)
     _append_recent_turn(memory, "user", str(payload.get("text", "")))
     _append_recent_turn(memory, "assistant", reply)
+    turns = memory.get("turns")
+    try:
+        turns = int(turns) if turns is not None else 0
+    except (TypeError, ValueError):
+        turns = 0
+    memory["turns"] = turns + 1
+    memory["last_user_text"] = _truncate_text(str(payload.get("text", "")), 200)
+    memory["last_reply"] = _truncate_text(reply, 200)
     new_facts = _extract_facts_simple(str(payload.get("text", "")))
     facts = memory.get("facts") if isinstance(memory.get("facts"), list) else []
     if new_facts:
@@ -348,6 +404,9 @@ def _update_conversation_memory(
             memory["last_summary_ts"] = time.time()
     memory["updated_ts"] = time.time()
     _store_conversation_memory(conn, key, memory)
+    if isinstance(device, str) and device.strip():
+        store.set_memory(conn, "voice.last_device", device.strip())
+        _update_profile_activity(conn, device, str(payload.get("text", "")), reply)
     try:
         store.insert_event(
             conn,
@@ -355,6 +414,7 @@ def _update_conversation_memory(
             event_type="memory.updated",
             payload={
                 "key": key,
+                "turns": memory.get("turns"),
                 "facts_count": len(memory.get("facts", [])),
                 "summary_len": len(memory.get("summary", "")),
             },
@@ -2117,6 +2177,9 @@ def _build_llm_context(conn, device: str | None) -> Dict[str, Any]:
             "ha_person_id": profile.get("ha_person_id"),
             "preferences": profile.get("preferences", {}),
             "voice_recognition_opt_in": profile.get("voice_recognition_opt_in", False),
+            "last_seen_ts": profile.get("last_seen_ts"),
+            "turns_count": profile.get("turns_count"),
+            "last_device": profile.get("last_device"),
         }
     memory_key = _conversation_key(device, profile)
     memory_snapshot = None
@@ -2126,6 +2189,8 @@ def _build_llm_context(conn, device: str | None) -> Dict[str, Any]:
             memory_snapshot = {
                 "summary": stored.get("summary"),
                 "facts": stored.get("facts"),
+                "facts_count": len(stored.get("facts") or []),
+                "turns": stored.get("turns"),
                 "last_updated": stored.get("updated_ts"),
             }
     return {
@@ -2140,6 +2205,38 @@ def _build_llm_context(conn, device: str | None) -> Dict[str, Any]:
         "recent_errors": errors,
         "speaker_profile": profile_summary,
         "conversation_memory": memory_snapshot,
+    }
+
+
+def _identity_snapshot(conn, device: str | None) -> Dict[str, Any]:
+    profile = _speaker_profile_from_device(conn, device)
+    profile_summary = None
+    if isinstance(profile, dict):
+        profile_summary = {
+            "name": profile.get("name"),
+            "ha_person_id": profile.get("ha_person_id"),
+            "preferences": profile.get("preferences", {}),
+            "created_ts": profile.get("created_ts"),
+            "last_seen_ts": profile.get("last_seen_ts"),
+            "turns_count": profile.get("turns_count"),
+            "last_device": profile.get("last_device"),
+        }
+    memory_key = _conversation_key(device, profile)
+    memory_summary = None
+    if memory_key:
+        stored = store.get_memory(conn, memory_key)
+        if isinstance(stored, dict):
+            memory_summary = {
+                "summary": stored.get("summary"),
+                "facts": stored.get("facts"),
+                "facts_count": len(stored.get("facts") or []),
+                "turns": stored.get("turns"),
+                "last_updated": stored.get("updated_ts"),
+            }
+    return {
+        "device": device,
+        "profile": profile_summary,
+        "memory": memory_summary,
     }
 
 
@@ -2206,6 +2303,9 @@ def _store_speaker_name(conn, device: str | None, name: str) -> str | None:
         }
     profile["name"] = name
     profile["state"] = "named"
+    if not profile.get("created_ts"):
+        profile["created_ts"] = datetime.now(timezone.utc).isoformat()
+    profile["last_seen_ts"] = datetime.now(timezone.utc).isoformat()
     store.set_memory(conn, key, profile)
     return None
 
@@ -2996,6 +3096,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 status = params.get("status", ["pending"])[0]
                 limit = _parse_limit(params.get("limit", [None])[0], default=10)
                 conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+                last_device = store.get_memory(conn, "voice.last_device")
+                if not isinstance(last_device, str):
+                    last_device = None
                 snapshot_event = _latest_event(conn, "system.snapshot")
                 heartbeat_event = _latest_event(conn, "heartbeat")
                 proposals = store.list_proposals(conn, status=status, limit=limit)
@@ -3023,6 +3126,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                     200,
                     {
                         "status": "ok",
+                        "identity": _identity_snapshot(conn, last_device),
                         "heartbeat": heartbeat_event,
                         "system_snapshot": system_snapshot,
                         "homeassistant": ha_summary,

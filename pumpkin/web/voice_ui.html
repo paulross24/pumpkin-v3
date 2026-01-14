@@ -168,6 +168,12 @@
         <ul class="list" id="health-details"></ul>
       </section>
       <section class="card">
+        <h3>Identity &amp; Memory</h3>
+        <div class="stat" id="identity-name">Unknown</div>
+        <ul class="list" id="identity-meta"></ul>
+        <ul class="list" id="memory-meta"></ul>
+      </section>
+      <section class="card">
         <h3>Proposals</h3>
         <div class="stat" id="proposal-count">0</div>
         <div class="sub" style="margin-bottom: 8px;">
@@ -219,6 +225,9 @@
       const ssdpList = byId("ssdp-list");
       const haLast = byId("ha-last");
       const haMeta = byId("ha-meta");
+      const identityName = byId("identity-name");
+      const identityMeta = byId("identity-meta");
+      const memoryMeta = byId("memory-meta");
 
       const setList = (node, items) => {
         node.innerHTML = "";
@@ -277,6 +286,22 @@
 
           issuesCount.textContent = (summary.issues || []).length;
           setList(issuesList, (summary.issues || []).slice(0, 4).map(formatIssue));
+
+          const identity = summary.identity || {};
+          const profile = identity.profile || {};
+          const memory = identity.memory || {};
+          identityName.textContent = profile.name || "Unknown speaker";
+          setList(identityMeta, [
+            `last seen: ${profile.last_seen_ts || "n/a"}`,
+            `turns: ${profile.turns_count ?? "n/a"}`,
+            `device: ${profile.last_device || "n/a"}`,
+            `preferences: ${Object.keys(profile.preferences || {}).length}`,
+          ]);
+          setList(memoryMeta, [
+            `summary: ${memory.summary ? memory.summary.slice(0, 80) + "…" : "none"}`,
+            `facts: ${memory.facts_count ?? 0}`,
+            `turns: ${memory.turns ?? "n/a"}`,
+          ]);
 
           const discovery = summary.network_discovery || {};
           networkCount.textContent = `${discovery.device_count || 0} devices`;
