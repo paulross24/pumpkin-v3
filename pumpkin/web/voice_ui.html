@@ -258,7 +258,8 @@
           ]);
 
           proposalCount.textContent = summary.proposal_count || 0;
-          setList(proposalList, (summary.proposals || []).slice(0, 3).map(formatProposal));
+          const proposals = (summary.proposals || []).slice(0, 3).map(formatProposal);
+          setList(proposalList, proposals);
 
           issuesCount.textContent = (summary.issues || []).length;
           setList(issuesList, (summary.issues || []).slice(0, 4).map(formatIssue));
@@ -286,8 +287,86 @@
             haLast.textContent = "none";
             setList(haMeta, []);
           }
+          await loadPendingProposals();
         } catch (err) {
           subtitle.textContent = "Failed to load status.";
+        }
+      };
+
+      const loadPendingProposals = async () => {
+        try {
+          const res = await fetch("/proposals?status=pending&limit=10");
+          const data = await res.json();
+          const items = Array.isArray(data.proposals) ? data.proposals : [];
+          proposalCount.textContent = data.count ?? items.length;
+          proposalList.innerHTML = "";
+          if (!items.length) {
+            const li = document.createElement("li");
+            li.textContent = "None";
+            proposalList.appendChild(li);
+            return;
+          }
+          items.forEach((proposal) => {
+            const li = document.createElement("li");
+            const row = document.createElement("div");
+            row.style.display = "flex";
+            row.style.flexDirection = "column";
+            row.style.gap = "6px";
+
+            const text = document.createElement("div");
+            text.textContent = `${proposal.summary} (${proposal.status})`;
+
+            const actions = document.createElement("div");
+            actions.style.display = "flex";
+            actions.style.gap = "6px";
+
+            const approve = document.createElement("button");
+            approve.textContent = "Approve";
+            approve.addEventListener("click", () =>
+              sendDecision(proposal.id, "approved")
+            );
+
+            const reject = document.createElement("button");
+            reject.textContent = "Reject";
+            reject.addEventListener("click", () =>
+              sendDecision(proposal.id, "rejected")
+            );
+
+            actions.appendChild(approve);
+            actions.appendChild(reject);
+            row.appendChild(text);
+            row.appendChild(actions);
+            li.appendChild(row);
+            proposalList.appendChild(li);
+          });
+        } catch (err) {
+          proposalList.innerHTML = "";
+          const li = document.createElement("li");
+          li.textContent = "Failed to load proposals.";
+          proposalList.appendChild(li);
+        }
+      };
+
+      const sendDecision = async (id, decision) => {
+        const reason = window.prompt("Reason (optional):") || "";
+        const payload = {
+          id,
+          actor: "web",
+          reason: reason.trim() || null,
+        };
+        const url = decision === "approved" ? "/proposals/approve" : "/proposals/reject";
+        try {
+          const res = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) {
+            throw new Error("Request failed");
+          }
+          await loadPendingProposals();
+        } catch (err) {
+          window.alert("Failed to update proposal.");
         }
       };
 
