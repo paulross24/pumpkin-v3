@@ -151,10 +151,16 @@ def _maybe_raise_proposal(conn, failures: List[Dict[str, Any]]) -> None:
     if count < 2:
         return
     summary = "Self-check failures detected"
+    playbook = _build_playbook(failures)
     details = {
         "failures": failures[:5],
         "action_type": "ops.investigate",
         "action_params": {"log_type": "selfcheck"},
+        "rationale": "Self-check failures repeated; apply the playbook to restore health.",
+        "implementation": "Follow the playbook steps in order and verify the checks.",
+        "verification": "Re-run selfcheck and confirm failures are cleared.",
+        "rollback_plan": "Revert any recent config changes or restart affected services.",
+        "playbook": playbook,
     }
     policy = policy_mod.load_policy(str(settings.policy_path()))
     proposal_id = store.insert_proposal(
@@ -162,7 +168,11 @@ def _maybe_raise_proposal(conn, failures: List[Dict[str, Any]]) -> None:
         kind="selfcheck.failure",
         summary=summary,
         details=details,
-        steps=["Review selfcheck events", "Inspect HA connectivity and voice endpoints", "Apply fix then re-run selfcheck"],
+        steps=playbook or [
+            "Review selfcheck events",
+            "Inspect HA connectivity and voice endpoints",
+            "Apply fix then re-run selfcheck",
+        ],
         risk=0.3,
         expected_outcome="Self-check passes again.",
         status="pending",
@@ -177,3 +187,34 @@ def _maybe_raise_proposal(conn, failures: List[Dict[str, Any]]) -> None:
         payload={"proposal_id": proposal_id, "failures": failures[:5]},
         severity="info",
     )
+
+
+def _build_playbook(failures: List[Dict[str, Any]]) -> List[str]:
+    steps: List[str] = []
+    checks = [f.get("check", "") for f in failures if isinstance(f, dict)]
+    if any(str(check).startswith("voice.") for check in checks):
+        steps.extend(
+            [
+                "Confirm pumpkin-voice.service is active.",
+                "Run: curl -i http://127.0.0.1:9000/health",
+                "Restart pumpkin-voice.service if needed.",
+            ]
+        )
+    if any(str(check).startswith("ha.") for check in checks):
+        steps.extend(
+            [
+                "Verify PUMPKIN_HA_TOKEN is set in /etc/pumpkin/pumpkin.env.",
+                "Test HA reachability from core host.",
+                "Restart pumpkin.service after token/config changes.",
+            ]
+        )
+    if any(str(check).startswith("voice.") or str(check).startswith("ha.") for check in checks):
+        steps.append("Re-run: python3 -m pumpkin ops selfcheck")
+    # Deduplicate while preserving order
+    seen = set()
+    unique_steps = []
+    for step in steps:
+        if step not in seen:
+            seen.add(step)
+            unique_steps.append(step)
+    return unique_steps[:8]

@@ -548,6 +548,7 @@ def _validate_planner_proposal(
         else:
             expected_outcome = str(expected_outcome)
         proposal["expected_outcome"] = expected_outcome
+    expected_outcome = proposal.get("expected_outcome")
 
     _parse_json_field(summary, "summary", str)
     _parse_json_field(expected_outcome, "expected_outcome", str)
@@ -742,10 +743,10 @@ def _rule_based_proposals(events: List[Any], conn) -> List[Dict[str, Any]]:
                                     "opt_in": "remember_me",
                                 },
                             )
-                            proposals.append(
-                                {
-                                    "kind": "action.request",
-                                    "summary": "Acknowledged memory preference",
+                                proposals.append(
+                                    {
+                                        "kind": "action.request",
+                                        "summary": "Acknowledged memory preference",
                                     "details": {
                                         "rationale": "Speaker declined to be remembered.",
                                         "action_type": "notify.local",
@@ -759,8 +760,8 @@ def _rule_based_proposals(events: List[Any], conn) -> List[Dict[str, Any]]:
                                     "needs_new_capability": False,
                                     "capability_request": None,
                                     "steps": ["Confirm memory preference"],
-                                }
-                            )
+                                    }
+                                )
                         else:
                             session["pending_remember_name"] = True
                             append_jsonl(
@@ -1464,6 +1465,68 @@ def _rule_based_proposals(events: List[Any], conn) -> List[Dict[str, Any]]:
                         "steps": ["Emit a local notification"],
                     }
                 )
+
+    useful = store.get_memory(conn, "network.discovery.useful")
+    if isinstance(useful, list) and useful:
+        snapshot = store.get_memory(conn, "network.discovery.snapshot")
+        devices_by_ip: Dict[str, Dict[str, Any]] = {}
+        if isinstance(snapshot, dict):
+            for device in snapshot.get("devices", []):
+                if isinstance(device, dict) and device.get("ip"):
+                    devices_by_ip[device["ip"]] = device
+        for item in useful[-10:]:
+            if not isinstance(item, dict):
+                continue
+            ip = item.get("ip")
+            if not isinstance(ip, str) or not ip.strip():
+                continue
+            label = item.get("label") or "device"
+            summary = f"Integrate {label} device at {ip}"
+            if store.proposal_exists(conn, summary, statuses=["pending", "approved"]):
+                continue
+            device = devices_by_ip.get(ip, {})
+            hints = device.get("hints", [])
+            services = device.get("services", [])
+            rationale = (
+                f"Device {ip} was marked useful and should be integrated."
+                + (f" Hints: {', '.join(hints)}." if hints else "")
+            )
+            proposals.append(
+                {
+                    "kind": "hardware.recommendation",
+                    "summary": summary,
+                    "details": {
+                        "rationale": rationale,
+                        "device": {
+                            "ip": ip,
+                            "label": label,
+                            "note": item.get("note"),
+                            "hints": hints,
+                            "services": services,
+                        },
+                        "implementation": (
+                            "Identify the device protocol from hints/services, "
+                            "collect any needed credentials, and draft an integration plan "
+                            "for Pumpkin or Home Assistant."
+                        ),
+                        "verification": (
+                            "Confirm the device is reachable and appears in the "
+                            "network snapshot after integration."
+                        ),
+                        "rollback_plan": "Remove the integration and stored credentials if needed.",
+                    },
+                    "risk": 0.3,
+                    "expected_outcome": "Integration plan is ready for approval.",
+                    "source_event_ids": [],
+                    "needs_new_capability": False,
+                    "capability_request": None,
+                    "steps": [
+                        "Confirm device type and access method.",
+                        "Draft integration plan and required credentials.",
+                        "Propose activation steps and verify reachability.",
+                    ],
+                }
+            )
 
     return proposals
 

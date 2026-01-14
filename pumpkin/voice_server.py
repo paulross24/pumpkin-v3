@@ -2510,6 +2510,8 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "GET /",
                             "GET /health",
                             "GET /ui",
+                            "GET /ui/proposals",
+                            "GET /ui/network",
                         "GET /config",
                         "GET /catalog",
                         "GET /capabilities",
@@ -2526,6 +2528,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "POST /proposals/reject",
                             "POST /llm/config",
                             "POST /ingest",
+                            "POST /network/mark",
                             "POST /ha/webhook",
                             "POST /voice",
                             "POST /satellite/voice",
@@ -2932,6 +2935,37 @@ class VoiceHandler(BaseHTTPRequestHandler):
                                     "responses": {
                                         "200": {
                                             "description": "Acknowledged",
+                                            "content": {
+                                                "application/json": {
+                                                    "schema": {"type": "object"}
+                                                }
+                                            },
+                                        }
+                                    },
+                                }
+                            },
+                            "/network/mark": {
+                                "post": {
+                                    "summary": "Mark a discovered device as useful",
+                                    "requestBody": {
+                                        "required": True,
+                                        "content": {
+                                            "application/json": {
+                                                "schema": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "ip": {"type": "string"},
+                                                        "label": {"type": "string"},
+                                                        "note": {"type": "string"},
+                                                    },
+                                                    "required": ["ip"],
+                                                }
+                                            }
+                                        },
+                                    },
+                                    "responses": {
+                                        "200": {
+                                            "description": "Marked",
                                             "content": {
                                                 "application/json": {
                                                     "schema": {"type": "object"}
