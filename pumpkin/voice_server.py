@@ -2946,6 +2946,97 @@ def _summarize_issues(system_snapshot: Dict[str, Any] | None) -> list[Dict[str, 
     return issues
 
 
+def _parse_car_telemetry_text(text: str) -> Dict[str, Any] | None:
+    if not text.startswith("car.telemetry"):
+        return None
+    parts = text.split(" ", 1)
+    if len(parts) < 2:
+        return None
+    raw = parts[1].strip()
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _collect_car_telemetry(conn, limit: int = 200) -> list[Dict[str, Any]]:
+    rows = store.list_events(conn, limit=limit, source="voice", event_type="voice.ingest")
+    items: list[Dict[str, Any]] = []
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"])
+        except Exception:
+            payload = {}
+        text = payload.get("text")
+        if not isinstance(text, str):
+            continue
+        record = _parse_car_telemetry_text(text)
+        if not record:
+            continue
+        record["_event_id"] = row["id"]
+        record["_event_ts"] = row["ts"]
+        items.append(record)
+    return items
+
+
+def _car_telemetry_summary(conn) -> Dict[str, Any]:
+    records = _collect_car_telemetry(conn, limit=200)
+    if not records:
+        return {"count": 0, "recent_profiles": []}
+    latest = records[0]
+    readings = latest.get("readings") if isinstance(latest.get("readings"), dict) else {}
+    speed_samples = []
+    rpm_samples = []
+    coolant_samples = []
+    for record in records:
+        rec_readings = record.get("readings")
+        if not isinstance(rec_readings, dict):
+            continue
+        speed = rec_readings.get("speed_kph")
+        rpm = rec_readings.get("rpm")
+        coolant = rec_readings.get("coolant_c")
+        if isinstance(speed, (int, float)):
+            speed_samples.append(float(speed))
+        if isinstance(rpm, (int, float)):
+            rpm_samples.append(float(rpm))
+        if isinstance(coolant, (int, float)):
+            coolant_samples.append(float(coolant))
+    profiles = []
+    seen = set()
+    for record in records:
+        profile = record.get("profile")
+        if isinstance(profile, str) and profile and profile not in seen:
+            profiles.append(profile)
+            seen.add(profile)
+    return {
+        "count": len(records),
+        "last": {
+            "ts": latest.get("ts") or latest.get("_event_ts"),
+            "device_id": latest.get("device_id"),
+            "profile": latest.get("profile"),
+            "adapter_name": latest.get("adapter_name"),
+            "adapter_address": latest.get("adapter_address"),
+            "make": latest.get("make"),
+            "model": latest.get("model"),
+            "year": latest.get("year"),
+            "trim": latest.get("trim"),
+            "readings": readings,
+        },
+        "stats": {
+            "avg_speed_kph": sum(speed_samples) / len(speed_samples) if speed_samples else None,
+            "max_speed_kph": max(speed_samples) if speed_samples else None,
+            "avg_rpm": sum(rpm_samples) / len(rpm_samples) if rpm_samples else None,
+            "max_rpm": max(rpm_samples) if rpm_samples else None,
+            "avg_coolant_c": sum(coolant_samples) / len(coolant_samples) if coolant_samples else None,
+            "sampled": len(speed_samples),
+        },
+        "recent_profiles": profiles,
+    }
+
+
 class VoiceHandler(BaseHTTPRequestHandler):
     server_version = "PumpkinVoice/0.1"
 
@@ -3105,6 +3196,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "GET /ui",
                             "GET /ui/proposals",
                             "GET /ui/network",
+                            "GET /ui/car",
                         "GET /config",
                         "GET /catalog",
                         "GET /capabilities",
@@ -3113,6 +3205,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "GET /proposals",
                         "GET /summary",
                         "GET /timeline",
+                        "GET /car/telemetry",
                             "GET /errors",
                             "GET /llm/config",
                             "POST /ask",
@@ -3137,6 +3230,13 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 return
             if path == "/ui/network":
                 _send_html(self, 200, _load_voice_ui_asset("voice_ui_network.html"))
+                return
+            if path == "/ui/car":
+                _send_html(self, 200, _load_voice_ui_asset("voice_ui_car.html"))
+                return
+            if path == "/car/telemetry":
+                conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+                _send_json(self, 200, {"status": "ok", "car_telemetry": _car_telemetry_summary(conn)})
                 return
             if path == "/config":
                 bind_host, bind_port = _effective_bind(self)
@@ -3304,6 +3404,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 home_state = _home_state_summary(conn)
                 issues = _summarize_issues(system_snapshot)
                 network_discovery = store.get_memory(conn, "network.discovery.snapshot")
+                car_telemetry = _car_telemetry_summary(conn)
                 insights_latest = store.get_memory(conn, "insights.latest")
                 if not isinstance(insights_latest, list):
                     insights_latest = []
@@ -3341,6 +3442,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "homeassistant_last_event": ha_last_event,
                         "home_state": home_state,
                         "network_discovery": network_discovery,
+                        "car_telemetry": car_telemetry,
                         "issues": issues,
                         "insights": insights_latest[-5:],
                         "briefing": briefing,
@@ -3410,6 +3512,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "/config": {"get": {"summary": "Runtime config"}},
                             "/catalog": {"get": {"summary": "Module catalog"}},
                             "/capabilities": {"get": {"summary": "Capability snapshot"}},
+                            "/car/telemetry": {"get": {"summary": "Car telemetry summary"}},
                             "/summary": {
                                 "get": {
                                     "summary": "System summary",

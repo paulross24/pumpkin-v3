@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pumpkin Car Desk</title>
+    <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='29' y='10' width='6' height='12' fill='%235b4b41'/><circle cx='32' cy='36' r='20' fill='%23e67c2e'/><circle cx='20' cy='36' r='14' fill='%23f08a3a' opacity='0.85'/><circle cx='44' cy='36' r='14' fill='%23f08a3a' opacity='0.85'/></svg>" />
+    <style>
+      :root {
+        --bg: #f6efe8;
+        --bg-accent: #f2d6b5;
+        --ink: #2a1b12;
+        --muted: #5b4b41;
+        --pumpkin: #e67c2e;
+        --pumpkin-dark: #b95519;
+        --card: #fff8f2;
+        --line: #e5d6c6;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Iowan Old Style", "Palatino", "Bookman", "Georgia", serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at 10% 10%, rgba(230, 124, 46, 0.15), transparent 40%),
+          linear-gradient(160deg, var(--bg), var(--bg-accent));
+        min-height: 100vh;
+      }
+      header {
+        padding: 28px 24px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .title {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 26px;
+        font-weight: 700;
+      }
+      .pumpkin-icon {
+        width: 24px;
+        height: 24px;
+        flex: 0 0 auto;
+      }
+      .sub { color: var(--muted); }
+      main {
+        padding: 12px 24px 40px;
+        display: grid;
+        gap: 16px;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 16px;
+        box-shadow: 0 12px 32px rgba(50, 33, 22, 0.08);
+      }
+      .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      .pill {
+        display: inline-block;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: rgba(230, 124, 46, 0.12);
+        color: var(--pumpkin-dark);
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .grid {
+        display: grid;
+        gap: 12px;
+      }
+      .section-title {
+        font-size: 14px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+      .list {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        display: grid;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+      button {
+        border: 1px solid var(--line);
+        background: var(--card);
+        color: var(--ink);
+        padding: 8px 12px;
+        border-radius: 10px;
+        cursor: pointer;
+      }
+      a { color: var(--pumpkin-dark); text-decoration: none; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="title">
+        <svg class="pumpkin-icon" viewBox="0 0 64 64" aria-hidden="true">
+          <rect x="29" y="10" width="6" height="12" fill="var(--muted)" />
+          <circle cx="32" cy="36" r="20" fill="var(--pumpkin)" />
+          <circle cx="20" cy="36" r="14" fill="#f08a3a" opacity="0.85" />
+          <circle cx="44" cy="36" r="14" fill="#f08a3a" opacity="0.85" />
+        </svg>
+        Car Desk
+      </div>
+      <div class="sub">
+        Review recent car telemetry ingest and key readings.
+        <a href="/ui">Back to dashboard →</a>
+      </div>
+    </header>
+    <main>
+      <section class="card">
+        <div class="row" style="margin-bottom: 8px;">
+          <span class="pill" id="count">0 samples</span>
+          <button id="refresh">Refresh</button>
+        </div>
+        <div class="grid">
+          <div>
+            <div class="section-title">Last session</div>
+            <ul class="list" id="last-list"></ul>
+          </div>
+          <div>
+            <div class="section-title">Latest readings</div>
+            <ul class="list" id="reading-list"></ul>
+          </div>
+          <div>
+            <div class="section-title">Stats (recent)</div>
+            <ul class="list" id="stats-list"></ul>
+          </div>
+        </div>
+      </section>
+    </main>
+    <script>
+      const countNode = document.getElementById("count");
+      const lastList = document.getElementById("last-list");
+      const readingList = document.getElementById("reading-list");
+      const statsList = document.getElementById("stats-list");
+
+      const setList = (node, items) => {
+        node.innerHTML = "";
+        if (!items.length) {
+          const li = document.createElement("li");
+          li.textContent = "None";
+          node.appendChild(li);
+          return;
+        }
+        items.forEach((item) => {
+          const li = document.createElement("li");
+          li.textContent = item;
+          node.appendChild(li);
+        });
+      };
+
+      const load = async () => {
+        try {
+          const res = await fetch("/car/telemetry");
+          const data = await res.json();
+          const summary = data.car_telemetry || {};
+          countNode.textContent = `${summary.count || 0} samples`;
+
+          const last = summary.last || {};
+          const readings = last.readings || {};
+          const lastItems = [];
+          if (last.profile) lastItems.push(`Profile: ${last.profile}`);
+          if (last.make || last.model) {
+            const name = `${last.make || ""} ${last.model || ""}`.trim();
+            if (name) lastItems.push(`Vehicle: ${name}`);
+          }
+          if (last.year) lastItems.push(`Year: ${last.year}`);
+          if (last.trim) lastItems.push(`Trim: ${last.trim}`);
+          if (last.adapter_name) lastItems.push(`Adapter: ${last.adapter_name}`);
+          if (last.adapter_address) lastItems.push(`Adapter MAC: ${last.adapter_address}`);
+          if (last.ts) lastItems.push(`Last seen: ${last.ts}`);
+          setList(lastList, lastItems);
+
+          const readingItems = [];
+          if (readings.speed_kph != null) readingItems.push(`Speed: ${readings.speed_kph} km/h`);
+          if (readings.rpm != null) readingItems.push(`RPM: ${readings.rpm}`);
+          if (readings.coolant_c != null) readingItems.push(`Coolant: ${readings.coolant_c}°C`);
+          if (readings.intake_c != null) readingItems.push(`Intake: ${readings.intake_c}°C`);
+          if (readings.engine_load_pct != null) readingItems.push(`Engine load: ${readings.engine_load_pct}%`);
+          if (readings.throttle_pct != null) readingItems.push(`Throttle: ${readings.throttle_pct}%`);
+          if (readings.fuel_level_pct != null) readingItems.push(`Fuel level: ${readings.fuel_level_pct}%`);
+          if (readings.maf_gps != null) readingItems.push(`MAF: ${readings.maf_gps} g/s`);
+          if (readings.engine_runtime_s != null) readingItems.push(`Runtime: ${readings.engine_runtime_s}s`);
+          if (readings.fuel_rate_lph != null) readingItems.push(`Fuel rate: ${readings.fuel_rate_lph} L/h`);
+          setList(readingList, readingItems);
+
+          const stats = summary.stats || {};
+          const statsItems = [];
+          if (stats.avg_speed_kph != null) statsItems.push(`Avg speed: ${stats.avg_speed_kph.toFixed(1)} km/h`);
+          if (stats.max_speed_kph != null) statsItems.push(`Max speed: ${stats.max_speed_kph.toFixed(1)} km/h`);
+          if (stats.avg_rpm != null) statsItems.push(`Avg RPM: ${stats.avg_rpm.toFixed(0)}`);
+          if (stats.max_rpm != null) statsItems.push(`Max RPM: ${stats.max_rpm.toFixed(0)}`);
+          if (stats.avg_coolant_c != null) statsItems.push(`Avg coolant: ${stats.avg_coolant_c.toFixed(1)}°C`);
+          if (stats.sampled != null) statsItems.push(`Samples with speed: ${stats.sampled}`);
+          setList(statsList, statsItems);
+        } catch (err) {
+          countNode.textContent = "Load failed";
+        }
+      };
+
+      document.getElementById("refresh").addEventListener("click", load);
+      load();
+    </script>
+  </body>
+</html>

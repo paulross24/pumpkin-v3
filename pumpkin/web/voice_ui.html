@@ -199,6 +199,16 @@
         <ul class="list" id="network-list"></ul>
       </section>
       <section class="card">
+        <h3>Car Telemetry</h3>
+        <div class="stat" id="car-count">0 samples</div>
+        <div class="sub" style="margin-bottom: 8px;">
+          <a href="/ui/car" style="color: var(--pumpkin-dark); text-decoration: none;">
+            Open car desk →
+          </a>
+        </div>
+        <ul class="list" id="car-list"></ul>
+      </section>
+      <section class="card">
         <h3>SSDP Devices</h3>
         <div class="stat" id="ssdp-count">0</div>
         <ul class="list" id="ssdp-list"></ul>
@@ -232,6 +242,8 @@
       const issuesList = byId("issues-list");
       const networkCount = byId("network-count");
       const networkList = byId("network-list");
+      const carCount = byId("car-count");
+      const carList = byId("car-list");
       const ssdpCount = byId("ssdp-count");
       const ssdpList = byId("ssdp-list");
       const haLast = byId("ha-last");
@@ -337,6 +349,22 @@
           const discovery = summary.network_discovery || {};
           networkCount.textContent = `${discovery.device_count || 0} devices`;
           setList(networkList, (discovery.devices || []).slice(0, 6).map(formatDevice));
+
+          const carTelemetry = summary.car_telemetry || {};
+          carCount.textContent = `${carTelemetry.count || 0} samples`;
+          const carLast = carTelemetry.last || {};
+          const carReadings = carLast.readings || {};
+          const carItems = [];
+          if (carLast.profile) carItems.push(`Profile: ${carLast.profile}`);
+          if (carLast.make || carLast.model) {
+            const name = `${carLast.make || ""} ${carLast.model || ""}`.trim();
+            if (name) carItems.push(`Vehicle: ${name}`);
+          }
+          if (carLast.year) carItems.push(`Year: ${carLast.year}`);
+          if (carReadings.speed_kph != null) carItems.push(`Speed: ${carReadings.speed_kph} km/h`);
+          if (carReadings.rpm != null) carItems.push(`RPM: ${carReadings.rpm}`);
+          if (carReadings.coolant_c != null) carItems.push(`Coolant: ${carReadings.coolant_c}°C`);
+          setList(carList, carItems);
 
           const ssdp = discovery.ssdp || [];
           ssdpCount.textContent = ssdp.length;
