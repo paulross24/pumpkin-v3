@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import sys
@@ -30,7 +31,7 @@ from . import propose
 from . import act
 from . import telemetry
 from .audit import append_jsonl
-from .db import init_db
+from .db import init_db, utc_now_iso
 
 
 MAX_TEXT_LEN = 500
@@ -2966,6 +2967,8 @@ _KPH_TO_MPH = 0.621371
 _TRIP_GAP_SECONDS = 600
 _CAR_TELEMETRY_LONG_TERM_DAYS = 365
 _CAR_TELEMETRY_MAX_ROWS = 5000
+_CAR_ALERT_MIN_INTERVAL_SECONDS = 1800
+_CAR_ALERT_MEMORY_KEY = "car.telemetry.last_alert"
 
 
 def _safe_float(value: Any) -> float | None:
@@ -3301,6 +3304,94 @@ def _car_telemetry_summary(conn) -> Dict[str, Any]:
     }
 
 
+def _format_car_alert_message(summary: Dict[str, Any]) -> tuple[str, list[str], list[str]]:
+    analysis = summary.get("analysis") if isinstance(summary.get("analysis"), dict) else {}
+    concerns = analysis.get("concerns") if isinstance(analysis.get("concerns"), list) else []
+    anomalies = analysis.get("anomalies") if isinstance(analysis.get("anomalies"), list) else []
+    vehicle = summary.get("last", {})
+    vehicle_name = None
+    if isinstance(vehicle, dict):
+        make = vehicle.get("make")
+        model = vehicle.get("model")
+        if isinstance(make, str) or isinstance(model, str):
+            vehicle_name = f"{make or ''} {model or ''}".strip()
+    prefix = "Car telemetry alert"
+    if vehicle_name:
+        prefix = f"{prefix} ({vehicle_name})"
+    if concerns:
+        message = f"{prefix}: " + "; ".join(concerns[:3])
+    elif anomalies:
+        message = f"{prefix}: " + "; ".join(anomalies[:3])
+    else:
+        message = f"{prefix}: No issues detected."
+    return message, concerns, anomalies
+
+
+def _maybe_emit_car_alert(conn) -> None:
+    summary = _car_telemetry_summary(conn)
+    message, concerns, anomalies = _format_car_alert_message(summary)
+    if not concerns and not anomalies:
+        return
+    alert_basis = "|".join(concerns + anomalies)
+    alert_hash = hashlib.sha1(alert_basis.encode("utf-8")).hexdigest()
+    last_state = store.get_memory(conn, _CAR_ALERT_MEMORY_KEY)
+    last_hash = None
+    last_ts = None
+    if isinstance(last_state, dict):
+        last_hash = last_state.get("hash")
+        last_ts = _parse_iso_ts(last_state.get("ts"))
+    if last_hash == alert_hash and last_ts:
+        if (datetime.now(timezone.utc) - last_ts).total_seconds() < _CAR_ALERT_MIN_INTERVAL_SECONDS:
+            return
+    payload = {
+        "message": message,
+        "concerns": concerns,
+        "anomalies": anomalies,
+        "report_url": "/ui/car",
+    }
+    store.insert_event(
+        conn,
+        source="voice",
+        event_type="car.alert",
+        payload=payload,
+        severity="warn",
+    )
+    store.set_memory(
+        conn,
+        _CAR_ALERT_MEMORY_KEY,
+        {"hash": alert_hash, "ts": utc_now_iso()},
+    )
+    try:
+        act.notify_local(message, str(settings.audit_path()))
+    except Exception:
+        pass
+
+
+def _list_alerts(conn, limit: int = 50) -> list[Dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM events WHERE type = ? ORDER BY id DESC LIMIT ?",
+        ("car.alert", int(limit)),
+    ).fetchall()
+    alerts: list[Dict[str, Any]] = []
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"])
+        except Exception:
+            payload = {}
+        alerts.append(
+            {
+                "id": row["id"],
+                "ts": row["ts"],
+                "severity": row["severity"],
+                "message": payload.get("message"),
+                "concerns": payload.get("concerns", []),
+                "anomalies": payload.get("anomalies", []),
+                "report_url": payload.get("report_url", "/ui/car"),
+            }
+        )
+    return alerts
+
+
 class VoiceHandler(BaseHTTPRequestHandler):
     server_version = "PumpkinVoice/0.1"
 
@@ -3457,10 +3548,11 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "endpoints": [
                             "GET /",
                             "GET /health",
-                            "GET /ui",
-                            "GET /ui/proposals",
-                            "GET /ui/network",
-                            "GET /ui/car",
+                        "GET /ui",
+                        "GET /ui/proposals",
+                        "GET /ui/network",
+                        "GET /ui/car",
+                        "GET /ui/alerts",
                         "GET /config",
                         "GET /catalog",
                         "GET /capabilities",
@@ -3470,6 +3562,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "GET /summary",
                         "GET /timeline",
                         "GET /car/telemetry",
+                        "GET /notifications",
                             "GET /errors",
                             "GET /llm/config",
                             "POST /ask",
@@ -3498,9 +3591,18 @@ class VoiceHandler(BaseHTTPRequestHandler):
             if path == "/ui/car":
                 _send_html(self, 200, _load_voice_ui_asset("voice_ui_car.html"))
                 return
+            if path == "/ui/alerts":
+                _send_html(self, 200, _load_voice_ui_asset("voice_ui_alerts.html"))
+                return
             if path == "/car/telemetry":
                 conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
                 _send_json(self, 200, {"status": "ok", "car_telemetry": _car_telemetry_summary(conn)})
+                return
+            if path == "/notifications":
+                limit = _parse_limit(params.get("limit", [None])[0])
+                conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+                alerts = _list_alerts(conn, limit=limit)
+                _send_json(self, 200, {"count": len(alerts), "notifications": alerts})
                 return
             if path == "/config":
                 bind_host, bind_port = _effective_bind(self)
@@ -3777,6 +3879,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "/catalog": {"get": {"summary": "Module catalog"}},
                             "/capabilities": {"get": {"summary": "Capability snapshot"}},
                             "/car/telemetry": {"get": {"summary": "Car telemetry summary"}},
+                            "/notifications": {"get": {"summary": "Recent car telemetry alerts"}},
                             "/summary": {
                                 "get": {
                                     "summary": "System summary",
@@ -4237,6 +4340,8 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 payload={"text": text, "source": source, "device": device},
                 severity="info",
             )
+            if _parse_car_telemetry_text(text):
+                _maybe_emit_car_alert(conn)
         except Exception:
             pass
         _send_json(

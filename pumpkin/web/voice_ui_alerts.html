@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pumpkin Alerts</title>
+    <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='29' y='10' width='6' height='12' fill='%235b4b41'/><circle cx='32' cy='36' r='20' fill='%23e67c2e'/><circle cx='20' cy='36' r='14' fill='%23f08a3a' opacity='0.85'/><circle cx='44' cy='36' r='14' fill='%23f08a3a' opacity='0.85'/></svg>" />
+    <style>
+      :root {
+        --bg: #f6efe8;
+        --bg-accent: #f2d6b5;
+        --ink: #2a1b12;
+        --muted: #5b4b41;
+        --pumpkin: #e67c2e;
+        --pumpkin-dark: #b95519;
+        --card: #fff8f2;
+        --line: #e5d6c6;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Iowan Old Style", "Palatino", "Bookman", "Georgia", serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at 10% 10%, rgba(230, 124, 46, 0.15), transparent 40%),
+          linear-gradient(160deg, var(--bg), var(--bg-accent));
+        min-height: 100vh;
+      }
+      header {
+        padding: 28px 24px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .title {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 26px;
+        font-weight: 700;
+      }
+      .pumpkin-icon {
+        width: 24px;
+        height: 24px;
+        flex: 0 0 auto;
+      }
+      .sub { color: var(--muted); }
+      main {
+        padding: 12px 24px 40px;
+        display: grid;
+        gap: 16px;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 16px;
+        box-shadow: 0 12px 32px rgba(50, 33, 22, 0.08);
+      }
+      .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      .pill {
+        display: inline-block;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: rgba(230, 124, 46, 0.12);
+        color: var(--pumpkin-dark);
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .list {
+        margin: 10px 0 0;
+        padding: 0;
+        list-style: none;
+        display: grid;
+        gap: 10px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+      .alert {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 10px;
+        background: #fffdf9;
+        display: grid;
+        gap: 6px;
+      }
+      a { color: var(--pumpkin-dark); text-decoration: none; }
+      button {
+        border: 1px solid var(--line);
+        background: var(--card);
+        color: var(--ink);
+        padding: 8px 12px;
+        border-radius: 10px;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="title">
+        <svg class="pumpkin-icon" viewBox="0 0 64 64" aria-hidden="true">
+          <rect x="29" y="10" width="6" height="12" fill="var(--muted)" />
+          <circle cx="32" cy="36" r="20" fill="var(--pumpkin)" />
+          <circle cx="20" cy="36" r="14" fill="#f08a3a" opacity="0.85" />
+          <circle cx="44" cy="36" r="14" fill="#f08a3a" opacity="0.85" />
+        </svg>
+        Alerts Desk
+      </div>
+      <div class="sub">
+        Car telemetry alerts with links to detailed reports.
+        <a href="/ui">Back to dashboard →</a>
+      </div>
+    </header>
+    <main>
+      <section class="card">
+        <div class="row">
+          <span class="pill" id="count">0 alerts</span>
+          <button id="refresh">Refresh</button>
+        </div>
+        <ul class="list" id="alert-list"></ul>
+      </section>
+    </main>
+    <script>
+      const countNode = document.getElementById("count");
+      const listNode = document.getElementById("alert-list");
+
+      const render = (items) => {
+        listNode.innerHTML = "";
+        if (!items.length) {
+          const li = document.createElement("li");
+          li.textContent = "No alerts yet.";
+          listNode.appendChild(li);
+          return;
+        }
+        items.forEach((alert) => {
+          const li = document.createElement("li");
+          li.className = "alert";
+          const title = document.createElement("div");
+          title.textContent = alert.message || "Alert";
+          const meta = document.createElement("div");
+          meta.textContent = alert.ts || "unknown time";
+          const link = document.createElement("a");
+          link.href = alert.report_url || "/ui/car";
+          link.textContent = "Open report →";
+          li.appendChild(title);
+          li.appendChild(meta);
+          li.appendChild(link);
+          listNode.appendChild(li);
+        });
+      };
+
+      const load = async () => {
+        try {
+          const res = await fetch("/notifications?limit=25");
+          const data = await res.json();
+          const items = Array.isArray(data.notifications) ? data.notifications : [];
+          countNode.textContent = `${data.count ?? items.length} alerts`;
+          render(items);
+        } catch (err) {
+          countNode.textContent = "Load failed";
+          render([]);
+        }
+      };
+
+      document.getElementById("refresh").addEventListener("click", load);
+      load();
+    </script>
+  </body>
+</html>

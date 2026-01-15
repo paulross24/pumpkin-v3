@@ -189,6 +189,16 @@
         <ul class="list" id="issues-list"></ul>
       </section>
       <section class="card">
+        <h3>Alerts</h3>
+        <div class="stat" id="alerts-count">0</div>
+        <div class="sub" style="margin-bottom: 8px;">
+          <a href="/ui/alerts" style="color: var(--pumpkin-dark); text-decoration: none;">
+            Open alerts desk →
+          </a>
+        </div>
+        <ul class="list" id="alerts-list"></ul>
+      </section>
+      <section class="card">
         <h3>Network Scan</h3>
         <div class="stat" id="network-count">0 devices</div>
         <div class="sub" style="margin-bottom: 8px;">
@@ -240,6 +250,8 @@
       const proposalList = byId("proposal-list");
       const issuesCount = byId("issues-count");
       const issuesList = byId("issues-list");
+      const alertsCount = byId("alerts-count");
+      const alertsList = byId("alerts-list");
       const networkCount = byId("network-count");
       const networkList = byId("network-list");
       const carCount = byId("car-count");
@@ -401,9 +413,26 @@
             haLast.textContent = "none";
             setList(haMeta, []);
           }
+          await loadAlerts();
           await loadPendingProposals();
         } catch (err) {
           subtitle.textContent = "Failed to load status.";
+        }
+      };
+
+      const loadAlerts = async () => {
+        try {
+          const res = await fetch("/notifications?limit=5");
+          const data = await res.json();
+          const items = Array.isArray(data.notifications) ? data.notifications : [];
+          alertsCount.textContent = data.count ?? items.length;
+          setList(
+            alertsList,
+            items.map((alert) => `${alert.ts || "unknown"} - ${alert.message || "alert"}`)
+          );
+        } catch (err) {
+          alertsCount.textContent = "0";
+          setList(alertsList, ["Failed to load alerts"]);
         }
       };
 
