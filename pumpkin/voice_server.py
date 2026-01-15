@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import difflib
 from typing import Any, Dict, Iterable, List
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from . import settings
 from . import store
@@ -74,6 +74,16 @@ def _send_html(handler: BaseHTTPRequestHandler, status: int, body: str) -> None:
     handler.send_header("Content-Length", str(len(data)))
     handler.end_headers()
     handler.wfile.write(data)
+
+
+def _send_redirect(handler: BaseHTTPRequestHandler, location: str) -> None:
+    body = f"Redirecting to {location}".encode("utf-8")
+    handler.send_response(302)
+    handler.send_header("Location", location)
+    handler.send_header("Content-Type", "text/plain; charset=utf-8")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
 
 
 def _log_request(handler: BaseHTTPRequestHandler, status: int, payload: Dict[str, Any]) -> None:
@@ -3552,6 +3562,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "endpoints": [
                             "GET /",
                             "GET /health",
+                            "GET /ha/callback",
                             "GET /ui",
                             "GET /ui/proposals",
                             "GET /ui/network",
@@ -3586,6 +3597,20 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         ],
                     },
                 )
+                return
+            if path == "/ha/callback":
+                code = params.get("code", [None])[0]
+                state = params.get("state", [None])[0]
+                error = params.get("error", [None])[0]
+                target = "pumpkin-ha://auth"
+                if error:
+                    target = f"{target}?error={quote(str(error))}"
+                elif code and state:
+                    target = (
+                        f"{target}?code={quote(str(code))}"
+                        f"&state={quote(str(state))}"
+                    )
+                _send_redirect(self, target)
                 return
             if path in {"/ui", "/ui/"}:
                 _send_html(self, 200, _load_voice_ui_asset("voice_ui.html"))
@@ -3907,6 +3932,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "paths": {
                             "/": {"get": {"summary": "Service metadata"}},
                             "/health": {"get": {"summary": "Health check"}},
+                            "/ha/callback": {"get": {"summary": "Home Assistant OAuth callback redirect"}},
                             "/config": {"get": {"summary": "Runtime config"}},
                             "/catalog": {"get": {"summary": "Module catalog"}},
                             "/capabilities": {"get": {"summary": "Capability snapshot"}},
