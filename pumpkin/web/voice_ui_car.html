@@ -138,6 +138,10 @@
             <ul class="list" id="concern-list"></ul>
           </div>
           <div>
+            <div class="section-title">Anomalies</div>
+            <ul class="list" id="anomaly-list"></ul>
+          </div>
+          <div>
             <div class="section-title">Notes</div>
             <ul class="list" id="note-list"></ul>
           </div>
@@ -153,6 +157,10 @@
             <div class="section-title">Recent trips</div>
             <ul class="list" id="trip-list"></ul>
           </div>
+          <div>
+            <div class="section-title">Long-term summary</div>
+            <ul class="list" id="longterm-list"></ul>
+          </div>
         </div>
       </section>
     </main>
@@ -162,10 +170,12 @@
       const readingList = document.getElementById("reading-list");
       const statsList = document.getElementById("stats-list");
       const concernList = document.getElementById("concern-list");
+      const anomalyList = document.getElementById("anomaly-list");
       const noteList = document.getElementById("note-list");
       const drivingList = document.getElementById("driving-list");
       const healthList = document.getElementById("health-list");
       const tripList = document.getElementById("trip-list");
+      const longTermList = document.getElementById("longterm-list");
       const kphToMph = (value) => (value == null ? null : value * 0.621371);
 
       const setList = (node, items) => {
@@ -235,6 +245,7 @@
 
           const analysis = summary.analysis || {};
           setList(concernList, analysis.concerns || []);
+          setList(anomalyList, analysis.anomalies || []);
           setList(noteList, analysis.notes || []);
 
           const driving = analysis.driving || {};
@@ -261,6 +272,20 @@
             return `${trip.start || "?"} → ${trip.end || "?"} (${durationMin} min, ${distance} mi)`;
           });
           setList(tripList, tripItems);
+
+          const longTerm = analysis.long_term || {};
+          const windowItems = (longTerm.windows || []).map((window) => {
+            const stats = window.stats || {};
+            const avg = stats.avg_speed_mph != null ? stats.avg_speed_mph.toFixed(1) : "?";
+            const max = stats.max_speed_mph != null ? stats.max_speed_mph.toFixed(1) : "?";
+            const rpm = stats.avg_rpm != null ? stats.avg_rpm.toFixed(0) : "?";
+            const coolant = stats.avg_coolant_c != null ? stats.avg_coolant_c.toFixed(1) : "?";
+            return `${window.days}d: avg ${avg} mph, max ${max} mph, avg RPM ${rpm}, avg coolant ${coolant}°C`;
+          });
+          if (longTerm.range && longTerm.range.start && longTerm.range.end) {
+            windowItems.unshift(`Range: ${longTerm.range.start} → ${longTerm.range.end}`);
+          }
+          setList(longTermList, windowItems);
         } catch (err) {
           countNode.textContent = "Load failed";
         }
