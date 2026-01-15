@@ -221,6 +221,16 @@
         <ul class="list" id="network-list"></ul>
       </section>
       <section class="card">
+        <h3>Opportunities</h3>
+        <div class="stat" id="opportunity-count">0</div>
+        <div class="sub" style="margin-bottom: 8px;">
+          <a href="/ui/inventory" style="color: var(--pumpkin-dark); text-decoration: none;">
+            Open inventory →
+          </a>
+        </div>
+        <ul class="list" id="opportunity-list"></ul>
+      </section>
+      <section class="card">
         <h3>Car Telemetry</h3>
         <div class="stat" id="car-count">0 samples</div>
         <div class="sub" style="margin-bottom: 8px;">
@@ -266,6 +276,8 @@
       const alertsList = byId("alerts-list");
       const networkCount = byId("network-count");
       const networkList = byId("network-list");
+      const opportunityCount = byId("opportunity-count");
+      const opportunityList = byId("opportunity-list");
       const carCount = byId("car-count");
       const carList = byId("car-list");
       const ssdpCount = byId("ssdp-count");
@@ -377,6 +389,13 @@
           const discovery = summary.network_discovery || {};
           networkCount.textContent = `${discovery.device_count || 0} devices`;
           setList(networkList, (discovery.devices || []).slice(0, 6).map(formatDevice));
+
+          const opportunities = summary.opportunities || [];
+          opportunityCount.textContent = opportunities.length;
+          setList(
+            opportunityList,
+            opportunities.map((item) => `${item.title} — ${item.example}`)
+          );
 
           const carTelemetry = summary.car_telemetry || {};
           carCount.textContent = `${carTelemetry.count || 0} samples`;
