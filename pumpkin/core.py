@@ -16,6 +16,7 @@ from . import propose
 from . import store
 from . import insights
 from . import module_config
+from . import inventory as inventory_mod
 from .db import init_db
 from .act import execute_action
 
@@ -187,6 +188,25 @@ def _collect_module_events(conn) -> List[Dict[str, Any]]:
             _record_cooldown(conn, "network.discovery")
 
     return events
+
+
+def _inventory_change_event(conn) -> Dict[str, Any] | None:
+    inventory = inventory_mod.snapshot(conn)
+    opportunities = inventory_mod.opportunities(inventory)
+    digest = inventory_mod.digest(inventory, opportunities)
+    last_digest = store.get_memory(conn, "inventory.last_hash")
+    if last_digest == digest:
+        return None
+    store.set_memory(conn, "inventory.last_hash", digest)
+    return {
+        "source": "inventory",
+        "type": "inventory.changed",
+        "payload": {
+            "summary": inventory_mod.summary(inventory),
+            "opportunities": opportunities,
+        },
+        "severity": "info",
+    }
 
 
 def _load_events_since_last(conn) -> List[Any]:
@@ -523,6 +543,9 @@ def run_once() -> None:
     _insert_events(conn, events)
     module_events = _collect_module_events(conn)
     _insert_events(conn, module_events)
+    inventory_event = _inventory_change_event(conn)
+    if inventory_event:
+        _insert_events(conn, [inventory_event])
 
     snapshot_event = _latest_event(conn, "system.snapshot")
     system_snapshot = snapshot_event.get("payload") if snapshot_event else None

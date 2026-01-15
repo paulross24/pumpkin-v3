@@ -1353,6 +1353,59 @@ def _rule_based_proposals(events: List[Any], conn) -> List[Dict[str, Any]]:
                 )
             continue
 
+        if row["type"] == "inventory.changed":
+            payload = json.loads(row["payload_json"])
+            opportunities = payload.get("opportunities", [])
+            inventory_summary = payload.get("summary", {})
+            if not isinstance(opportunities, list):
+                continue
+            for item in opportunities:
+                if not isinstance(item, dict):
+                    continue
+                title = item.get("title")
+                why = item.get("why")
+                example = item.get("example")
+                source = item.get("source")
+                if not isinstance(title, str) or not title.strip():
+                    continue
+                summary = f"Inventory opportunity: {title.strip()}"
+                if store.proposal_exists(
+                    conn,
+                    summary,
+                    statuses=["pending", "approved", "executed", "failed", "rejected"],
+                ):
+                    continue
+                details = {
+                    "rationale": why or "Inventory update suggests an opportunity to improve automation.",
+                    "source": source or "inventory",
+                    "inventory_summary": inventory_summary if isinstance(inventory_summary, dict) else {},
+                    "example": example or "",
+                    "implementation": (
+                        "Review available devices/entities that enable this opportunity, "
+                        "draft a concrete plan, and propose any needed configuration changes."
+                    ),
+                    "verification": "Confirm the capability works end-to-end and appears in the UI.",
+                    "rollback_plan": "Disable or remove the new automation if it causes issues.",
+                }
+                proposals.append(
+                    {
+                        "kind": "maintenance",
+                        "summary": summary,
+                        "details": details,
+                        "risk": 0.2,
+                        "expected_outcome": "An inventory-driven improvement is reviewed and scoped.",
+                        "source_event_ids": [row["id"]],
+                        "needs_new_capability": False,
+                        "capability_request": None,
+                        "steps": [
+                            "Review the opportunity details and scope the change.",
+                            "Draft the implementation plan and required configuration updates.",
+                            "Verify the resulting behavior and rollback if needed.",
+                        ],
+                    }
+                )
+            continue
+
         if row["type"] in {"homeassistant.token_missing", "homeassistant.request_failed"}:
             details = {
                 "rationale": "Home Assistant access is not available.",
