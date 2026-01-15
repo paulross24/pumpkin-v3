@@ -133,6 +133,26 @@
             <div class="section-title">Stats (recent)</div>
             <ul class="list" id="stats-list"></ul>
           </div>
+          <div>
+            <div class="section-title">Concerns</div>
+            <ul class="list" id="concern-list"></ul>
+          </div>
+          <div>
+            <div class="section-title">Notes</div>
+            <ul class="list" id="note-list"></ul>
+          </div>
+          <div>
+            <div class="section-title">Driving behavior</div>
+            <ul class="list" id="driving-list"></ul>
+          </div>
+          <div>
+            <div class="section-title">Health hints</div>
+            <ul class="list" id="health-list"></ul>
+          </div>
+          <div>
+            <div class="section-title">Recent trips</div>
+            <ul class="list" id="trip-list"></ul>
+          </div>
         </div>
       </section>
     </main>
@@ -141,6 +161,12 @@
       const lastList = document.getElementById("last-list");
       const readingList = document.getElementById("reading-list");
       const statsList = document.getElementById("stats-list");
+      const concernList = document.getElementById("concern-list");
+      const noteList = document.getElementById("note-list");
+      const drivingList = document.getElementById("driving-list");
+      const healthList = document.getElementById("health-list");
+      const tripList = document.getElementById("trip-list");
+      const kphToMph = (value) => (value == null ? null : value * 0.621371);
 
       const setList = (node, items) => {
         node.innerHTML = "";
@@ -180,7 +206,10 @@
           setList(lastList, lastItems);
 
           const readingItems = [];
-          if (readings.speed_kph != null) readingItems.push(`Speed: ${readings.speed_kph} km/h`);
+          if (readings.speed_kph != null) {
+            const mph = kphToMph(readings.speed_kph);
+            readingItems.push(`Speed: ${mph.toFixed(1)} mph`);
+          }
           if (readings.rpm != null) readingItems.push(`RPM: ${readings.rpm}`);
           if (readings.coolant_c != null) readingItems.push(`Coolant: ${readings.coolant_c}°C`);
           if (readings.intake_c != null) readingItems.push(`Intake: ${readings.intake_c}°C`);
@@ -194,13 +223,44 @@
 
           const stats = summary.stats || {};
           const statsItems = [];
-          if (stats.avg_speed_kph != null) statsItems.push(`Avg speed: ${stats.avg_speed_kph.toFixed(1)} km/h`);
-          if (stats.max_speed_kph != null) statsItems.push(`Max speed: ${stats.max_speed_kph.toFixed(1)} km/h`);
+          if (stats.avg_speed_mph != null) statsItems.push(`Avg speed: ${stats.avg_speed_mph.toFixed(1)} mph`);
+          if (stats.max_speed_mph != null) statsItems.push(`Max speed: ${stats.max_speed_mph.toFixed(1)} mph`);
           if (stats.avg_rpm != null) statsItems.push(`Avg RPM: ${stats.avg_rpm.toFixed(0)}`);
           if (stats.max_rpm != null) statsItems.push(`Max RPM: ${stats.max_rpm.toFixed(0)}`);
           if (stats.avg_coolant_c != null) statsItems.push(`Avg coolant: ${stats.avg_coolant_c.toFixed(1)}°C`);
+          if (stats.max_coolant_c != null) statsItems.push(`Max coolant: ${stats.max_coolant_c.toFixed(1)}°C`);
+          if (stats.idle_pct != null) statsItems.push(`Idle time: ${(stats.idle_pct * 100).toFixed(0)}%`);
           if (stats.sampled != null) statsItems.push(`Samples with speed: ${stats.sampled}`);
           setList(statsList, statsItems);
+
+          const analysis = summary.analysis || {};
+          setList(concernList, analysis.concerns || []);
+          setList(noteList, analysis.notes || []);
+
+          const driving = analysis.driving || {};
+          const drivingItems = [];
+          if (driving.avg_speed_mph != null) drivingItems.push(`Avg speed: ${driving.avg_speed_mph.toFixed(1)} mph`);
+          if (driving.max_speed_mph != null) drivingItems.push(`Max speed: ${driving.max_speed_mph.toFixed(1)} mph`);
+          if (driving.avg_rpm != null) drivingItems.push(`Avg RPM: ${driving.avg_rpm.toFixed(0)}`);
+          if (driving.max_rpm != null) drivingItems.push(`Max RPM: ${driving.max_rpm.toFixed(0)}`);
+          if (driving.idle_pct != null) drivingItems.push(`Idle time: ${(driving.idle_pct * 100).toFixed(0)}%`);
+          setList(drivingList, drivingItems);
+
+          const health = analysis.health || {};
+          const healthItems = [];
+          if (health.avg_coolant_c != null) healthItems.push(`Avg coolant: ${health.avg_coolant_c.toFixed(1)}°C`);
+          if (health.max_coolant_c != null) healthItems.push(`Max coolant: ${health.max_coolant_c.toFixed(1)}°C`);
+          if (health.fuel_level_pct != null) healthItems.push(`Fuel level: ${health.fuel_level_pct.toFixed(0)}%`);
+          if (health.intake_c != null) healthItems.push(`Intake temp: ${health.intake_c.toFixed(1)}°C`);
+          setList(healthList, healthItems);
+
+          const trips = analysis.trips || [];
+          const tripItems = trips.map((trip) => {
+            const distance = trip.distance_km != null ? (trip.distance_km * 0.621371).toFixed(1) : "?";
+            const durationMin = trip.duration_s != null ? Math.round(trip.duration_s / 60) : "?";
+            return `${trip.start || "?"} → ${trip.end || "?"} (${durationMin} min, ${distance} mi)`;
+          });
+          setList(tripList, tripItems);
         } catch (err) {
           countNode.textContent = "Load failed";
         }

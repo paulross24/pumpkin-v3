@@ -2962,6 +2962,49 @@ def _parse_car_telemetry_text(text: str) -> Dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
+_KPH_TO_MPH = 0.621371
+_TRIP_GAP_SECONDS = 600
+
+
+def _safe_float(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _parse_iso_ts(value: Any) -> datetime | None:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(value, tz=timezone.utc)
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        try:
+            return datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+    return None
+
+
+def _format_ts(value: datetime | None) -> str | None:
+    if not value:
+        return None
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 def _collect_car_telemetry(conn, limit: int = 200) -> list[Dict[str, Any]]:
     rows = store.list_events(conn, limit=limit, source="voice", event_type="voice.ingest")
     items: list[Dict[str, Any]] = []
@@ -2985,25 +3028,34 @@ def _collect_car_telemetry(conn, limit: int = 200) -> list[Dict[str, Any]]:
 def _car_telemetry_summary(conn) -> Dict[str, Any]:
     records = _collect_car_telemetry(conn, limit=200)
     if not records:
-        return {"count": 0, "recent_profiles": []}
+        return {"count": 0, "recent_profiles": [], "analysis": {"concerns": [], "notes": ["No telemetry available."]}}
     latest = records[0]
     readings = latest.get("readings") if isinstance(latest.get("readings"), dict) else {}
     speed_samples = []
     rpm_samples = []
     coolant_samples = []
+    idle_samples = 0
+    samples_with_speed = 0
+    samples_with_time: list[tuple[datetime, Dict[str, Any], Dict[str, Any]]] = []
     for record in records:
         rec_readings = record.get("readings")
         if not isinstance(rec_readings, dict):
             continue
-        speed = rec_readings.get("speed_kph")
-        rpm = rec_readings.get("rpm")
-        coolant = rec_readings.get("coolant_c")
-        if isinstance(speed, (int, float)):
-            speed_samples.append(float(speed))
-        if isinstance(rpm, (int, float)):
-            rpm_samples.append(float(rpm))
-        if isinstance(coolant, (int, float)):
-            coolant_samples.append(float(coolant))
+        speed = _safe_float(rec_readings.get("speed_kph"))
+        rpm = _safe_float(rec_readings.get("rpm"))
+        coolant = _safe_float(rec_readings.get("coolant_c"))
+        ts = _parse_iso_ts(record.get("ts") or record.get("_event_ts"))
+        if speed is not None:
+            speed_samples.append(speed)
+            samples_with_speed += 1
+        if rpm is not None:
+            rpm_samples.append(rpm)
+        if coolant is not None:
+            coolant_samples.append(coolant)
+        if speed is not None and rpm is not None and speed < 1 and rpm > 0:
+            idle_samples += 1
+        if ts:
+            samples_with_time.append((ts, rec_readings, record))
     profiles = []
     seen = set()
     for record in records:
@@ -3011,6 +3063,75 @@ def _car_telemetry_summary(conn) -> Dict[str, Any]:
         if isinstance(profile, str) and profile and profile not in seen:
             profiles.append(profile)
             seen.add(profile)
+    samples_with_time.sort(key=lambda item: item[0])
+    trips: list[Dict[str, Any]] = []
+    if samples_with_time:
+        trip_start = samples_with_time[0][0]
+        trip_end = trip_start
+        distance_km = 0.0
+        prev_ts = samples_with_time[0][0]
+        prev_speed = _safe_float(samples_with_time[0][1].get("speed_kph"))
+        for ts, rec_readings, _record in samples_with_time[1:]:
+            gap = (ts - prev_ts).total_seconds()
+            if gap > _TRIP_GAP_SECONDS:
+                duration_s = (trip_end - trip_start).total_seconds()
+                if duration_s > 0:
+                    trips.append(
+                        {
+                            "start": _format_ts(trip_start),
+                            "end": _format_ts(trip_end),
+                            "duration_s": int(duration_s),
+                            "distance_km": round(distance_km, 2),
+                        }
+                    )
+                trip_start = ts
+                distance_km = 0.0
+            else:
+                if prev_speed is not None:
+                    distance_km += prev_speed * (gap / 3600.0)
+            trip_end = ts
+            prev_ts = ts
+            prev_speed = _safe_float(rec_readings.get("speed_kph"))
+        duration_s = (trip_end - trip_start).total_seconds()
+        if duration_s > 0:
+            trips.append(
+                {
+                    "start": _format_ts(trip_start),
+                    "end": _format_ts(trip_end),
+                    "duration_s": int(duration_s),
+                    "distance_km": round(distance_km, 2),
+                }
+            )
+    concerns = []
+    notes = []
+    max_speed = max(speed_samples) if speed_samples else None
+    max_speed_mph = max_speed * _KPH_TO_MPH if max_speed is not None else None
+    avg_speed = sum(speed_samples) / len(speed_samples) if speed_samples else None
+    avg_speed_mph = avg_speed * _KPH_TO_MPH if avg_speed is not None else None
+    max_rpm = max(rpm_samples) if rpm_samples else None
+    avg_rpm = sum(rpm_samples) / len(rpm_samples) if rpm_samples else None
+    max_coolant = max(coolant_samples) if coolant_samples else None
+    avg_coolant = sum(coolant_samples) / len(coolant_samples) if coolant_samples else None
+    idle_pct = (idle_samples / samples_with_speed) if samples_with_speed else None
+    latest_fuel = _safe_float(readings.get("fuel_level_pct"))
+    if max_coolant is not None and max_coolant >= 110:
+        concerns.append(f"Coolant peaked at {max_coolant:.1f}°C (possible overheating).")
+    elif avg_coolant is not None and avg_coolant >= 105:
+        concerns.append(f"Average coolant temperature is high ({avg_coolant:.1f}°C).")
+    if max_rpm is not None and max_rpm >= 5000:
+        concerns.append(f"High RPM spikes detected (max {max_rpm:.0f}).")
+    if max_speed_mph is not None and max_speed_mph >= 120:
+        concerns.append(f"Very high speed detected (max {max_speed_mph:.0f} mph).")
+    if latest_fuel is not None and latest_fuel <= 10:
+        concerns.append(f"Fuel level is low ({latest_fuel:.0f}%).")
+    if idle_pct is not None and idle_pct >= 0.4:
+        concerns.append(f"High idle time ({idle_pct * 100:.0f}% of samples).")
+    if not concerns:
+        notes.append("No obvious issues detected in recent telemetry.")
+    if len(records) < 10:
+        notes.append("Limited telemetry sample size; analysis may be incomplete.")
+    if not trips:
+        notes.append("Trip segmentation unavailable (insufficient timestamps).")
     return {
         "count": len(records),
         "last": {
@@ -3026,14 +3147,36 @@ def _car_telemetry_summary(conn) -> Dict[str, Any]:
             "readings": readings,
         },
         "stats": {
-            "avg_speed_kph": sum(speed_samples) / len(speed_samples) if speed_samples else None,
-            "max_speed_kph": max(speed_samples) if speed_samples else None,
-            "avg_rpm": sum(rpm_samples) / len(rpm_samples) if rpm_samples else None,
-            "max_rpm": max(rpm_samples) if rpm_samples else None,
-            "avg_coolant_c": sum(coolant_samples) / len(coolant_samples) if coolant_samples else None,
+            "avg_speed_kph": avg_speed,
+            "max_speed_kph": max_speed,
+            "avg_speed_mph": avg_speed_mph,
+            "max_speed_mph": max_speed_mph,
+            "avg_rpm": avg_rpm,
+            "max_rpm": max_rpm,
+            "avg_coolant_c": avg_coolant,
+            "max_coolant_c": max_coolant,
+            "idle_pct": idle_pct,
             "sampled": len(speed_samples),
         },
         "recent_profiles": profiles,
+        "analysis": {
+            "concerns": concerns,
+            "notes": notes,
+            "driving": {
+                "avg_speed_mph": avg_speed_mph,
+                "max_speed_mph": max_speed_mph,
+                "avg_rpm": avg_rpm,
+                "max_rpm": max_rpm,
+                "idle_pct": idle_pct,
+            },
+            "health": {
+                "avg_coolant_c": avg_coolant,
+                "max_coolant_c": max_coolant,
+                "fuel_level_pct": latest_fuel,
+                "intake_c": _safe_float(readings.get("intake_c")),
+            },
+            "trips": trips[-5:],
+        },
     }
 
 

@@ -361,7 +361,10 @@
             if (name) carItems.push(`Vehicle: ${name}`);
           }
           if (carLast.year) carItems.push(`Year: ${carLast.year}`);
-          if (carReadings.speed_kph != null) carItems.push(`Speed: ${carReadings.speed_kph} km/h`);
+          if (carReadings.speed_kph != null) {
+            const mph = carReadings.speed_kph * 0.621371;
+            carItems.push(`Speed: ${mph.toFixed(1)} mph`);
+          }
           if (carReadings.rpm != null) carItems.push(`RPM: ${carReadings.rpm}`);
           if (carReadings.coolant_c != null) carItems.push(`Coolant: ${carReadings.coolant_c}°C`);
           setList(carList, carItems);
