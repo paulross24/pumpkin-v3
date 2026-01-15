@@ -310,6 +310,30 @@ def _update_profile_activity(
         pass
 
 
+def _apply_ha_identity(
+    conn,
+    device: str | None,
+    ha_user_id: str | None,
+    ha_user_name: str | None,
+) -> None:
+    if not isinstance(device, str) or not device.strip():
+        return
+    if not isinstance(ha_user_id, str) or not ha_user_id.strip():
+        return
+    key = f"speaker.profile.device:{device.strip()}"
+    profile = store.get_memory(conn, key)
+    if not isinstance(profile, dict):
+        profile = {"state": "named"}
+    profile["ha_user_id"] = ha_user_id.strip()
+    if isinstance(ha_user_name, str) and ha_user_name.strip():
+        profile["name"] = ha_user_name.strip()
+    if not profile.get("created_ts"):
+        profile["created_ts"] = datetime.now(timezone.utc).isoformat()
+    profile["last_seen_ts"] = datetime.now(timezone.utc).isoformat()
+    profile["last_device"] = device.strip()
+    store.set_memory(conn, key, profile)
+
+
 def _append_recent_turn(memory: Dict[str, Any], role: str, text: str) -> None:
     recent = memory.get("recent")
     if not isinstance(recent, list):
@@ -4381,6 +4405,14 @@ class VoiceHandler(BaseHTTPRequestHandler):
         if device is not None and not isinstance(device, str):
             _bad_request(self, "device must be a string")
             return
+        ha_user_id = data.get("ha_user_id")
+        if ha_user_id is not None and not isinstance(ha_user_id, str):
+            _bad_request(self, "ha_user_id must be a string")
+            return
+        ha_user_name = data.get("ha_user_name")
+        if ha_user_name is not None and not isinstance(ha_user_name, str):
+            _bad_request(self, "ha_user_name must be a string")
+            return
         truncated = _truncate_text(text, INGEST_LOG_TEXT_LIMIT)
         print(
             "PumpkinVoice ingest "
@@ -4394,11 +4426,18 @@ class VoiceHandler(BaseHTTPRequestHandler):
                     store.set_memory(conn, "llm.openai_api_key", header_api_key.strip())
                 except Exception:
                     pass
+            _apply_ha_identity(conn, device, ha_user_id, ha_user_name)
             store.insert_event(
                 conn,
                 source="voice",
                 event_type="voice.ingest",
-                payload={"text": text, "source": source, "device": device},
+                payload={
+                    "text": text,
+                    "source": source,
+                    "device": device,
+                    "ha_user_id": ha_user_id,
+                    "ha_user_name": ha_user_name,
+                },
                 severity="info",
             )
             if _parse_car_telemetry_text(text):
@@ -4478,6 +4517,14 @@ class VoiceHandler(BaseHTTPRequestHandler):
         if device is not None and not isinstance(device, str):
             _bad_request(self, "device must be a string")
             return
+        ha_user_id = data.get("ha_user_id")
+        if ha_user_id is not None and not isinstance(ha_user_id, str):
+            _bad_request(self, "ha_user_id must be a string")
+            return
+        ha_user_name = data.get("ha_user_name")
+        if ha_user_name is not None and not isinstance(ha_user_name, str):
+            _bad_request(self, "ha_user_name must be a string")
+            return
         async_flag = _parse_bool(data.get("async")) or _parse_bool(
             self.headers.get("X-Pumpkin-Async")
         )
@@ -4485,6 +4532,8 @@ class VoiceHandler(BaseHTTPRequestHandler):
             "text": text,
             "source": source,
             "device": device,
+            "ha_user_id": ha_user_id,
+            "ha_user_name": ha_user_name,
             "client_ip": self.client_address[0] if self.client_address else None,
             "ts": data.get("ts"),
             "location": data.get("location"),
@@ -4504,6 +4553,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 store.set_memory(conn, "llm.openai_api_key", header_api_key.strip())
             except Exception:
                 pass
+        _apply_ha_identity(conn, device, ha_user_id, ha_user_name)
         memory_ctx = {
             "api_key": api_key,
             "model": llm_config["model"],
