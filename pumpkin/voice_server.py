@@ -3432,6 +3432,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
             if self.path == "/network/mark":
                 self._handle_network_mark()
                 return
+            if self.path == "/notifications/test":
+                self._handle_notifications_test()
+                return
             self.send_response(404)
             self.end_headers()
             return
@@ -3570,12 +3573,13 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "POST /errors",
                             "POST /proposals/approve",
                             "POST /proposals/reject",
-                            "POST /llm/config",
-                            "POST /ingest",
-                            "POST /network/mark",
-                            "POST /ha/webhook",
-                            "POST /voice",
-                            "POST /satellite/voice",
+                        "POST /llm/config",
+                        "POST /ingest",
+                        "POST /network/mark",
+                        "POST /notifications/test",
+                        "POST /ha/webhook",
+                        "POST /voice",
+                        "POST /satellite/voice",
                         ],
                     },
                 )
@@ -3884,6 +3888,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "/capabilities": {"get": {"summary": "Capability snapshot"}},
                             "/car/telemetry": {"get": {"summary": "Car telemetry summary"}},
                             "/notifications": {"get": {"summary": "Recent car telemetry alerts"}},
+                            "/notifications/test": {"post": {"summary": "Create a test alert"}},
                             "/summary": {
                                 "get": {
                                     "summary": "System summary",
@@ -4356,6 +4361,40 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 "received": {"text": text, "source": source, "device": device},
             },
         )
+
+    def _handle_notifications_test(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+        message = "Test alert from Pumpkin."
+        if length:
+            try:
+                data = _parse_json(body)
+            except ValueError:
+                _bad_request(self, "invalid JSON")
+                return
+            if isinstance(data, dict):
+                custom = data.get("message")
+                if isinstance(custom, str) and custom.strip():
+                    message = custom.strip()
+        try:
+            conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+            payload = {
+                "message": message,
+                "concerns": ["Test alert"],
+                "anomalies": [],
+                "report_url": "/ui/car/alerts",
+            }
+            store.insert_event(
+                conn,
+                source="voice",
+                event_type="car.alert",
+                payload=payload,
+                severity="warn",
+            )
+            act.notify_local(message, str(settings.audit_path()))
+        except Exception:
+            pass
+        _send_json(self, 200, {"status": "ok", "message": message})
 
     def _handle_ask(self) -> None:
         length = int(self.headers.get("Content-Length", "0"))
