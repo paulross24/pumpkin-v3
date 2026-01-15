@@ -189,6 +189,18 @@
         <ul class="list" id="issues-list"></ul>
       </section>
       <section class="card">
+        <h3>LLM Key</h3>
+        <div class="stat" id="llm-status">unknown</div>
+        <div class="sub" style="margin-bottom: 8px;">
+          Store the OpenAI key on the server so the app doesn't need to resend it.
+        </div>
+        <div style="display: grid; gap: 8px;">
+          <input id="llm-key" type="password" placeholder="sk-..." style="padding:8px;border-radius:10px;border:1px solid var(--line);" />
+          <button id="llm-save">Save key</button>
+          <div class="sub" id="llm-note"></div>
+        </div>
+      </section>
+      <section class="card">
         <h3>Alerts</h3>
         <div class="stat" id="alerts-count">0</div>
         <div class="sub" style="margin-bottom: 8px;">
@@ -268,6 +280,10 @@
       const insightCount = byId("insight-count");
       const insightList = byId("insight-list");
       const briefingText = byId("briefing-text");
+      const llmStatus = byId("llm-status");
+      const llmKeyInput = byId("llm-key");
+      const llmSaveBtn = byId("llm-save");
+      const llmNote = byId("llm-note");
 
       const setList = (node, items) => {
         node.innerHTML = "";
@@ -414,6 +430,7 @@
             setList(haMeta, []);
           }
           await loadAlerts();
+          await loadLlmConfig();
           await loadPendingProposals();
         } catch (err) {
           subtitle.textContent = "Failed to load status.";
@@ -435,6 +452,45 @@
           setList(alertsList, ["Failed to load alerts"]);
         }
       };
+
+      const loadLlmConfig = async () => {
+        try {
+          const res = await fetch("/llm/config");
+          const data = await res.json();
+          if (data && data.enabled) {
+            llmStatus.textContent = "configured";
+            llmStatus.className = "stat status-ok";
+          } else {
+            llmStatus.textContent = "missing key";
+            llmStatus.className = "stat status-warn";
+          }
+        } catch (err) {
+          llmStatus.textContent = "error";
+          llmStatus.className = "stat status-bad";
+        }
+      };
+
+      llmSaveBtn.addEventListener("click", async () => {
+        const key = llmKeyInput.value.trim();
+        if (!key) {
+          llmNote.textContent = "Enter a key first.";
+          return;
+        }
+        llmNote.textContent = "Saving...";
+        try {
+          const res = await fetch("/llm/config", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ api_key: key }),
+          });
+          if (!res.ok) throw new Error("save failed");
+          llmKeyInput.value = "";
+          llmNote.textContent = "Saved.";
+          await loadLlmConfig();
+        } catch (err) {
+          llmNote.textContent = "Save failed.";
+        }
+      });
 
       const loadPendingProposals = async () => {
         try {
