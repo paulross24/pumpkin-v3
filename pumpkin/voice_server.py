@@ -3552,6 +3552,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "GET /ui/proposals",
                         "GET /ui/network",
                         "GET /ui/car",
+                        "GET /ui/car/alerts",
                         "GET /ui/alerts",
                         "GET /config",
                         "GET /catalog",
@@ -3590,6 +3591,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 return
             if path == "/ui/car":
                 _send_html(self, 200, _load_voice_ui_asset("voice_ui_car.html"))
+                return
+            if path == "/ui/car/alerts":
+                _send_html(self, 200, _load_voice_ui_asset("voice_ui_car_alerts.html"))
                 return
             if path == "/ui/alerts":
                 _send_html(self, 200, _load_voice_ui_asset("voice_ui_alerts.html"))
