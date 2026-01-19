@@ -139,6 +139,63 @@ def _probe_rtsp(ip: str, port: int, timeout: float, max_bytes: int) -> Optional[
         return None
 
 
+def _rtsp_describe(ip: str, port: int, path: str, timeout: float, max_bytes: int) -> Optional[str]:
+    url = f"rtsp://{ip}:{port}{path}"
+    payload = (
+        f"DESCRIBE {url} RTSP/1.0\r\n"
+        "CSeq: 2\r\n"
+        "User-Agent: Pumpkin\r\n"
+        "Accept: application/sdp\r\n\r\n"
+    ).encode("ascii")
+    try:
+        with socket.create_connection((ip, port), timeout=timeout) as sock:
+            sock.settimeout(timeout)
+            sock.sendall(payload)
+            data = sock.recv(max_bytes)
+        if not data:
+            return None
+        text = data.decode(errors="ignore")
+        status_line = text.splitlines()[0] if text else ""
+        return status_line.strip()
+    except Exception:
+        return None
+
+
+def _rtsp_probe_paths(
+    ip: str,
+    port: int,
+    timeout: float,
+    max_bytes: int,
+) -> Optional[Dict[str, Any]]:
+    common_paths = [
+        "/",
+        "/stream1",
+        "/stream2",
+        "/live",
+        "/live/ch0",
+        "/h264",
+        "/h264/ch1/main/av_stream",
+        "/Streaming/Channels/101",
+        "/Streaming/Channels/102",
+        "/cam/realmonitor?channel=1&subtype=0",
+        "/cam/realmonitor?channel=1&subtype=1",
+        "/onvif1",
+        "/onvif2",
+        "/profile1",
+        "/profile2",
+    ]
+    for path in common_paths:
+        status = _rtsp_describe(ip, port, path, timeout, max_bytes)
+        if status and "200" in status:
+            return {
+                "type": "rtsp",
+                "port": port,
+                "status": status,
+                "url": f"rtsp://{ip}:{port}{path}",
+            }
+    return None
+
+
 def _probe_http(
     ip: str,
     port: int,
@@ -397,6 +454,9 @@ def deep_scan_host(
             service = _probe_rtsp(ip, port, timeout_seconds, max_banner_bytes)
             if service:
                 services.append(service)
+            enriched = _rtsp_probe_paths(ip, port, timeout_seconds, max_banner_bytes)
+            if enriched:
+                services.append(enriched)
         if ssh_enabled and port == 22:
             service = _probe_ssh(ip, port, timeout_seconds, max_banner_bytes)
             if service:
