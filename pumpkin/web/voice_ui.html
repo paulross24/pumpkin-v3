@@ -373,11 +373,12 @@
           const identity = summary.identity || {};
           const profile = identity.profile || {};
           const memory = identity.memory || {};
-          identityName.textContent = profile.name || "Unknown speaker";
+          const deviceId = profile.last_device || identity.device || "n/a";
+          identityName.textContent = profile.name || "Unknown speaker (unlinked)";
           setList(identityMeta, [
             `last seen: ${profile.last_seen_ts || "n/a"}`,
             `turns: ${profile.turns_count ?? "n/a"}`,
-            `device: ${profile.last_device || "n/a"}`,
+            `device: ${deviceId}`,
             `preferences: ${Object.keys(profile.preferences || {}).length}`,
           ]);
           setList(memoryMeta, [
