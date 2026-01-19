@@ -6,6 +6,7 @@ import os
 import shutil
 import socket
 import ipaddress
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -353,6 +354,59 @@ def network_discovery(
         "device_count": len(devices),
         "devices": devices,
         "ssdp": ssdp_services,
+    }
+
+
+def deep_scan_host(
+    ip: str,
+    ports: Iterable[int],
+    timeout_seconds: float,
+    max_workers: int,
+    active: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    ports_list = [int(p) for p in ports if isinstance(p, int) or str(p).isdigit()]
+    max_workers = max(1, min(int(max_workers), len(ports_list))) if ports_list else 1
+    open_ports: List[int] = []
+
+    if ports_list:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(_probe_port, ip, port, timeout_seconds): port for port in ports_list}
+            for future in as_completed(futures):
+                port = futures[future]
+                try:
+                    if future.result():
+                        open_ports.append(port)
+                except Exception:
+                    continue
+
+    open_ports.sort()
+    active_cfg = active if isinstance(active, dict) else {}
+    http_enabled = bool(active_cfg.get("http", True))
+    rtsp_enabled = bool(active_cfg.get("rtsp", True))
+    ssh_enabled = bool(active_cfg.get("ssh", True))
+    max_banner_bytes = int(active_cfg.get("max_banner_bytes", 256))
+    max_http_bytes = int(active_cfg.get("max_http_bytes", 2048))
+
+    services: List[Dict[str, Any]] = []
+    for port in open_ports:
+        if http_enabled and port in {80, 81, 443, 8000, 8080, 8081, 8123, 8443, 9000, 9443}:
+            service = _probe_http(ip, port, timeout_seconds, max_http_bytes, port in {443, 8443, 9443})
+            if service:
+                services.append(service)
+        if rtsp_enabled and port in {554, 8554}:
+            service = _probe_rtsp(ip, port, timeout_seconds, max_banner_bytes)
+            if service:
+                services.append(service)
+        if ssh_enabled and port == 22:
+            service = _probe_ssh(ip, port, timeout_seconds, max_banner_bytes)
+            if service:
+                services.append(service)
+
+    return {
+        "ip": ip,
+        "open_ports": open_ports,
+        "services": services,
+        "hints": _classify_services(open_ports, services),
     }
 
 

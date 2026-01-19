@@ -11,6 +11,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from ipaddress import ip_address
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import difflib
@@ -22,6 +23,7 @@ from . import store
 from . import module_config
 from . import module_registry
 from . import ha_client
+from . import observe
 from . import catalog as catalog_mod
 from . import capabilities
 from . import inventory as inventory_mod
@@ -38,6 +40,9 @@ from .db import init_db, utc_now_iso
 MAX_TEXT_LEN = 500
 INGEST_LOG_TEXT_LIMIT = 160
 OPENAI_TIMEOUT_SECONDS = 15
+
+_DEEP_SCAN_LOCK = threading.Lock()
+_DEEP_SCAN_RUNNING: set[str] = set()
 _last_seen = {}
 CODE_PROMPT_MAX_LEN = 8000
 
@@ -3427,6 +3432,96 @@ def _list_alerts(conn, limit: int = 50) -> list[Dict[str, Any]]:
     return alerts
 
 
+def _load_network_module_cfg() -> Dict[str, Any]:
+    config_path = settings.modules_config_path()
+    if not config_path.exists():
+        return {}
+    try:
+        config = module_config.load_config(str(config_path))
+    except Exception:
+        return {}
+    module_cfg = config.get("modules", {}).get("network.discovery", {})
+    return module_cfg if isinstance(module_cfg, dict) else {}
+
+
+def _get_deep_scan_state(conn) -> Dict[str, Any]:
+    state = store.get_memory(conn, "network.discovery.deep_scan")
+    if not isinstance(state, dict):
+        return {"jobs": {}}
+    if not isinstance(state.get("jobs"), dict):
+        state["jobs"] = {}
+    return state
+
+
+def _run_deep_scan(ip: str, ports: List[int], ports_payload: Any) -> None:
+    conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+    module_cfg = _load_network_module_cfg()
+    timeout_seconds = float(module_cfg.get("deep_scan_timeout_seconds", 0.2))
+    max_workers = int(module_cfg.get("deep_scan_workers", 128))
+    active_cfg = module_cfg.get("active") if isinstance(module_cfg.get("active"), dict) else {}
+    state = _get_deep_scan_state(conn)
+    job = state["jobs"].get(ip, {})
+    job.update(
+        {
+            "ip": ip,
+            "status": "running",
+            "started_at": utc_now_iso(),
+            "ports": ports_payload,
+            "open_ports": [],
+            "services": [],
+            "hints": [],
+            "error": None,
+            "finished_at": None,
+        }
+    )
+    state["jobs"][ip] = job
+    store.set_memory(conn, "network.discovery.deep_scan", state)
+    try:
+        result = observe.deep_scan_host(
+            ip=ip,
+            ports=ports,
+            timeout_seconds=timeout_seconds,
+            max_workers=max_workers,
+            active=active_cfg,
+        )
+        job.update(
+            {
+                "status": "complete",
+                "open_ports": result.get("open_ports", []),
+                "services": result.get("services", []),
+                "hints": result.get("hints", []),
+                "finished_at": utc_now_iso(),
+            }
+        )
+        store.insert_event(
+            conn,
+            source="network",
+            event_type="network.discovery.deep_scan",
+            payload=job,
+            severity="info",
+        )
+    except Exception as exc:
+        job.update(
+            {
+                "status": "error",
+                "error": str(exc),
+                "finished_at": utc_now_iso(),
+            }
+        )
+        store.insert_event(
+            conn,
+            source="network",
+            event_type="network.discovery.deep_scan.error",
+            payload=job,
+            severity="warn",
+        )
+    finally:
+        state["jobs"][ip] = job
+        store.set_memory(conn, "network.discovery.deep_scan", state)
+        with _DEEP_SCAN_LOCK:
+            _DEEP_SCAN_RUNNING.discard(ip)
+
+
 class VoiceHandler(BaseHTTPRequestHandler):
     server_version = "PumpkinVoice/0.1"
 
@@ -3466,6 +3561,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 return
             if self.path == "/network/mark":
                 self._handle_network_mark()
+                return
+            if self.path == "/network/deep_scan":
+                self._handle_network_deep_scan()
                 return
             if self.path == "/notifications/test":
                 self._handle_notifications_test()
@@ -3613,6 +3711,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "POST /proposals/reject",
                             "POST /llm/config",
                             "POST /ingest",
+                            "POST /network/deep_scan",
                             "POST /network/mark",
                             "POST /notifications/test",
                             "POST /ha/webhook",
@@ -3887,6 +3986,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "homeassistant_last_event": ha_last_event,
                         "home_state": home_state,
                         "network_discovery": network_discovery,
+                        "network_deep_scan": store.get_memory(conn, "network.discovery.deep_scan"),
                         "car_telemetry": car_telemetry,
                         "inventory": inventory_mod.summary(inventory),
                         "opportunities": opportunities[:5],
@@ -3963,6 +4063,28 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "/car/telemetry": {"get": {"summary": "Car telemetry summary"}},
                             "/notifications": {"get": {"summary": "Recent car telemetry alerts"}},
                             "/notifications/test": {"post": {"summary": "Create a test alert"}},
+                            "/network/deep_scan": {
+                                "post": {
+                                    "summary": "Start a deep port scan for a host",
+                                    "requestBody": {
+                                        "content": {
+                                            "application/json": {
+                                                "schema": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "ip": {"type": "string"},
+                                                        "ports": {
+                                                            "type": "array",
+                                                            "items": {"type": "integer"},
+                                                        },
+                                                    },
+                                                    "required": ["ip"],
+                                                }
+                                            }
+                                        }
+                                    },
+                                }
+                            },
                             "/inventory": {"get": {"summary": "Inventory snapshot and opportunities"}},
                             "/ui/inventory": {"get": {"summary": "Inventory dashboard"}},
                             "/summary": {
@@ -4793,6 +4915,63 @@ class VoiceHandler(BaseHTTPRequestHandler):
             severity="info",
         )
         _send_json(self, 200, {"status": "ok", "marked": item})
+
+    def _handle_network_deep_scan(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+        try:
+            data = _parse_json(body)
+        except ValueError:
+            _bad_request(self, "invalid JSON")
+            return
+        if not isinstance(data, dict):
+            _bad_request(self, "JSON body must be an object")
+            return
+        ip = data.get("ip")
+        ports = data.get("ports")
+        if not isinstance(ip, str) or not ip.strip():
+            _bad_request(self, "ip must be a string")
+            return
+        ip = ip.strip()
+        try:
+            ip_address(ip)
+        except ValueError:
+            _bad_request(self, "ip must be a valid address")
+            return
+        ports_payload: Any = "all"
+        if ports is None:
+            ports = list(range(1, 65536))
+        elif isinstance(ports, list):
+            cleaned: List[int] = []
+            for item in ports:
+                try:
+                    port = int(item)
+                except (TypeError, ValueError):
+                    continue
+                if 1 <= port <= 65535:
+                    cleaned.append(port)
+            if not cleaned:
+                _bad_request(self, "ports must include valid integers")
+                return
+            ports = sorted(set(cleaned))
+            ports_payload = ports
+        else:
+            _bad_request(self, "ports must be a list")
+            return
+
+        with _DEEP_SCAN_LOCK:
+            if ip in _DEEP_SCAN_RUNNING:
+                _send_json(self, 409, {"status": "running", "ip": ip})
+                return
+            _DEEP_SCAN_RUNNING.add(ip)
+
+        thread = threading.Thread(
+            target=_run_deep_scan,
+            args=(ip, ports, ports_payload),
+            daemon=True,
+        )
+        thread.start()
+        _send_json(self, 202, {"status": "queued", "ip": ip})
 
     def log_message(self, fmt: str, *args: Any) -> None:
         return

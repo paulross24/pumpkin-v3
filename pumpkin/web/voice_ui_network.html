@@ -94,6 +94,13 @@
         font-weight: 600;
       }
       .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      input[type="text"] {
+        padding: 8px 10px;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        background: #fffdf9;
+        font-family: inherit;
+      }
     </style>
   </head>
   <body>
@@ -115,6 +122,17 @@
     <main>
       <section class="card">
         <div class="row" style="margin-bottom: 8px;">
+          <span class="pill">Deep scan</span>
+          <span class="sub">Run a full port scan against a specific host.</span>
+        </div>
+        <div class="row" style="margin-bottom: 8px;">
+          <input id="deep-ip" type="text" placeholder="IP address (e.g. 192.168.1.68)" />
+          <button id="deep-scan">Run deep scan</button>
+        </div>
+        <div id="deep-status" class="meta"></div>
+      </section>
+      <section class="card">
+        <div class="row" style="margin-bottom: 8px;">
           <span class="pill" id="count">0 devices</span>
           <button id="refresh">Refresh</button>
         </div>
@@ -124,17 +142,21 @@
     <script>
       const listNode = document.getElementById("list");
       const countNode = document.getElementById("count");
+      const deepStatusNode = document.getElementById("deep-status");
 
       const load = async () => {
         try {
           const res = await fetch("/summary");
           const data = await res.json();
           const discovery = data.network_discovery || {};
+          const deepScan = data.network_deep_scan || {};
           const devices = Array.isArray(discovery.devices) ? discovery.devices : [];
           countNode.textContent = `${discovery.device_count || devices.length} devices`;
           render(devices);
+          renderDeepScan(deepScan.jobs || {});
         } catch (err) {
           listNode.innerHTML = "Failed to load network discovery.";
+          deepStatusNode.textContent = "Failed to load deep scan status.";
         }
       };
 
@@ -172,7 +194,12 @@
           mark.textContent = "Mark useful";
           mark.addEventListener("click", () => markUseful(device));
 
+          const deep = document.createElement("button");
+          deep.textContent = "Deep scan";
+          deep.addEventListener("click", () => requestDeepScan(device.ip));
+
           actions.appendChild(mark);
+          actions.appendChild(deep);
 
           card.appendChild(title);
           card.appendChild(meta);
@@ -180,6 +207,21 @@
           card.appendChild(actions);
           listNode.appendChild(card);
         });
+      };
+
+      const renderDeepScan = (jobs) => {
+        const entries = Object.values(jobs || {});
+        if (!entries.length) {
+          deepStatusNode.textContent = "No deep scans run yet.";
+          return;
+        }
+        entries.sort((a, b) => (b.started_at || "").localeCompare(a.started_at || ""));
+        deepStatusNode.innerHTML = entries.slice(0, 5).map((job) => {
+          const ports = Array.isArray(job.open_ports) ? job.open_ports.join(", ") : "n/a";
+          const hints = Array.isArray(job.hints) ? job.hints.join(", ") : "n/a";
+          const status = job.status || "unknown";
+          return `<div><strong>${job.ip}</strong> • ${status} • Ports: ${ports || "none"} • Hints: ${hints}</div>`;
+        }).join("");
       };
 
       const markUseful = async (device) => {
@@ -201,7 +243,35 @@
         }
       };
 
+      const requestDeepScan = async (ip) => {
+        const target = ip || document.getElementById("deep-ip").value.trim();
+        if (!target) {
+          window.alert("Enter an IP to scan.");
+          return;
+        }
+        try {
+          const res = await fetch("/network/deep_scan", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ip: target }),
+          });
+          if (!res.ok && res.status !== 409) {
+            throw new Error("Request failed");
+          }
+          const payload = await res.json();
+          if (payload.status === "running") {
+            window.alert("Scan already running for this host.");
+          } else {
+            window.alert("Deep scan queued.");
+          }
+          load();
+        } catch (err) {
+          window.alert("Failed to start deep scan.");
+        }
+      };
+
       document.getElementById("refresh").addEventListener("click", load);
+      document.getElementById("deep-scan").addEventListener("click", () => requestDeepScan());
       load();
     </script>
   </body>
