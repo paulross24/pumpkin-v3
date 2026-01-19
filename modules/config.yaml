@@ -37,19 +37,24 @@ modules:
     tcp_ports:
       - 22
       - 80
+      - 81
       - 443
       - 554
       - 8008
       - 8009
+      - 8080
       - 8123
       - 8443
+      - 8554
+      - 8899
       - 9000
       - 9100
       - 9443
       - 1400
+      - 37777
       - 62078
-    timeout_seconds: 0.2
-    max_hosts: 128
+    timeout_seconds: 1.0
+    max_hosts: 254
     scan_interval_seconds: 300
     active:
       enabled: true
