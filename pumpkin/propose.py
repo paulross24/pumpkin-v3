@@ -1792,3 +1792,29 @@ def build_improvement_proposals(conn) -> List[Dict[str, Any]]:
         proposal["ai_context_excerpt"] = _proposal_excerpt(proposal)
         filtered.append(proposal)
     return filtered[:MAX_PROPOSALS_PER_LOOP]
+
+
+def build_suggestion_followup(conn, suggestion: str) -> Dict[str, Any] | None:
+    if not isinstance(suggestion, str) or not suggestion.strip():
+        return None
+    policy = policy_mod.load_policy(str(settings.policy_path()))
+    context_pack, context_hash, context_excerpt = build_context_pack(conn)
+    prompt = (
+        _render_prompt(context_pack)
+        + "\n\nYou are creating a single action.request proposal based on a user suggestion. "
+        "Return ONLY one proposal with explicit action_type and action_params. "
+        "If the suggestion is not feasible, propose a notify.local action that explains why. "
+        f"\n\nSUGGESTION: {suggestion.strip()}"
+    )
+    try:
+        plan = planner.load_planner()
+        result = plan.generate(context_pack, prompt)
+        validated = _validate_planner_output(policy, result.proposals)
+    except Exception:
+        return None
+    if not validated:
+        return None
+    proposal = validated[0]
+    proposal["ai_context_hash"] = context_hash
+    proposal["ai_context_excerpt"] = _proposal_excerpt(proposal)
+    return proposal

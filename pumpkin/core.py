@@ -415,6 +415,39 @@ def _execute_approved(conn, policy: policy_mod.Policy) -> None:
         action_params = details.get("action_params", {})
 
         if not action_type:
+            suggestion = details.get("suggestion")
+            followup = propose.build_suggestion_followup(conn, suggestion) if isinstance(suggestion, str) else None
+            if followup:
+                summary = followup.get("summary") or f"Implement suggestion: {suggestion[:80]}"
+                if not store.proposal_exists(conn, summary, statuses=["pending", "approved"]):
+                    new_id = store.insert_proposal(
+                        conn,
+                        kind=followup.get("kind", "action.request"),
+                        summary=summary,
+                        details=followup.get("details", {}),
+                        risk=float(followup.get("risk", 0.4)),
+                        expected_outcome=followup.get("expected_outcome", "Implementation plan ready."),
+                        status="pending",
+                        policy_hash=policy.policy_hash,
+                        needs_new_capability=bool(followup.get("needs_new_capability", False)),
+                        capability_request=followup.get("capability_request"),
+                        ai_context_hash=followup.get("ai_context_hash"),
+                        ai_context_excerpt=followup.get("ai_context_excerpt"),
+                        steps=followup.get("steps"),
+                    )
+                else:
+                    new_id = None
+                store.update_proposal_status(conn, proposal_id, "executed")
+                audit.append_jsonl(
+                    str(settings.audit_path()),
+                    {
+                        "kind": "proposal.converted",
+                        "proposal_id": proposal_id,
+                        "new_proposal_id": new_id,
+                        "policy_hash": policy.policy_hash,
+                    },
+                )
+                continue
             store.update_proposal_status(conn, proposal_id, "failed")
             audit.append_jsonl(
                 str(settings.audit_path()),
