@@ -17,6 +17,7 @@ from . import store
 from . import insights
 from . import module_config
 from . import inventory as inventory_mod
+from . import selfcheck
 from .db import init_db
 from .act import execute_action
 
@@ -676,6 +677,16 @@ def run_once() -> None:
             proposals.extend(improvement)
         store.set_memory(conn, "core.last_reflection_date", datetime.now().date().isoformat())
     _record_proposals(conn, policy, proposals)
+
+    now = time.time()
+    last_selfcheck = store.get_memory(conn, "selfcheck.last_ts") or 0
+    try:
+        last_selfcheck = float(last_selfcheck)
+    except (TypeError, ValueError):
+        last_selfcheck = 0.0
+    if now - last_selfcheck >= settings.selfcheck_interval_seconds():
+        selfcheck.run_self_check(conn)
+        store.set_memory(conn, "selfcheck.last_ts", now)
 
     _requeue_orphaned_suggestions(conn, policy.policy_hash)
     _execute_approved(conn, policy)

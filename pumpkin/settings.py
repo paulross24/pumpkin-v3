@@ -145,6 +145,14 @@ def context_pack_max_bytes() -> int:
         return 200 * 1024
 
 
+def selfcheck_interval_seconds() -> int:
+    value = os.getenv("PUMPKIN_SELFCHECK_INTERVAL_SECONDS", "900")
+    try:
+        return max(60, int(value))
+    except ValueError:
+        return 900
+
+
 def loop_interval_seconds() -> float:
     value = os.getenv("PUMPKIN_LOOP_INTERVAL", "30")
     try:

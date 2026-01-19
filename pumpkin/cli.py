@@ -27,6 +27,23 @@ from . import selfcheck
 from .db import init_db
 
 
+def _load_env_file(path: Path) -> None:
+    if not path.exists():
+        return
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip("\"").strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = value
+    except Exception:
+        return
+
+
 def _conn():
     return init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
 
@@ -1210,6 +1227,7 @@ def cmd_ops_apply_approved(args: argparse.Namespace) -> None:
 
 
 def cmd_ops_selfcheck(_: argparse.Namespace) -> None:
+    _load_env_file(Path("/etc/pumpkin/pumpkin.env"))
     conn = _conn()
     result = selfcheck.run_self_check(conn)
     failures = result.get("failures") or []
