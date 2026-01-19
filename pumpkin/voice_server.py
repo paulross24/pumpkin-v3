@@ -3493,6 +3493,44 @@ def _get_deep_scan_state(conn) -> Dict[str, Any]:
     return state
 
 
+def _merge_deep_scan_devices(
+    snapshot: Dict[str, Any] | None,
+    deep_scan: Dict[str, Any] | None,
+) -> Dict[str, Any]:
+    merged_snapshot: Dict[str, Any] = dict(snapshot) if isinstance(snapshot, dict) else {}
+    devices = merged_snapshot.get("devices")
+    if not isinstance(devices, list):
+        devices = []
+    merged_devices = list(devices)
+    existing = {item.get("ip") for item in merged_devices if isinstance(item, dict)}
+    jobs = deep_scan.get("jobs", {}) if isinstance(deep_scan, dict) else {}
+    if isinstance(jobs, dict):
+        for job in jobs.values():
+            if not isinstance(job, dict):
+                continue
+            if job.get("status") != "complete":
+                continue
+            ip = job.get("ip")
+            if not isinstance(ip, str) or not ip.strip():
+                continue
+            if ip in existing:
+                continue
+            merged_devices.append(
+                {
+                    "ip": ip,
+                    "mac": None,
+                    "device": "deep-scan",
+                    "open_ports": job.get("open_ports", []),
+                    "services": job.get("services", []),
+                    "hints": job.get("hints", []),
+                }
+            )
+            existing.add(ip)
+    merged_snapshot["devices"] = merged_devices
+    merged_snapshot["device_count"] = len(merged_devices)
+    return merged_snapshot
+
+
 def _run_deep_scan(ip: str, ports: List[int], ports_payload: Any) -> None:
     conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
     module_cfg = _load_network_module_cfg()
@@ -3990,6 +4028,8 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 home_state = _home_state_summary(conn)
                 issues = _summarize_issues(system_snapshot)
                 network_discovery = store.get_memory(conn, "network.discovery.snapshot")
+                deep_scan_state = store.get_memory(conn, "network.discovery.deep_scan")
+                network_discovery = _merge_deep_scan_devices(network_discovery, deep_scan_state)
                 car_telemetry = _car_telemetry_summary(conn)
                 inventory = inventory_mod.snapshot(conn)
                 opportunities = inventory_mod.opportunities(inventory)
@@ -4030,7 +4070,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "homeassistant_last_event": ha_last_event,
                         "home_state": home_state,
                         "network_discovery": network_discovery,
-                        "network_deep_scan": store.get_memory(conn, "network.discovery.deep_scan"),
+                        "network_deep_scan": deep_scan_state,
                         "car_telemetry": car_telemetry,
                         "inventory": inventory_mod.summary(inventory),
                         "opportunities": opportunities[:5],
