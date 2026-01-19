@@ -191,6 +191,17 @@
         <ul class="list" id="proposal-list"></ul>
       </section>
       <section class="card">
+        <h3>Suggestion Box</h3>
+        <div class="sub" style="margin-bottom: 8px;">
+          Drop an idea and Pumpkin will draft a proposal with an implementation plan.
+        </div>
+        <textarea id="suggestion-text" placeholder="E.g. Add alerts for front door opened after 10pm." style="padding:8px;border-radius:10px;border:1px solid var(--line);min-height:80px;"></textarea>
+        <div class="actions" style="margin-top: 8px;">
+          <button id="suggestion-send">Submit suggestion</button>
+          <div class="sub" id="suggestion-note"></div>
+        </div>
+      </section>
+      <section class="card">
         <h3>Issues</h3>
         <div class="stat" id="issues-count">0</div>
         <ul class="list" id="issues-list"></ul>
@@ -305,6 +316,9 @@
       const llmKeyInput = byId("llm-key");
       const llmSaveBtn = byId("llm-save");
       const llmNote = byId("llm-note");
+      const suggestionText = byId("suggestion-text");
+      const suggestionSend = byId("suggestion-send");
+      const suggestionNote = byId("suggestion-note");
 
       const setList = (node, items) => {
         node.innerHTML = "";
@@ -634,6 +648,29 @@
       });
       load();
       setInterval(load, 15000);
+
+      suggestionSend.addEventListener("click", async () => {
+        const text = (suggestionText.value || "").trim();
+        if (!text) {
+          suggestionNote.textContent = "Enter a suggestion first.";
+          return;
+        }
+        try {
+          const res = await fetch("/suggestions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text }),
+          });
+          if (!res.ok) {
+            throw new Error("Request failed");
+          }
+          suggestionText.value = "";
+          suggestionNote.textContent = "Suggestion received and queued for proposal.";
+          load();
+        } catch (err) {
+          suggestionNote.textContent = "Failed to submit suggestion.";
+        }
+      });
     </script>
   </body>
 </html>

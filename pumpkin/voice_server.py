@@ -3649,6 +3649,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
             if self.path == "/identity/link":
                 self._handle_identity_link()
                 return
+            if self.path == "/suggestions":
+                self._handle_suggestion()
+                return
             if self.path == "/notifications/test":
                 self._handle_notifications_test()
                 return
@@ -3799,6 +3802,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "POST /network/deep_scan",
                             "POST /network/rtsp_probe",
                             "POST /network/mark",
+                            "POST /suggestions",
                             "POST /notifications/test",
                             "POST /ha/webhook",
                             "POST /voice",
@@ -4209,6 +4213,25 @@ class VoiceHandler(BaseHTTPRequestHandler):
                                                         },
                                                     },
                                                     "required": ["ip"],
+                                                }
+                                            }
+                                        }
+                                    },
+                                }
+                            },
+                            "/suggestions": {
+                                "post": {
+                                    "summary": "Submit a user suggestion for proposal creation",
+                                    "requestBody": {
+                                        "content": {
+                                            "application/json": {
+                                                "schema": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "text": {"type": "string"},
+                                                        "device": {"type": "string"},
+                                                    },
+                                                    "required": ["text"],
                                                 }
                                             }
                                         }
@@ -5213,6 +5236,70 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 "results": results,
             },
         )
+
+    def _handle_suggestion(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+        try:
+            data = _parse_json(body)
+        except ValueError:
+            _bad_request(self, "invalid JSON")
+            return
+        if not isinstance(data, dict):
+            _bad_request(self, "JSON body must be an object")
+            return
+        text = data.get("text")
+        if not isinstance(text, str) or not text.strip():
+            _bad_request(self, "text must be a string")
+            return
+        text = _normalize_text(text)
+        if len(text) > MAX_TEXT_LEN:
+            _bad_request(self, "text too long")
+            return
+        device = data.get("device")
+        if device is not None and not isinstance(device, str):
+            _bad_request(self, "device must be a string")
+            return
+        conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+        store.insert_event(
+            conn,
+            source="voice",
+            event_type="user.suggestion",
+            payload={"text": text, "device": device},
+            severity="info",
+        )
+        summary = f"Suggestion: {text[:80]}"
+        policy = policy_mod.load_policy(str(settings.policy_path()))
+        if not store.proposal_exists(conn, summary, statuses=["pending", "approved"]):
+            store.insert_proposal(
+                conn,
+                kind="action.request",
+                summary=summary,
+                details={
+                    "rationale": "User submitted a suggestion that should be explored and converted into an actionable plan.",
+                    "suggestion": text,
+                    "implementation": (
+                        "Analyze the suggestion, identify required devices or integrations, "
+                        "and draft an implementation plan with steps and verification."
+                    ),
+                    "verification": "Confirm the proposed implementation is feasible and aligned with the suggestion.",
+                    "rollback_plan": "Skip or revise the suggestion if it is not feasible.",
+                },
+                risk=0.3,
+                expected_outcome="Suggestion is evaluated and a clear action plan is prepared.",
+                status="pending",
+                policy_hash=policy.policy_hash,
+                needs_new_capability=False,
+                capability_request=None,
+                ai_context_hash=None,
+                ai_context_excerpt=None,
+                steps=[
+                    "Analyze the suggestion and existing capabilities.",
+                    "Draft an implementation plan with required integrations.",
+                    "Verify feasibility and propose next actions.",
+                ],
+            )
+        _send_json(self, 200, {"status": "ok"})
 
     def log_message(self, fmt: str, *args: Any) -> None:
         return
