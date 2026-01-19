@@ -339,6 +339,46 @@ def _apply_ha_identity(
     store.set_memory(conn, key, profile)
 
 
+def _apply_ha_person_link(
+    conn,
+    device: str | None,
+    person_id: str | None,
+    person_name: str | None,
+) -> None:
+    if not isinstance(device, str) or not device.strip():
+        return
+    if not isinstance(person_id, str) or not person_id.strip():
+        return
+    key = f"speaker.profile.device:{device.strip()}"
+    profile = store.get_memory(conn, key)
+    if not isinstance(profile, dict):
+        profile = {"state": "linked"}
+    profile["ha_person_id"] = person_id.strip()
+    if isinstance(person_name, str) and person_name.strip():
+        profile["ha_person_name"] = person_name.strip()
+        if not profile.get("name"):
+            profile["name"] = person_name.strip()
+    if not profile.get("created_ts"):
+        profile["created_ts"] = datetime.now(timezone.utc).isoformat()
+    profile["last_seen_ts"] = datetime.now(timezone.utc).isoformat()
+    profile["last_device"] = device.strip()
+    store.set_memory(conn, key, profile)
+    try:
+        store.insert_event(
+            conn,
+            source="voice",
+            event_type="profile.linked",
+            payload={
+                "device": device.strip(),
+                "ha_person_id": person_id.strip(),
+                "ha_person_name": person_name,
+            },
+            severity="info",
+        )
+    except Exception:
+        pass
+
+
 def _append_recent_turn(memory: Dict[str, Any], role: str, text: str) -> None:
     recent = memory.get("recent")
     if not isinstance(recent, list):
@@ -3565,6 +3605,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
             if self.path == "/network/deep_scan":
                 self._handle_network_deep_scan()
                 return
+            if self.path == "/identity/link":
+                self._handle_identity_link()
+                return
             if self.path == "/notifications/test":
                 self._handle_notifications_test()
                 return
@@ -3711,6 +3754,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "POST /proposals/reject",
                             "POST /llm/config",
                             "POST /ingest",
+                            "POST /identity/link",
                             "POST /network/deep_scan",
                             "POST /network/mark",
                             "POST /notifications/test",
@@ -4063,6 +4107,25 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "/car/telemetry": {"get": {"summary": "Car telemetry summary"}},
                             "/notifications": {"get": {"summary": "Recent car telemetry alerts"}},
                             "/notifications/test": {"post": {"summary": "Create a test alert"}},
+                            "/identity/link": {
+                                "post": {
+                                    "summary": "Link a device to a Home Assistant person",
+                                    "requestBody": {
+                                        "content": {
+                                            "application/json": {
+                                                "schema": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "device": {"type": "string"},
+                                                        "person_id": {"type": "string"},
+                                                    },
+                                                    "required": ["person_id"],
+                                                }
+                                            }
+                                        }
+                                    },
+                                }
+                            },
                             "/network/deep_scan": {
                                 "post": {
                                     "summary": "Start a deep port scan for a host",
@@ -4972,6 +5035,57 @@ class VoiceHandler(BaseHTTPRequestHandler):
         )
         thread.start()
         _send_json(self, 202, {"status": "queued", "ip": ip})
+
+    def _handle_identity_link(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+        try:
+            data = _parse_json(body)
+        except ValueError:
+            _bad_request(self, "invalid JSON")
+            return
+        if not isinstance(data, dict):
+            _bad_request(self, "JSON body must be an object")
+            return
+        person_id = data.get("person_id")
+        device = data.get("device")
+        if person_id is not None and not isinstance(person_id, str):
+            _bad_request(self, "person_id must be a string")
+            return
+        if device is not None and not isinstance(device, str):
+            _bad_request(self, "device must be a string")
+            return
+        conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+        if not device:
+            last_device = store.get_memory(conn, "voice.last_device")
+            device = last_device if isinstance(last_device, str) else None
+        if not device:
+            _bad_request(self, "device_required")
+            return
+        if not isinstance(person_id, str) or not person_id.strip():
+            _bad_request(self, "person_id_required")
+            return
+        ha_summary = store.get_memory(conn, "homeassistant.summary") or {}
+        person_name = None
+        people = ha_summary.get("people") if isinstance(ha_summary, dict) else None
+        if isinstance(people, list):
+            for person in people:
+                if not isinstance(person, dict):
+                    continue
+                if person.get("entity_id") == person_id:
+                    person_name = person.get("name")
+                    break
+        _apply_ha_person_link(conn, device, person_id, person_name)
+        _send_json(
+            self,
+            200,
+            {
+                "status": "ok",
+                "device": device,
+                "person_id": person_id,
+                "person_name": person_name,
+            },
+        )
 
     def log_message(self, fmt: str, *args: Any) -> None:
         return

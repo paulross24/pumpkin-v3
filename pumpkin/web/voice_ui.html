@@ -172,6 +172,13 @@
         <div class="stat" id="identity-name">Unknown</div>
         <ul class="list" id="identity-meta"></ul>
         <ul class="list" id="memory-meta"></ul>
+        <div class="sub" style="margin-top: 8px;">Link this device to a Home Assistant person.</div>
+        <div class="actions" style="margin-top: 8px;">
+          <select id="identity-person" style="padding:8px;border-radius:10px;border:1px solid var(--line);">
+            <option value="">Select person</option>
+          </select>
+          <button id="identity-link">Link</button>
+        </div>
       </section>
       <section class="card">
         <h3>Proposals</h3>
@@ -287,6 +294,8 @@
       const identityName = byId("identity-name");
       const identityMeta = byId("identity-meta");
       const memoryMeta = byId("memory-meta");
+      const identityPerson = byId("identity-person");
+      const identityLink = byId("identity-link");
       const decisionCount = byId("decision-count");
       const decisionList = byId("decision-list");
       const insightCount = byId("insight-count");
@@ -386,6 +395,18 @@
             `facts: ${memory.facts_count ?? 0}`,
             `turns: ${memory.turns ?? "n/a"}`,
           ]);
+          const people = summary.homeassistant?.people || [];
+          identityPerson.innerHTML = "<option value=\"\">Select person</option>";
+          people.forEach((person) => {
+            if (!person || !person.entity_id) return;
+            const option = document.createElement("option");
+            option.value = person.entity_id;
+            option.textContent = person.name || person.entity_id;
+            identityPerson.appendChild(option);
+          });
+          if (profile.ha_person_id) {
+            identityPerson.value = profile.ha_person_id;
+          }
 
           const discovery = summary.network_discovery || {};
           networkCount.textContent = `${discovery.device_count || 0} devices`;
@@ -590,6 +611,27 @@
       };
 
       document.getElementById("refresh").addEventListener("click", load);
+      identityLink.addEventListener("click", async () => {
+        const personId = identityPerson.value;
+        if (!personId) {
+          window.alert("Select a Home Assistant person.");
+          return;
+        }
+        try {
+          const res = await fetch("/identity/link", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ person_id: personId }),
+          });
+          if (!res.ok) {
+            throw new Error("Request failed");
+          }
+          window.alert("Linked to Home Assistant person.");
+          load();
+        } catch (err) {
+          window.alert("Failed to link identity.");
+        }
+      });
       load();
       setInterval(load, 15000);
     </script>
