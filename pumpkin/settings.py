@@ -137,6 +137,14 @@ def planner_cooldown_seconds() -> int:
         return 120
 
 
+def planner_cooldown_max_seconds() -> int:
+    value = os.getenv("PUMPKIN_PLANNER_COOLDOWN_MAX_SECONDS", "900")
+    try:
+        return max(60, int(value))
+    except ValueError:
+        return 900
+
+
 def context_pack_max_bytes() -> int:
     value = os.getenv("PUMPKIN_CONTEXT_MAX_BYTES", str(200 * 1024))
     try:

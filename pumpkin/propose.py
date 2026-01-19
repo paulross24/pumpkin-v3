@@ -60,18 +60,40 @@ def planner_cooldown_active(conn) -> bool:
 
 
 def _set_planner_cooldown(conn, reason: str) -> None:
-    seconds = settings.planner_cooldown_seconds()
-    if seconds <= 0:
+    base_seconds = settings.planner_cooldown_seconds()
+    if base_seconds <= 0:
         return
-    until = datetime.now(timezone.utc) + timedelta(seconds=seconds)
+    max_seconds = settings.planner_cooldown_max_seconds()
+    current = store.get_memory(conn, "planner.cooldown_seconds")
+    try:
+        current_seconds = int(current)
+    except Exception:
+        current_seconds = 0
+    next_seconds = max(base_seconds, current_seconds * 2 if current_seconds else base_seconds)
+    next_seconds = min(next_seconds, max_seconds)
+    until = datetime.now(timezone.utc) + timedelta(seconds=next_seconds)
+    store.set_memory(conn, "planner.cooldown_seconds", next_seconds)
     store.set_memory(conn, "planner.cooldown_until", until.isoformat())
     append_jsonl(
         str(settings.audit_path()),
         {
             "kind": "planner.cooldown_set",
             "reason": reason,
-            "cooldown_seconds": seconds,
+            "cooldown_seconds": next_seconds,
             "cooldown_until": until.isoformat(),
+        },
+    )
+
+
+def _clear_planner_cooldown(conn) -> None:
+    if store.get_memory(conn, "planner.cooldown_until") is None:
+        return
+    store.set_memory(conn, "planner.cooldown_until", None)
+    store.set_memory(conn, "planner.cooldown_seconds", 0)
+    append_jsonl(
+        str(settings.audit_path()),
+        {
+            "kind": "planner.cooldown_cleared",
         },
     )
 
@@ -1793,6 +1815,7 @@ def build_proposals(events: List[Any], conn) -> List[Dict[str, Any]]:
                     "attempt": attempt,
                 },
             )
+            _clear_planner_cooldown(conn)
             for proposal in validated:
                 proposal["ai_context_hash"] = context_hash
                 proposal["ai_context_excerpt"] = _proposal_excerpt(proposal)
@@ -1848,6 +1871,7 @@ def build_improvement_proposals(conn) -> List[Dict[str, Any]]:
         validated = _validate_planner_output(policy, result.proposals)
     except Exception:
         return []
+    _clear_planner_cooldown(conn)
 
     filtered = []
     for proposal in validated:
@@ -1888,6 +1912,7 @@ def build_suggestion_followup(conn, suggestion: str) -> Dict[str, Any] | None:
         if _is_rate_limited(str(exc)):
             _set_planner_cooldown(conn, str(exc))
         return None
+    _clear_planner_cooldown(conn)
     if not validated:
         return None
     proposal = validated[0]
