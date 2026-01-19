@@ -166,6 +166,12 @@ def _collect_module_events(conn) -> List[Dict[str, Any]]:
         tcp_ports = module_cfg.get("tcp_ports", [])
         timeout_seconds = float(module_cfg.get("timeout_seconds", 0.2))
         max_hosts = int(module_cfg.get("max_hosts", 128))
+        max_scan_seconds = module_cfg.get("max_scan_seconds")
+        if max_scan_seconds is not None:
+            try:
+                max_scan_seconds = float(max_scan_seconds)
+            except (TypeError, ValueError):
+                max_scan_seconds = None
         scan_interval = int(module_cfg.get("scan_interval_seconds", settings.ha_error_cooldown_seconds()))
         active = module_cfg.get("active", {})
         if _cooldown_elapsed(conn, "network.discovery", scan_interval):
@@ -174,6 +180,7 @@ def _collect_module_events(conn) -> List[Dict[str, Any]]:
                 tcp_ports=tcp_ports if isinstance(tcp_ports, list) else [],
                 timeout_seconds=timeout_seconds,
                 max_hosts=max_hosts,
+                max_scan_seconds=max_scan_seconds,
                 active=active if isinstance(active, dict) else {},
             )
             events.append(

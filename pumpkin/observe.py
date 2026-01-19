@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import socket
+import time
 import ipaddress
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
@@ -400,8 +401,10 @@ def network_discovery(
     tcp_ports: Iterable[int],
     timeout_seconds: float,
     max_hosts: int,
+    max_scan_seconds: Optional[float] = None,
     active: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    start_time = time.monotonic()
     local_ip = _detect_local_ip()
     network = None
     if isinstance(subnet, str) and subnet.strip() and subnet.strip().lower() != "auto":
@@ -447,6 +450,8 @@ def network_discovery(
 
     if scan_subnet and network:
         for host in network.hosts():
+            if max_scan_seconds is not None and (time.monotonic() - start_time) >= max_scan_seconds:
+                break
             ip = str(host)
             if ip in seen_ips:
                 continue
@@ -456,8 +461,12 @@ def network_discovery(
                 break
 
     for ip, entry in candidates:
+        if max_scan_seconds is not None and (time.monotonic() - start_time) >= max_scan_seconds:
+            break
         open_ports: List[int] = []
         for port in ports:
+            if max_scan_seconds is not None and (time.monotonic() - start_time) >= max_scan_seconds:
+                break
             if _probe_port(ip, port, timeout_seconds):
                 open_ports.append(port)
 

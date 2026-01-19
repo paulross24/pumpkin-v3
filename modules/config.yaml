@@ -55,6 +55,7 @@ modules:
       - 62078
     timeout_seconds: 1.0
     max_hosts: 254
+    max_scan_seconds: 20
     scan_interval_seconds: 300
     active:
       enabled: true
