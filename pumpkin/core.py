@@ -423,6 +423,22 @@ def _execute_approved(conn, policy: policy_mod.Policy) -> None:
 
         if not action_type:
             suggestion = details.get("suggestion")
+            if suggestion and propose.planner_cooldown_active(conn):
+                cooldown_until = propose.planner_cooldown_until(conn)
+                if cooldown_until:
+                    details["deferred_until"] = cooldown_until.isoformat()
+                    store.update_proposal_details(conn, proposal_id, details)
+                audit.append_jsonl(
+                    str(settings.audit_path()),
+                    {
+                        "kind": "proposal.deferred",
+                        "proposal_id": proposal_id,
+                        "reason": "planner_cooldown_active",
+                        "cooldown_until": cooldown_until.isoformat() if cooldown_until else None,
+                        "policy_hash": policy.policy_hash,
+                    },
+                )
+                continue
             followup = propose.build_suggestion_followup(conn, suggestion) if isinstance(suggestion, str) else None
             if followup:
                 summary = followup.get("summary") or f"Implement suggestion: {suggestion[:80]}"

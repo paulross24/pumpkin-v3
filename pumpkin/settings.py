@@ -129,6 +129,14 @@ def planner_retry_count() -> int:
         return 1
 
 
+def planner_cooldown_seconds() -> int:
+    value = os.getenv("PUMPKIN_PLANNER_COOLDOWN_SECONDS", "120")
+    try:
+        return max(0, int(value))
+    except ValueError:
+        return 120
+
+
 def context_pack_max_bytes() -> int:
     value = os.getenv("PUMPKIN_CONTEXT_MAX_BYTES", str(200 * 1024))
     try:

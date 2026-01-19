@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import planner
@@ -38,6 +39,48 @@ ALLOWED_KINDS = {
 SPEAKER_SESSION_WINDOW_SECONDS = 30 * 60
 CPU_LOAD_WARN_THRESHOLD = 2.0
 MEM_AVAILABLE_WARN_KB = 200_000
+
+
+def planner_cooldown_until(conn) -> Optional[datetime]:
+    raw = store.get_memory(conn, "planner.cooldown_until")
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def planner_cooldown_active(conn) -> bool:
+    until = planner_cooldown_until(conn)
+    return bool(until and until > datetime.now(timezone.utc))
+
+
+def _set_planner_cooldown(conn, reason: str) -> None:
+    seconds = settings.planner_cooldown_seconds()
+    if seconds <= 0:
+        return
+    until = datetime.now(timezone.utc) + timedelta(seconds=seconds)
+    store.set_memory(conn, "planner.cooldown_until", until.isoformat())
+    append_jsonl(
+        str(settings.audit_path()),
+        {
+            "kind": "planner.cooldown_set",
+            "reason": reason,
+            "cooldown_seconds": seconds,
+            "cooldown_until": until.isoformat(),
+        },
+    )
+
+
+def _is_rate_limited(error: str) -> bool:
+    if not isinstance(error, str):
+        return False
+    lowered = error.lower()
+    return "429" in lowered or "too many requests" in lowered or "rate limit" in lowered
 
 
 def _speaker_key(payload: Dict[str, Any]) -> Optional[str]:
@@ -1719,8 +1762,18 @@ def build_proposals(events: List[Any], conn) -> List[Dict[str, Any]]:
         },
     )
 
-    plan = planner.load_planner()
     rule_based = _apply_rigor_defaults(_rule_based_proposals(events, conn))
+    if planner_cooldown_active(conn):
+        append_jsonl(
+            str(settings.audit_path()),
+            {
+                "kind": "planner.cooldown_active",
+                "cooldown_until": planner_cooldown_until(conn).isoformat(),
+            },
+        )
+        return rule_based[:MAX_PROPOSALS_PER_LOOP]
+
+    plan = planner.load_planner()
     retry_limit = settings.planner_retry_count()
     last_error: str | None = None
 
@@ -1747,6 +1800,8 @@ def build_proposals(events: List[Any], conn) -> List[Dict[str, Any]]:
             return combined[:MAX_PROPOSALS_PER_LOOP]
         except Exception as exc:
             last_error = str(exc)
+            if _is_rate_limited(last_error):
+                _set_planner_cooldown(conn, last_error)
             append_jsonl(
                 str(settings.audit_path()),
                 {
@@ -1777,6 +1832,16 @@ def build_improvement_proposals(conn) -> List[Dict[str, Any]]:
         "Do not propose new modules or new capabilities. "
         "Keep proposals to maintenance, action.request, policy.change, or hardware.recommendation."
     )
+    if planner_cooldown_active(conn):
+        append_jsonl(
+            str(settings.audit_path()),
+            {
+                "kind": "planner.cooldown_active",
+                "cooldown_until": planner_cooldown_until(conn).isoformat(),
+            },
+        )
+        return []
+
     try:
         plan = planner.load_planner()
         result = plan.generate(context_pack, prompt)
@@ -1798,6 +1863,15 @@ def build_suggestion_followup(conn, suggestion: str) -> Dict[str, Any] | None:
     if not isinstance(suggestion, str) or not suggestion.strip():
         return None
     policy = policy_mod.load_policy(str(settings.policy_path()))
+    if planner_cooldown_active(conn):
+        append_jsonl(
+            str(settings.audit_path()),
+            {
+                "kind": "planner.cooldown_active",
+                "cooldown_until": planner_cooldown_until(conn).isoformat(),
+            },
+        )
+        return None
     context_pack, context_hash, context_excerpt = build_context_pack(conn)
     prompt = (
         _render_prompt(context_pack)
@@ -1810,7 +1884,9 @@ def build_suggestion_followup(conn, suggestion: str) -> Dict[str, Any] | None:
         plan = planner.load_planner()
         result = plan.generate(context_pack, prompt)
         validated = _validate_planner_output(policy, result.proposals)
-    except Exception:
+    except Exception as exc:
+        if _is_rate_limited(str(exc)):
+            _set_planner_cooldown(conn, str(exc))
         return None
     if not validated:
         return None
