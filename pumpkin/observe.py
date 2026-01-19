@@ -200,6 +200,35 @@ def _rtsp_probe_paths(
     return None
 
 
+def rtsp_probe_paths(
+    ip: str,
+    port: int,
+    paths: Iterable[str],
+    timeout: float,
+    max_bytes: int,
+) -> List[Dict[str, Any]]:
+    results: List[Dict[str, Any]] = []
+    for raw in paths:
+        path = str(raw).strip()
+        if not path:
+            continue
+        if not path.startswith("/"):
+            path = f"/{path}"
+        status = _rtsp_describe(ip, port, path, timeout, max_bytes)
+        if not status:
+            results.append({"path": path, "status": "no response"})
+            continue
+        status_lower = status.lower()
+        results.append(
+            {
+                "path": path,
+                "status": status,
+                "auth_required": "401" in status_lower or "403" in status_lower,
+            }
+        )
+    return results
+
+
 def _onvif_probe(ip: str, port: int, timeout: float, max_bytes: int) -> Optional[Dict[str, Any]]:
     body = (
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>"

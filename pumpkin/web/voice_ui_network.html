@@ -101,6 +101,14 @@
         background: #fffdf9;
         font-family: inherit;
       }
+      textarea {
+        padding: 8px 10px;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        background: #fffdf9;
+        font-family: inherit;
+        min-height: 70px;
+      }
     </style>
   </head>
   <body>
@@ -133,6 +141,19 @@
       </section>
       <section class="card">
         <div class="row" style="margin-bottom: 8px;">
+          <span class="pill">RTSP probe</span>
+          <span class="sub">Test common RTSP paths to find a stream URL.</span>
+        </div>
+        <div class="row" style="margin-bottom: 8px;">
+          <input id="rtsp-ip" type="text" placeholder="IP address" />
+          <input id="rtsp-port" type="text" placeholder="Port (554 or 8554)" />
+          <button id="rtsp-probe">Probe paths</button>
+        </div>
+        <textarea id="rtsp-paths" placeholder="/Streaming/Channels/101, /live, /cam/realmonitor?channel=1&subtype=0"></textarea>
+        <div id="rtsp-status" class="meta"></div>
+      </section>
+      <section class="card">
+        <div class="row" style="margin-bottom: 8px;">
           <span class="pill" id="count">0 devices</span>
           <button id="refresh">Refresh</button>
         </div>
@@ -143,6 +164,7 @@
       const listNode = document.getElementById("list");
       const countNode = document.getElementById("count");
       const deepStatusNode = document.getElementById("deep-status");
+      const rtspStatusNode = document.getElementById("rtsp-status");
 
       const load = async () => {
         try {
@@ -292,6 +314,39 @@
 
       document.getElementById("refresh").addEventListener("click", load);
       document.getElementById("deep-scan").addEventListener("click", () => requestDeepScan());
+      document.getElementById("rtsp-probe").addEventListener("click", async () => {
+        const ip = document.getElementById("rtsp-ip").value.trim();
+        const portRaw = document.getElementById("rtsp-port").value.trim();
+        const pathsRaw = document.getElementById("rtsp-paths").value.trim();
+        if (!ip) {
+          window.alert("Enter an IP to probe.");
+          return;
+        }
+        const port = portRaw ? parseInt(portRaw, 10) : 8554;
+        const paths = pathsRaw ? pathsRaw.split(",").map((item) => item.trim()).filter(Boolean) : [];
+        try {
+          const res = await fetch("/network/rtsp_probe", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ip, port, paths }),
+          });
+          if (!res.ok) {
+            throw new Error("Request failed");
+          }
+          const payload = await res.json();
+          const results = payload.results || [];
+          if (!results.length) {
+            rtspStatusNode.textContent = "No responses for the provided paths.";
+            return;
+          }
+          rtspStatusNode.innerHTML = results.map((result) => {
+            const auth = result.auth_required ? " (auth required)" : "";
+            return `<div><strong>${result.path}</strong> → ${result.status}${auth}</div>`;
+          }).join("");
+        } catch (err) {
+          rtspStatusNode.textContent = "Failed to probe RTSP paths.";
+        }
+      });
       load();
     </script>
   </body>

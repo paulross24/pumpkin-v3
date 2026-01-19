@@ -3643,6 +3643,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
             if self.path == "/network/deep_scan":
                 self._handle_network_deep_scan()
                 return
+            if self.path == "/network/rtsp_probe":
+                self._handle_network_rtsp_probe()
+                return
             if self.path == "/identity/link":
                 self._handle_identity_link()
                 return
@@ -3794,6 +3797,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "POST /ingest",
                             "POST /identity/link",
                             "POST /network/deep_scan",
+                            "POST /network/rtsp_probe",
                             "POST /network/mark",
                             "POST /notifications/test",
                             "POST /ha/webhook",
@@ -4179,6 +4183,29 @@ class VoiceHandler(BaseHTTPRequestHandler):
                                                         "ports": {
                                                             "type": "array",
                                                             "items": {"type": "integer"},
+                                                        },
+                                                    },
+                                                    "required": ["ip"],
+                                                }
+                                            }
+                                        }
+                                    },
+                                }
+                            },
+                            "/network/rtsp_probe": {
+                                "post": {
+                                    "summary": "Probe RTSP paths on a host",
+                                    "requestBody": {
+                                        "content": {
+                                            "application/json": {
+                                                "schema": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "ip": {"type": "string"},
+                                                        "port": {"type": "integer"},
+                                                        "paths": {
+                                                            "type": "array",
+                                                            "items": {"type": "string"},
                                                         },
                                                     },
                                                     "required": ["ip"],
@@ -5124,6 +5151,66 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 "device": device,
                 "person_id": person_id,
                 "person_name": person_name,
+            },
+        )
+
+    def _handle_network_rtsp_probe(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+        try:
+            data = _parse_json(body)
+        except ValueError:
+            _bad_request(self, "invalid JSON")
+            return
+        if not isinstance(data, dict):
+            _bad_request(self, "JSON body must be an object")
+            return
+        ip = data.get("ip")
+        port = data.get("port", 554)
+        paths = data.get("paths")
+        if not isinstance(ip, str) or not ip.strip():
+            _bad_request(self, "ip must be a string")
+            return
+        try:
+            ip_address(ip.strip())
+        except ValueError:
+            _bad_request(self, "ip must be a valid address")
+            return
+        try:
+            port = int(port)
+        except (TypeError, ValueError):
+            _bad_request(self, "port must be an integer")
+            return
+        if port < 1 or port > 65535:
+            _bad_request(self, "port must be 1-65535")
+            return
+        if paths is None:
+            paths = []
+        if isinstance(paths, str):
+            paths = [item.strip() for item in paths.split(",") if item.strip()]
+        if not isinstance(paths, list):
+            _bad_request(self, "paths must be a list or comma-separated string")
+            return
+        # Cap probes to keep it quick.
+        paths = paths[:20]
+        module_cfg = _load_network_module_cfg()
+        timeout_seconds = float(module_cfg.get("deep_scan_timeout_seconds", 0.2))
+        max_banner_bytes = int(module_cfg.get("active", {}).get("max_banner_bytes", 256))
+        results = observe.rtsp_probe_paths(
+            ip=ip.strip(),
+            port=port,
+            paths=paths,
+            timeout=timeout_seconds,
+            max_bytes=max_banner_bytes,
+        )
+        _send_json(
+            self,
+            200,
+            {
+                "status": "ok",
+                "ip": ip.strip(),
+                "port": port,
+                "results": results,
             },
         )
 
