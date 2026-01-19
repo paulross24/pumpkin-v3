@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 from . import audit
@@ -224,6 +224,44 @@ def _load_events_since_last(conn) -> List[Any]:
     if events:
         store.set_memory(conn, "core.last_event_id", events[-1]["id"])
     return events
+
+
+def _requeue_orphaned_suggestions(conn, policy_hash: str) -> None:
+    if propose.planner_cooldown_active(conn):
+        return
+    rows = conn.execute(
+        """
+        SELECT id, details_json FROM proposals
+        WHERE status = 'executed'
+          AND kind = 'action.request'
+          AND json_extract(details_json, '$.suggestion') IS NOT NULL
+          AND json_extract(details_json, '$.converted_followup_id') IS NULL
+        ORDER BY ts_created DESC
+        LIMIT 5
+        """
+    ).fetchall()
+    if not rows:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    for row in rows:
+        proposal_id = row["id"]
+        details = json.loads(row["details_json"])
+        requeue_count = int(details.get("requeue_count", 0))
+        if requeue_count >= 3:
+            continue
+        details["requeue_count"] = requeue_count + 1
+        details["requeued_at"] = now
+        store.update_proposal_details(conn, proposal_id, details)
+        store.update_proposal_status(conn, proposal_id, "approved")
+        audit.append_jsonl(
+            str(settings.audit_path()),
+            {
+                "kind": "proposal.requeued",
+                "proposal_id": proposal_id,
+                "requeue_count": details["requeue_count"],
+                "policy_hash": policy_hash,
+            },
+        )
 
 
 def _create_heartbeat(conn, policy_hash: str) -> None:
@@ -460,6 +498,8 @@ def _execute_approved(conn, policy: policy_mod.Policy) -> None:
                     )
                 else:
                     new_id = None
+                details["converted_followup_id"] = new_id
+                store.update_proposal_details(conn, proposal_id, details)
                 store.update_proposal_status(conn, proposal_id, "executed")
                 audit.append_jsonl(
                     str(settings.audit_path()),
@@ -471,6 +511,9 @@ def _execute_approved(conn, policy: policy_mod.Policy) -> None:
                     },
                 )
                 continue
+            if isinstance(suggestion, str) and suggestion:
+                details["conversion_failed"] = "planner_followup_unavailable"
+                store.update_proposal_details(conn, proposal_id, details)
             store.update_proposal_status(conn, proposal_id, "failed")
             audit.append_jsonl(
                 str(settings.audit_path()),
@@ -634,6 +677,7 @@ def run_once() -> None:
         store.set_memory(conn, "core.last_reflection_date", datetime.now().date().isoformat())
     _record_proposals(conn, policy, proposals)
 
+    _requeue_orphaned_suggestions(conn, policy.policy_hash)
     _execute_approved(conn, policy)
 
 
