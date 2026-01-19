@@ -186,13 +186,17 @@ def _rtsp_probe_paths(
     ]
     for path in common_paths:
         status = _rtsp_describe(ip, port, path, timeout, max_bytes)
-        if status and "200" in status:
-            return {
-                "type": "rtsp",
-                "port": port,
-                "status": status,
-                "url": f"rtsp://{ip}:{port}{path}",
-            }
+        if not status:
+            continue
+        status_lower = status.lower()
+        auth_required = "401" in status_lower or "403" in status_lower
+        return {
+            "type": "rtsp",
+            "port": port,
+            "status": status,
+            "url": f"rtsp://{ip}:{port}{path}",
+            "auth_required": auth_required,
+        }
     return None
 
 
@@ -218,7 +222,16 @@ def _onvif_probe(ip: str, port: int, timeout: float, max_bytes: int) -> Optional
         if not data:
             return None
         text = data.decode(errors="ignore")
-        if "GetDeviceInformationResponse" not in text:
+        status_line = text.splitlines()[0] if text else ""
+        status_lower = status_line.lower()
+        if "getdeviceinformationresponse" not in text.lower():
+            if "401" in status_lower or "403" in status_lower:
+                return {
+                    "type": "onvif",
+                    "port": port,
+                    "status": status_line.strip(),
+                    "auth_required": True,
+                }
             return None
         def _extract(tag: str) -> Optional[str]:
             start = text.find(f"<tds:{tag}>")
@@ -230,6 +243,7 @@ def _onvif_probe(ip: str, port: int, timeout: float, max_bytes: int) -> Optional
         return {
             "type": "onvif",
             "port": port,
+            "status": status_line.strip(),
             "manufacturer": _extract("Manufacturer"),
             "model": _extract("Model"),
             "firmware_version": _extract("FirmwareVersion"),
