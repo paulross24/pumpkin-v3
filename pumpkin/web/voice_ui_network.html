@@ -151,8 +151,9 @@
           const discovery = data.network_discovery || {};
           const deepScan = data.network_deep_scan || {};
           const devices = Array.isArray(discovery.devices) ? discovery.devices : [];
-          countNode.textContent = `${discovery.device_count || devices.length} devices`;
-          render(devices);
+          const merged = mergeDeepScan(devices, deepScan.jobs || {});
+          countNode.textContent = `${merged.length} devices`;
+          render(merged);
           renderDeepScan(deepScan.jobs || {});
         } catch (err) {
           listNode.innerHTML = "Failed to load network discovery.";
@@ -207,6 +208,25 @@
           card.appendChild(actions);
           listNode.appendChild(card);
         });
+      };
+
+      const mergeDeepScan = (devices, jobs) => {
+        const merged = [...devices];
+        const existing = new Set(merged.map((item) => item.ip));
+        Object.values(jobs || {}).forEach((job) => {
+          if (!job || !job.ip || existing.has(job.ip)) {
+            return;
+          }
+          merged.push({
+            ip: job.ip,
+            mac: null,
+            device: "deep-scan",
+            open_ports: job.open_ports || [],
+            services: job.services || [],
+            hints: job.hints || [],
+          });
+        });
+        return merged;
       };
 
       const renderDeepScan = (jobs) => {
