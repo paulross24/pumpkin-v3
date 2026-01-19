@@ -196,6 +196,50 @@ def _rtsp_probe_paths(
     return None
 
 
+def _onvif_probe(ip: str, port: int, timeout: float, max_bytes: int) -> Optional[Dict[str, Any]]:
+    body = (
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
+        "<s:Envelope xmlns:s=\"http://www.w3.org/2003/05/soap-envelope\" "
+        "xmlns:tds=\"http://www.onvif.org/ver10/device/wsdl\">"
+        "<s:Body><tds:GetDeviceInformation/></s:Body></s:Envelope>"
+    ).encode("utf-8")
+    request = (
+        f"POST /onvif/device_service HTTP/1.1\r\n"
+        f"Host: {ip}\r\n"
+        "Content-Type: application/soap+xml; charset=utf-8\r\n"
+        f"Content-Length: {len(body)}\r\n"
+        "Connection: close\r\n\r\n"
+    ).encode("ascii") + body
+    try:
+        with socket.create_connection((ip, port), timeout=timeout) as sock:
+            sock.settimeout(timeout)
+            sock.sendall(request)
+            data = sock.recv(max_bytes)
+        if not data:
+            return None
+        text = data.decode(errors="ignore")
+        if "GetDeviceInformationResponse" not in text:
+            return None
+        def _extract(tag: str) -> Optional[str]:
+            start = text.find(f"<tds:{tag}>")
+            end = text.find(f"</tds:{tag}>")
+            if start == -1 or end == -1 or end <= start:
+                return None
+            start += len(f"<tds:{tag}>")
+            return text[start:end].strip() or None
+        return {
+            "type": "onvif",
+            "port": port,
+            "manufacturer": _extract("Manufacturer"),
+            "model": _extract("Model"),
+            "firmware_version": _extract("FirmwareVersion"),
+            "serial_number": _extract("SerialNumber"),
+            "hardware_id": _extract("HardwareId"),
+        }
+    except Exception:
+        return None
+
+
 def _probe_http(
     ip: str,
     port: int,
@@ -450,6 +494,10 @@ def deep_scan_host(
             service = _probe_http(ip, port, timeout_seconds, max_http_bytes, port in {443, 8443, 9443})
             if service:
                 services.append(service)
+            if port in {80, 8000, 8080, 8081, 8899}:
+                onvif = _onvif_probe(ip, port, timeout_seconds, max_http_bytes)
+                if onvif:
+                    services.append(onvif)
         if rtsp_enabled and port in {554, 8554}:
             service = _probe_rtsp(ip, port, timeout_seconds, max_banner_bytes)
             if service:
