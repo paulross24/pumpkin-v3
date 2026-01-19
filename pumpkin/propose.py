@@ -1581,6 +1581,97 @@ def _rule_based_proposals(events: List[Any], conn) -> List[Dict[str, Any]]:
                 }
             )
 
+    snapshot = store.get_memory(conn, "network.discovery.snapshot")
+    deep_scan = store.get_memory(conn, "network.discovery.deep_scan")
+    devices_by_ip: Dict[str, Dict[str, Any]] = {}
+    if isinstance(snapshot, dict):
+        for device in snapshot.get("devices", []):
+            if isinstance(device, dict) and device.get("ip"):
+                devices_by_ip[device["ip"]] = device
+    if isinstance(deep_scan, dict):
+        jobs = deep_scan.get("jobs", {})
+        if isinstance(jobs, dict):
+            for job in jobs.values():
+                if not isinstance(job, dict):
+                    continue
+                if job.get("status") != "complete":
+                    continue
+                ip = job.get("ip")
+                if not isinstance(ip, str) or not ip.strip():
+                    continue
+                if ip in devices_by_ip:
+                    continue
+                devices_by_ip[ip] = {
+                    "ip": ip,
+                    "open_ports": job.get("open_ports", []),
+                    "services": job.get("services", []),
+                    "hints": job.get("hints", []),
+                }
+
+    auto_state = store.get_memory(conn, "network.discovery.auto_proposed")
+    if not isinstance(auto_state, dict):
+        auto_state = {}
+    auto_seen = auto_state.get("camera_ips")
+    if not isinstance(auto_seen, list):
+        auto_seen = []
+
+    for ip, device in devices_by_ip.items():
+        hints = device.get("hints") or []
+        open_ports = device.get("open_ports") or []
+        services = device.get("services") or []
+        is_camera = False
+        if any(isinstance(h, str) and "camera" in h.lower() for h in hints):
+            is_camera = True
+        if any(port in {554, 8554} for port in open_ports if isinstance(port, int)):
+            is_camera = True
+        if any(isinstance(s, dict) and s.get("type") == "rtsp" for s in services):
+            is_camera = True
+        if not is_camera:
+            continue
+        if ip in auto_seen:
+            continue
+        summary = f"Integrate camera at {ip}"
+        if store.proposal_exists(conn, summary, statuses=["pending", "approved"]):
+            auto_seen.append(ip)
+            continue
+        proposals.append(
+            {
+                "kind": "hardware.recommendation",
+                "summary": summary,
+                "details": {
+                    "rationale": "A camera-like device was discovered on the network and should be integrated.",
+                    "device": {
+                        "ip": ip,
+                        "hints": hints,
+                        "open_ports": open_ports,
+                        "services": services,
+                    },
+                    "implementation": (
+                        "Identify the camera brand/protocol (RTSP/HTTP), "
+                        "capture stream URL or credentials, and draft an integration plan."
+                    ),
+                    "verification": (
+                        "Confirm the stream endpoint is reachable and appears in the network snapshot."
+                    ),
+                    "rollback_plan": "Remove the integration and stored credentials if needed.",
+                },
+                "risk": 0.3,
+                "expected_outcome": "Integration plan is ready for approval.",
+                "source_event_ids": [],
+                "needs_new_capability": False,
+                "capability_request": None,
+                "steps": [
+                    "Identify camera protocol and access method.",
+                    "Draft integration plan and required credentials.",
+                    "Propose activation steps and verify reachability.",
+                ],
+            }
+        )
+        auto_seen.append(ip)
+
+    auto_state["camera_ips"] = auto_seen[-200:]
+    store.set_memory(conn, "network.discovery.auto_proposed", auto_state)
+
     return proposals
 
 
