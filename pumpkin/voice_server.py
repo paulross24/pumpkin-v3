@@ -3976,6 +3976,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "GET /health",
                             "GET /ha/callback",
                             "GET /ui",
+                            "GET /ui/homeassistant",
                             "GET /ui/proposals",
                             "GET /ui/network",
                             "GET /ui/car",
@@ -4039,6 +4040,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 return
             if path in {"/ui", "/ui/"}:
                 _send_html(self, 200, _load_voice_ui_asset("voice_ui.html"))
+                return
+            if path == "/ui/homeassistant":
+                _send_html(self, 200, _load_voice_ui_asset("voice_ui_homeassistant.html"))
                 return
             if path == "/ui/proposals":
                 _send_html(self, 200, _load_voice_ui_asset("voice_ui_proposals.html"))
@@ -4600,6 +4604,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                                 }
                             },
                             "/inventory": {"get": {"summary": "Inventory snapshot and opportunities"}},
+                            "/ui/homeassistant": {"get": {"summary": "Home Assistant dashboard"}},
                             "/ui/inventory": {"get": {"summary": "Inventory dashboard"}},
                             "/summary": {
                                 "get": {
