@@ -44,6 +44,25 @@ INGEST_LOG_TEXT_LIMIT = 160
 OPENAI_TIMEOUT_SECONDS = 15
 _ENV_PATH = Path("/etc/pumpkin/pumpkin.env")
 
+THOUGHT_EVENT_TYPES = {
+    "voice.command",
+    "voice.reply",
+    "voice.ask",
+    "voice.ha_action",
+    "profile.updated",
+    "profile.linked",
+    "memory.updated",
+    "selfcheck.run",
+    "selfcheck.failure",
+    "selfheal.action",
+    "network.discovery",
+    "network.discovery.deep_scan",
+    "car.alert",
+    "face.alert",
+    "insight.generated",
+    "insight.briefing",
+}
+
 _DEEP_SCAN_LOCK = threading.Lock()
 _DEEP_SCAN_RUNNING: set[str] = set()
 _last_seen = {}
@@ -286,6 +305,76 @@ def _truncate_text(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[:limit] + "..."
+
+
+def _format_thought_message(event_type: str, payload: Dict[str, Any]) -> str:
+    text = payload.get("text") if isinstance(payload, dict) else None
+    reply = payload.get("reply") if isinstance(payload, dict) else None
+    message = payload.get("message") if isinstance(payload, dict) else None
+    summary = payload.get("summary") if isinstance(payload, dict) else None
+    action = payload.get("action") if isinstance(payload, dict) else None
+    title = payload.get("title") if isinstance(payload, dict) else None
+    count = payload.get("device_count") if isinstance(payload, dict) else None
+    target = payload.get("target") if isinstance(payload, dict) else None
+
+    if event_type == "voice.command":
+        return f"heard: {_truncate_text(str(text or 'voice command'), 80)}"
+    if event_type == "voice.reply":
+        return f"replied: {_truncate_text(str(reply or 'voice reply'), 80)}"
+    if event_type == "voice.ask":
+        return f"asked: {_truncate_text(str(text or 'question'), 80)}"
+    if event_type == "voice.ha_action":
+        return f"ha action: {_truncate_text(str(action or 'executed'), 80)}"
+    if event_type == "profile.updated":
+        return "profile updated"
+    if event_type == "profile.linked":
+        return "profile linked"
+    if event_type == "memory.updated":
+        return "memory updated"
+    if event_type == "selfcheck.run":
+        return "selfcheck run"
+    if event_type == "selfcheck.failure":
+        return f"selfcheck failed: {_truncate_text(str(summary or 'issue'), 80)}"
+    if event_type == "selfheal.action":
+        return f"self-heal: {_truncate_text(str(action or 'attempt'), 80)}"
+    if event_type == "network.discovery":
+        if count is not None:
+            return f"network scan: {count} devices"
+        return "network scan complete"
+    if event_type == "network.discovery.deep_scan":
+        return f"deep scan: {_truncate_text(str(target or 'host'), 80)}"
+    if event_type == "car.alert":
+        return f"car alert: {_truncate_text(str(message or 'check vehicle'), 80)}"
+    if event_type == "face.alert":
+        return f"vision alert: {_truncate_text(str(message or 'unknown face'), 80)}"
+    if event_type.startswith("insight."):
+        return f"insight: {_truncate_text(str(title or summary or event_type), 80)}"
+    return _truncate_text(str(message or summary or event_type), 80)
+
+
+def _collect_thoughts(conn: sqlite3.Connection, limit: int = 12) -> List[Dict[str, Any]]:
+    rows = store.list_events(conn, limit=120)
+    items: List[Dict[str, Any]] = []
+    for row in rows:
+        event_type = row["type"] or ""
+        if event_type in THOUGHT_EVENT_TYPES or event_type.startswith("insight."):
+            try:
+                payload = json.loads(row["payload_json"])
+            except Exception:
+                payload = {}
+            message = _format_thought_message(event_type, payload)
+            items.append(
+                {
+                    "id": row["id"],
+                    "ts": row["ts"],
+                    "type": event_type,
+                    "severity": row["severity"],
+                    "message": message,
+                }
+            )
+            if len(items) >= limit:
+                break
+    return items
 
 
 def _conversation_key(device: str | None, profile: Dict[str, Any] | None) -> str | None:
@@ -4292,6 +4381,19 @@ class VoiceHandler(BaseHTTPRequestHandler):
                     },
                 )
                 return
+            if path == "/thoughts":
+                limit = _parse_limit(params.get("limit", [None])[0], default=12, max_limit=50)
+                conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+                thoughts = _collect_thoughts(conn, limit)
+                _send_json(
+                    self,
+                    200,
+                    {
+                        "count": len(thoughts),
+                        "thoughts": thoughts,
+                    },
+                )
+                return
             if path == "/errors":
                 limit = _parse_limit(params.get("limit", [None])[0], default=5, max_limit=50)
                 conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
@@ -4355,6 +4457,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "/capabilities": {"get": {"summary": "Capability snapshot"}},
                             "/car/telemetry": {"get": {"summary": "Car telemetry summary"}},
                             "/notifications": {"get": {"summary": "Recent alerts"}},
+                            "/thoughts": {"get": {"summary": "Recent thought stream"}},
                             "/vision/alerts": {"get": {"summary": "Unknown face alert settings"}},
                             "/vision/unknown": {"get": {"summary": "List unknown face events"}},
                             "/vision/snapshot": {"get": {"summary": "Fetch a captured snapshot"}},

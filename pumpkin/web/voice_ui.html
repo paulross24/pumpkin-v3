@@ -482,33 +482,10 @@
         }
       };
 
-      const buildThoughtReel = (summary, alertItems) => {
-        const reelItems = [];
-        if (alertItems.length) {
-          const alert = alertItems[0];
-          reelItems.push(`alert: ${alert.message || "new alert"}`);
-        }
-        if (summary.issues && summary.issues.length) {
-          const issue = summary.issues[0];
-          reelItems.push(`issue: ${issue.summary || issue.message || "check required"}`);
-        }
-        if (summary.proposals && summary.proposals.length) {
-          reelItems.push(`proposal: ${summary.proposals[0].summary || "pending"}`);
-        }
-        if (summary.insights && summary.insights.length) {
-          reelItems.push(`insight: ${summary.insights[0].title || "new insight"}`);
-        }
-        if (summary.router_events && summary.router_events.length) {
-          const evt = summary.router_events[0];
-          reelItems.push(`network: ${evt.message || evt.event || "activity"}`);
-        }
-        if (summary.homeassistant_last_event) {
-          const last = summary.homeassistant_last_event;
-          reelItems.push(`ha: ${last.event_type || "event"}`);
-        }
-        if (!reelItems.length) {
-          reelItems.push("idle: monitoring voice, network, cameras");
-        }
+      const buildThoughtReel = (thoughts) => {
+        const reelItems = thoughts.length
+          ? thoughts.map((item) => item.message || "activity")
+          : ["idle: monitoring voice, network, cameras"];
         const line = reelItems.join(" • ");
         if (thoughtReel) {
           thoughtReel.innerHTML = "";
@@ -518,6 +495,16 @@
           spanB.textContent = line;
           thoughtReel.appendChild(spanA);
           thoughtReel.appendChild(spanB);
+        }
+      };
+
+      const loadThoughts = async () => {
+        try {
+          const res = await fetch("/thoughts?limit=10");
+          const data = await res.json();
+          return Array.isArray(data.thoughts) ? data.thoughts : [];
+        } catch (err) {
+          return [];
         }
       };
 
@@ -597,7 +584,8 @@
           }
 
           const alertData = await loadAlerts();
-          buildThoughtReel(summary, alertData.items);
+          const thoughts = await loadThoughts();
+          buildThoughtReel(thoughts);
           const pulse = pulseLevel(summary, alertData.count);
           if (thoughtPulse) {
             thoughtPulse.dataset.level = String(pulse.level);
