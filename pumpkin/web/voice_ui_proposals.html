@@ -89,6 +89,15 @@
         display: grid;
         gap: 8px;
       }
+      .trail.hidden {
+        display: none;
+      }
+      .trail-toggle {
+        font-size: 12px;
+        color: var(--pumpkin-dark);
+        text-decoration: underline;
+        cursor: pointer;
+      }
       .trail pre {
         margin: 6px 0 0;
         font-size: 12px;
@@ -209,6 +218,7 @@
           const trail = document.createElement("div");
           trail.className = "trail";
           if (Array.isArray(proposal.trail) && proposal.trail.length) {
+            trail.classList.add("hidden");
             const rows = proposal.trail.map((event) => {
               const payload = event.payload ? JSON.stringify(event.payload, null, 2) : "";
               return `
@@ -222,6 +232,16 @@
             trail.innerHTML = `<div class="sub">Trail</div>${rows}`;
           } else {
             trail.textContent = "No linked events yet.";
+          }
+
+          const trailToggle = document.createElement("div");
+          if (Array.isArray(proposal.trail) && proposal.trail.length) {
+            trailToggle.className = "trail-toggle";
+            trailToggle.textContent = "View trail";
+            trailToggle.addEventListener("click", () => {
+              const hidden = trail.classList.toggle("hidden");
+              trailToggle.textContent = hidden ? "View trail" : "Hide trail";
+            });
           }
 
           const actions = document.createElement("div");
@@ -241,6 +261,9 @@
           card.appendChild(title);
           card.appendChild(meta);
           card.appendChild(details);
+          if (trailToggle.textContent) {
+            card.appendChild(trailToggle);
+          }
           card.appendChild(trail);
           card.appendChild(actions);
           listNode.appendChild(card);
