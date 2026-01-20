@@ -374,6 +374,7 @@
       <section class="card">
         <h3>Home Assistant</h3>
         <div class="stat" id="ha-last">none</div>
+        <div class="sub" id="ha-sync">Sync: n/a</div>
         <ul class="list" id="ha-meta"></ul>
       </section>
     </main>
@@ -411,6 +412,7 @@
       const cameraCount = byId("camera-count");
       const cameraList = byId("camera-list");
       const haLast = byId("ha-last");
+      const haSync = byId("ha-sync");
       const haMeta = byId("ha-meta");
       const identityName = byId("identity-name");
       const identityMeta = byId("identity-meta");
@@ -571,16 +573,28 @@
           }
 
           const last = summary.homeassistant_last_event;
+          const haSyncData = summary.homeassistant_sync || {};
+          const syncStamp = haSyncData.last_sync || "n/a";
+          setText(haSync, `Sync: ${syncStamp}`);
           if (last) {
             setText(haLast, `${last.event_type || "event"} at ${last.time_fired || "unknown"}`);
             const payload = last.payload || {};
             setList(haMeta, [
               `entity: ${payload.entity_id || "n/a"}`,
               `state: ${payload.state || "n/a"}`,
+              `entities: ${haSyncData.entity_count ?? "n/a"}`,
+              `areas: ${haSyncData.area_count ?? "n/a"}`,
+              `registry entities: ${haSyncData.entity_registry_count ?? "n/a"}`,
+              `registry devices: ${haSyncData.device_registry_count ?? "n/a"}`,
             ]);
           } else {
             setText(haLast, "none");
-            setList(haMeta, []);
+            setList(haMeta, [
+              `entities: ${haSyncData.entity_count ?? "n/a"}`,
+              `areas: ${haSyncData.area_count ?? "n/a"}`,
+              `registry entities: ${haSyncData.entity_registry_count ?? "n/a"}`,
+              `registry devices: ${haSyncData.device_registry_count ?? "n/a"}`,
+            ]);
           }
 
           const alertData = await loadAlerts();

@@ -141,7 +141,7 @@ def _collect_module_events(conn) -> List[Dict[str, Any]]:
         previous = store.get_memory(conn, "homeassistant.entities") or {}
         previous_summary = store.get_memory(conn, "homeassistant.summary") or {}
 
-        ha_events, current_states, summary = observe.homeassistant_snapshot(
+        ha_events, current_states, summary, details = observe.homeassistant_snapshot(
             base_url=base_url,
             token=token,
             previous=previous,
@@ -160,6 +160,25 @@ def _collect_module_events(conn) -> List[Dict[str, Any]]:
             store.set_memory(conn, "homeassistant.entities", current_states)
         if summary:
             store.set_memory(conn, "homeassistant.summary", summary)
+        if details.get("areas") is not None:
+            store.set_memory(conn, "homeassistant.areas", details.get("areas"))
+        if details.get("entity_registry") is not None:
+            store.set_memory(conn, "homeassistant.entity_registry", details.get("entity_registry"))
+        if details.get("device_registry") is not None:
+            store.set_memory(conn, "homeassistant.device_registry", details.get("device_registry"))
+        if summary or current_states:
+            sync = {
+                "last_sync": datetime.now().isoformat(),
+                "entity_count": len(current_states or {}),
+                "area_count": len(details.get("areas") or []) if details.get("areas") is not None else None,
+                "entity_registry_count": len(details.get("entity_registry") or [])
+                if details.get("entity_registry") is not None
+                else None,
+                "device_registry_count": len(details.get("device_registry") or [])
+                if details.get("device_registry") is not None
+                else None,
+            }
+            store.set_memory(conn, "homeassistant.sync", sync)
         if any(ev["type"] in {"homeassistant.request_failed", "homeassistant.states_failed"} for ev in ha_events):
             _record_cooldown(conn, "ha.request")
 

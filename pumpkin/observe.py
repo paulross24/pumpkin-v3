@@ -771,10 +771,11 @@ def homeassistant_snapshot(
     calendar_enabled: bool = False,
     calendar_days_ahead: int = 7,
     calendar_limit: int = 10,
-) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, Any]], Dict[str, Any]]:
+) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, Any]], Dict[str, Any], Dict[str, Any]]:
     events: List[Dict[str, Any]] = []
     areas_map: Dict[str, Dict[str, Any]] = {}
     previous_summary = previous_summary or {}
+    details: Dict[str, Any] = {"areas": None, "entity_registry": None, "device_registry": None}
     result = ha_client.fetch_status(
         base_url=base_url, token=token, timeout=settings.ha_request_timeout_seconds()
     )
@@ -796,7 +797,7 @@ def homeassistant_snapshot(
                 "severity": "warn",
             }
         )
-        return events, previous or {}, {}
+        return events, previous or {}, {}, details
 
     states_result = ha_client.fetch_states(
         base_url=base_url, token=token, timeout=settings.ha_request_timeout_seconds()
@@ -810,12 +811,13 @@ def homeassistant_snapshot(
                 "severity": "warn",
             }
         )
-        return events, previous or {}, {}
+        return events, previous or {}, {}, details
 
     areas_result = ha_client.fetch_areas(
         base_url=base_url, token=token, timeout=settings.ha_request_timeout_seconds()
     )
     if areas_result.get("ok"):
+        details["areas"] = areas_result.get("areas", [])
         for area in areas_result.get("areas", []):
             if not isinstance(area, dict):
                 continue
@@ -842,6 +844,7 @@ def homeassistant_snapshot(
     entity_area_map: Dict[str, str] = {}
     device_area_map: Dict[str, str] = {}
     if registry_result.get("ok"):
+        details["entity_registry"] = registry_result.get("entities", [])
         for entry in registry_result.get("entities", []):
             if not isinstance(entry, dict):
                 continue
@@ -868,6 +871,7 @@ def homeassistant_snapshot(
     )
     device_area_lookup: Dict[str, str] = {}
     if device_registry.get("ok"):
+        details["device_registry"] = device_registry.get("devices", [])
         for dev in device_registry.get("devices", []):
             if not isinstance(dev, dict):
                 continue
@@ -936,7 +940,7 @@ def homeassistant_snapshot(
                 "severity": "info",
             }
         )
-        return events, current, summary
+        return events, current, summary, details
 
     changes: List[Dict[str, Any]] = []
     for entity_id, payload in current.items():
@@ -1025,4 +1029,4 @@ def homeassistant_snapshot(
                     "severity": "warn",
                 }
             )
-    return events, current, summary
+    return events, current, summary, details

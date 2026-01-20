@@ -4127,6 +4127,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 bind_host, bind_port = _effective_bind(self)
                 conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
                 llm_config = _load_llm_config(conn)
+                ha_sync = store.get_memory(conn, "homeassistant.sync") or {}
                 _send_json(
                     self,
                     200,
@@ -4151,6 +4152,14 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "ingest_enabled": True,
                             "ha_webhook_enabled": True,
                             "home_summary_enabled": True,
+                        },
+                        "homeassistant": {
+                            "enabled": bool(ha_sync),
+                            "last_sync": ha_sync.get("last_sync"),
+                            "entity_count": ha_sync.get("entity_count"),
+                            "area_count": ha_sync.get("area_count"),
+                            "entity_registry_count": ha_sync.get("entity_registry_count"),
+                            "device_registry_count": ha_sync.get("device_registry_count"),
                         },
                         "build": {
                             "python": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
@@ -4304,6 +4313,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 system_snapshot = snapshot_event["payload"] if snapshot_event else None
                 ha_summary = store.get_memory(conn, "homeassistant.summary")
                 ha_last_event = store.get_memory(conn, "homeassistant.last_event")
+                ha_sync = store.get_memory(conn, "homeassistant.sync")
                 home_state = _home_state_summary(conn)
                 issues = _summarize_issues(system_snapshot)
                 network_discovery = store.get_memory(conn, "network.discovery.snapshot")
@@ -4365,6 +4375,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "system_snapshot": system_snapshot,
                         "homeassistant": ha_summary,
                         "homeassistant_last_event": ha_last_event,
+                        "homeassistant_sync": ha_sync,
                         "home_state": home_state,
                         "network_discovery": network_discovery,
                         "network_deep_scan": deep_scan_state,
