@@ -54,7 +54,7 @@ def modules_config_path() -> Path:
 
 
 def ha_request_timeout_seconds() -> float:
-    value = os.getenv("PUMPKIN_HA_TIMEOUT", "5")
+    value = os.getenv("PUMPKIN_HA_TIMEOUT", "20")
     try:
         return max(1.0, float(value))
     except ValueError:

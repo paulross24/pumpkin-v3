@@ -283,9 +283,12 @@ def _ws_connect(base_url: str, timeout: float) -> socket.socket:
         ctx = ssl.create_default_context()
         sock = ctx.wrap_socket(sock, server_hostname=host)
     key = base64.b64encode(os.urandom(16)).decode("ascii")
+    host_header = host
+    if (scheme == "http" and port != 80) or (scheme == "https" and port != 443):
+        host_header = f"{host}:{port}"
     headers = [
         f"GET {path} HTTP/1.1",
-        f"Host: {host}",
+        f"Host: {host_header}",
         "Upgrade: websocket",
         "Connection: Upgrade",
         f"Sec-WebSocket-Key: {key}",
