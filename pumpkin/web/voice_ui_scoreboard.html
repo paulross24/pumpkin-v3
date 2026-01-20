@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pumpkin Scoreboard</title>
+    <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='29' y='10' width='6' height='12' fill='%235b4b41'/><circle cx='32' cy='36' r='20' fill='%23e67c2e'/><circle cx='20' cy='36' r='14' fill='%23f08a3a' opacity='0.85'/><circle cx='44' cy='36' r='14' fill='%23f08a3a' opacity='0.85'/></svg>" />
+    <style>
+      :root {
+        --bg: #f6efe8;
+        --bg-accent: #f2d6b5;
+        --ink: #2a1b12;
+        --muted: #5b4b41;
+        --pumpkin: #e67c2e;
+        --pumpkin-dark: #b95519;
+        --card: #fff8f2;
+        --line: #e5d6c6;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Iowan Old Style", "Palatino", "Bookman", "Georgia", serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at 12% 10%, rgba(230, 124, 46, 0.15), transparent 40%),
+          linear-gradient(160deg, var(--bg), var(--bg-accent));
+        min-height: 100vh;
+      }
+      header {
+        padding: 28px 24px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .title {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 26px;
+        font-weight: 700;
+      }
+      .pumpkin-icon { width: 24px; height: 24px; flex: 0 0 auto; }
+      .sub { color: var(--muted); }
+      main {
+        padding: 12px 24px 40px;
+        display: grid;
+        gap: 16px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: 16px;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 16px;
+        box-shadow: 0 12px 32px rgba(50, 33, 22, 0.08);
+      }
+      .score {
+        font-size: 36px;
+        font-weight: 700;
+        color: var(--pumpkin-dark);
+      }
+      .section-title {
+        font-size: 14px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+      .list {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        display: grid;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+      button {
+        border: 1px solid var(--line);
+        background: var(--card);
+        color: var(--ink);
+        padding: 8px 12px;
+        border-radius: 10px;
+        cursor: pointer;
+      }
+      a { color: var(--pumpkin-dark); text-decoration: none; }
+      .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      .pill {
+        display: inline-block;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: rgba(230, 124, 46, 0.12);
+        color: var(--pumpkin-dark);
+        font-size: 12px;
+        font-weight: 600;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="title">
+        <svg class="pumpkin-icon" viewBox="0 0 64 64" aria-hidden="true">
+          <rect x="29" y="10" width="6" height="12" fill="var(--muted)" />
+          <circle cx="32" cy="36" r="20" fill="var(--pumpkin)" />
+          <circle cx="20" cy="36" r="14" fill="#f08a3a" opacity="0.85" />
+          <circle cx="44" cy="36" r="14" fill="#f08a3a" opacity="0.85" />
+        </svg>
+        Pumpkin vs Alexa Scoreboard
+      </div>
+      <div class="sub">
+        Snapshot of capability, natural language, and proactiveness.
+        <a href="/ui">Back to dashboard →</a>
+      </div>
+    </header>
+    <main>
+      <section class="card">
+        <div class="row" style="margin-bottom: 8px;">
+          <span class="pill" id="last-update">Last update: n/a</span>
+          <button id="refresh">Refresh</button>
+        </div>
+        <div class="section-title">How scoring works</div>
+        <ul class="list">
+          <li>Ability: modules + HA areas + network devices</li>
+          <li>Natural language: LLM enabled + recent voice routes</li>
+          <li>Proactiveness: proposals + insights + executed actions</li>
+        </ul>
+      </section>
+      <section class="grid">
+        <div class="card">
+          <div class="section-title">Pumpkin</div>
+          <div class="score" id="pumpkin-score">0</div>
+          <ul class="list" id="pumpkin-details"></ul>
+        </div>
+        <div class="card">
+          <div class="section-title">Alexa (baseline)</div>
+          <div class="score" id="alexa-score">6.0</div>
+          <ul class="list" id="alexa-details"></ul>
+        </div>
+      </section>
+    </main>
+    <script>
+      const setList = (node, items) => {
+        node.innerHTML = "";
+        if (!items.length) {
+          const li = document.createElement("li");
+          li.textContent = "None";
+          node.appendChild(li);
+          return;
+        }
+        items.forEach((item) => {
+          const li = document.createElement("li");
+          li.textContent = item;
+          node.appendChild(li);
+        });
+      };
+
+      const lastUpdate = document.getElementById("last-update");
+      const pumpkinScore = document.getElementById("pumpkin-score");
+      const pumpkinDetails = document.getElementById("pumpkin-details");
+      const alexaScore = document.getElementById("alexa-score");
+      const alexaDetails = document.getElementById("alexa-details");
+
+      const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+
+      const load = async () => {
+        try {
+          const [summaryRes, configRes, timelineRes] = await Promise.all([
+            fetch("/summary"),
+            fetch("/config"),
+            fetch("/timeline?limit=200"),
+          ]);
+          const summary = await summaryRes.json();
+          const config = await configRes.json();
+          const timeline = await timelineRes.json();
+          const events = timeline.events || [];
+          const voiceRoutes = events.filter((item) => item.type === "voice.router").length;
+          const insights = summary.insights || [];
+          const proposals = summary.proposal_count || 0;
+          const autonomy = summary.autonomy || {};
+          const inventory = summary.inventory || {};
+          const moduleCount = (inventory.enabled_modules || []).length;
+          const areaCount = inventory.ha_area_count ?? 0;
+          const deviceCount = inventory.network_device_count ?? 0;
+          const llmEnabled = Boolean(config.llm && config.llm.enabled);
+
+          const abilityScore = clamp(
+            (moduleCount / 6) * 4 + (areaCount / 10) * 3 + (deviceCount / 20) * 3,
+            0,
+            10
+          );
+          const languageScore = clamp((llmEnabled ? 7 : 3) + Math.min(3, voiceRoutes / 5), 0, 10);
+          const proactiveScore = clamp(
+            Math.min(5, proposals) + Math.min(3, insights.length) + Math.min(2, autonomy.last_executed_count || 0),
+            0,
+            10
+          );
+          const overallScore = ((abilityScore + languageScore + proactiveScore) / 3).toFixed(1);
+
+          pumpkinScore.textContent = overallScore;
+          setList(pumpkinDetails, [
+            `ability: ${abilityScore.toFixed(1)} (modules ${moduleCount}, areas ${areaCount}, devices ${deviceCount})`,
+            `natural language: ${languageScore.toFixed(1)} (llm ${llmEnabled ? "on" : "off"}, voice routes ${voiceRoutes})`,
+            `proactive: ${proactiveScore.toFixed(1)} (proposals ${proposals}, insights ${insights.length}, actions ${autonomy.last_executed_count || 0})`,
+          ]);
+          lastUpdate.textContent = `Last update: ${new Date().toLocaleString()}`;
+
+          alexaScore.textContent = "6.0";
+          setList(alexaDetails, [
+            "ability: 6.0 (fixed skill catalog)",
+            "natural language: 6.0 (good, but constrained)",
+            "proactive: 4.0 (limited proactive automation)",
+          ]);
+        } catch (err) {
+          pumpkinScore.textContent = "0";
+          setList(pumpkinDetails, []);
+        }
+      };
+
+      document.getElementById("refresh").addEventListener("click", load);
+      load();
+    </script>
+  </body>
+</html>

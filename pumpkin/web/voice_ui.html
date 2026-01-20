@@ -290,6 +290,7 @@
         <a href="/ui">Overview</a>
         <a href="/ui/homeassistant">Home Assistant</a>
         <a href="/ui/autonomy">Autonomy</a>
+        <a href="/ui/scoreboard">Scoreboard</a>
         <a href="/ui/proposals">Proposals</a>
         <a href="/ui/network">Network</a>
         <a href="/ui/vision">Vision</a>
@@ -352,6 +353,14 @@
         <ul class="list" id="autonomy-list"></ul>
       </section>
       <section class="card">
+        <h3>Scoreboard</h3>
+        <div class="stat" id="scoreboard-title">Pumpkin vs Alexa</div>
+        <div class="sub">
+          <a class="link" href="/ui/scoreboard">Open scoreboard →</a>
+        </div>
+        <ul class="list" id="scoreboard-list"></ul>
+      </section>
+      <section class="card">
         <h3>Alerts</h3>
         <div class="stat" id="alerts-count">0</div>
         <div class="sub">
@@ -411,6 +420,7 @@
       const proposalList = byId("proposal-list");
       const autonomyTotal = byId("autonomy-total");
       const autonomyList = byId("autonomy-list");
+      const scoreboardList = byId("scoreboard-list");
       const alertsCount = byId("alerts-count");
       const alertsList = byId("alerts-list");
       const networkCount = byId("network-count");
@@ -569,6 +579,16 @@
             autonomyItems.push(`recent: ${recentActions.length}`);
           }
           setList(autonomyList, autonomyItems);
+
+          const inventorySummary = summary.inventory || {};
+          const moduleCount = (inventorySummary.enabled_modules || []).length;
+          const areaCount = inventorySummary.ha_area_count ?? 0;
+          const deviceCount = inventorySummary.network_device_count ?? 0;
+          setList(scoreboardList, [
+            `modules: ${moduleCount}`,
+            `areas: ${areaCount}`,
+            `network devices: ${deviceCount}`,
+          ]);
 
           const discovery = summary.network_discovery || {};
           setText(networkCount, `${discovery.device_count || 0} devices`);
