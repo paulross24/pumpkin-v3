@@ -145,6 +145,10 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
     network_snapshot = store.get_memory(conn, "network.discovery.snapshot") or {}
     useful = store.get_memory(conn, "network.discovery.useful") or []
     cameras = cameras_mod.sync_registry(conn, module_cfg, network_snapshot, useful)
+    disabled_alerts = store.get_memory(conn, "vision.alerts.disabled") or []
+    if not isinstance(disabled_alerts, list):
+        disabled_alerts = []
+    disabled_set = {str(item) for item in disabled_alerts}
 
     max_cameras = int(module_cfg.get("max_cameras_per_run", 1))
     timeout_seconds = float(module_cfg.get("timeout_seconds", 8))
@@ -152,7 +156,9 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
     provider = module_cfg.get("provider", {})
     min_confidence = float(provider.get("min_confidence", 0.7)) if isinstance(provider, dict) else 0.7
 
-    def _emit_unknown_alert(camera_id: str, label: Optional[str], snapshot_path: Optional[Path]) -> None:
+    def _emit_unknown_alert(camera_id: str, label: Optional[str], snapshot_path: Optional[Path], enabled: bool) -> None:
+        if not enabled:
+            return
         message = f"Unknown face detected"
         if label:
             message = f"Unknown face detected at {label}"
@@ -238,7 +244,12 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
                             "severity": "info",
                         }
                     )
-                    _emit_unknown_alert(camera_id, cam.get("label"), snapshot_path)
+                    _emit_unknown_alert(
+                        camera_id,
+                        cam.get("label"),
+                        snapshot_path,
+                        bool(cam.get("alert_unknown_faces", True)) and camera_id not in disabled_set,
+                    )
         else:
             face_detected = bool(recognition.get("face_detected")) if isinstance(recognition, dict) else False
             if face_detected:
@@ -255,7 +266,12 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
                         "severity": "info",
                     }
                 )
-                _emit_unknown_alert(camera_id, cam.get("label"), snapshot_path)
+                _emit_unknown_alert(
+                    camera_id,
+                    cam.get("label"),
+                    snapshot_path,
+                    bool(cam.get("alert_unknown_faces", True)) and camera_id not in disabled_set,
+                )
         processed += 1
 
     if events:

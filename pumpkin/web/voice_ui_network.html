@@ -205,8 +205,34 @@
           const source = camera.source || "unknown";
           const enabled = camera.enabled ? "enabled" : "disabled";
           const stream = camera.rtsp_url ? "rtsp stream set" : "rtsp missing";
-          return `<div>${label} • ${source} • ${enabled} • ${stream}</div>`;
+          const alertEnabled = camera.alert_unknown_faces !== false;
+          const toggleText = alertEnabled ? "Disable alerts" : "Enable alerts";
+          const cameraId = camera.id || camera.ip || "";
+          return `
+            <div class="camera-row">
+              <span>${label} • ${source} • ${enabled} • ${stream}</span>
+              <button class="camera-alert-toggle" data-id="${cameraId}" data-enabled="${alertEnabled}">
+                ${toggleText}
+              </button>
+            </div>
+          `;
         }).join("");
+        cameraListNode.querySelectorAll(".camera-alert-toggle").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            const cameraId = btn.getAttribute("data-id");
+            const enabled = btn.getAttribute("data-enabled") !== "true";
+            try {
+              await fetch("/vision/alerts", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ camera_id: cameraId, enabled }),
+              });
+              load();
+            } catch (err) {
+              btn.textContent = "Failed";
+            }
+          });
+        });
       };
 
       const render = (devices) => {

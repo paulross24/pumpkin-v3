@@ -3504,6 +3504,7 @@ def _list_alerts(conn, limit: int = 50) -> list[Dict[str, Any]]:
                 "id": row["id"],
                 "ts": row["ts"],
                 "severity": row["severity"],
+                "type": row["type"],
                 "message": payload.get("message"),
                 "concerns": payload.get("concerns", []),
                 "anomalies": payload.get("anomalies", []),
@@ -3687,6 +3688,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
             if self.path == "/network/rtsp_probe":
                 self._handle_network_rtsp_probe()
                 return
+            if self.path == "/vision/alerts":
+                self._handle_vision_alerts()
+                return
             if self.path == "/identity/link":
                 self._handle_identity_link()
                 return
@@ -3831,6 +3835,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "GET /car/telemetry",
                             "GET /inventory",
                             "GET /notifications",
+                            "GET /vision/alerts",
                             "GET /errors",
                             "GET /llm/config",
                             "POST /ask",
@@ -3843,6 +3848,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "POST /network/deep_scan",
                             "POST /network/rtsp_probe",
                             "POST /network/mark",
+                            "POST /vision/alerts",
                             "POST /suggestions",
                             "POST /notifications/test",
                             "POST /ha/webhook",
@@ -3910,6 +3916,13 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
                 alerts = _list_alerts(conn, limit=limit)
                 _send_json(self, 200, {"count": len(alerts), "notifications": alerts})
+                return
+            if path == "/vision/alerts":
+                conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+                disabled = store.get_memory(conn, "vision.alerts.disabled") or []
+                if not isinstance(disabled, list):
+                    disabled = []
+                _send_json(self, 200, {"disabled": disabled})
                 return
             if path == "/config":
                 bind_host, bind_port = _effective_bind(self)
@@ -4082,6 +4095,21 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 camera_registry = store.get_memory(conn, "camera.registry")
                 if not isinstance(camera_registry, list):
                     camera_registry = []
+                alert_disabled = store.get_memory(conn, "vision.alerts.disabled") or []
+                if not isinstance(alert_disabled, list):
+                    alert_disabled = []
+                alert_disabled_set = {str(item) for item in alert_disabled}
+                camera_registry_view = []
+                for cam in camera_registry:
+                    if not isinstance(cam, dict):
+                        continue
+                    camera_id = str(cam.get("id") or cam.get("ip") or "")
+                    alert_enabled = bool(cam.get("alert_unknown_faces", True))
+                    if camera_id and camera_id in alert_disabled_set:
+                        alert_enabled = False
+                    cam_view = dict(cam)
+                    cam_view["alert_unknown_faces"] = alert_enabled
+                    camera_registry_view.append(cam_view)
                 car_telemetry = _car_telemetry_summary(conn)
                 inventory = inventory_mod.snapshot(conn)
                 opportunities = inventory_mod.opportunities(inventory)
@@ -4123,7 +4151,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "home_state": home_state,
                         "network_discovery": network_discovery,
                         "network_deep_scan": deep_scan_state,
-                        "camera_registry": camera_registry,
+                        "camera_registry": camera_registry_view,
                         "car_telemetry": car_telemetry,
                         "inventory": inventory_mod.summary(inventory),
                         "opportunities": opportunities[:5],
@@ -5299,6 +5327,38 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 "results": results,
             },
         )
+
+    def _handle_vision_alerts(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+        try:
+            data = _parse_json(body)
+        except ValueError:
+            _bad_request(self, "invalid JSON")
+            return
+        if not isinstance(data, dict):
+            _bad_request(self, "JSON body must be an object")
+            return
+        camera_id = data.get("camera_id")
+        enabled = data.get("enabled")
+        if not isinstance(camera_id, str) or not camera_id.strip():
+            _bad_request(self, "camera_id must be a string")
+            return
+        if not isinstance(enabled, bool):
+            _bad_request(self, "enabled must be a boolean")
+            return
+        conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+        disabled = store.get_memory(conn, "vision.alerts.disabled") or []
+        if not isinstance(disabled, list):
+            disabled = []
+        disabled_set = {str(item) for item in disabled}
+        camera_id = camera_id.strip()
+        if enabled:
+            disabled_set.discard(camera_id)
+        else:
+            disabled_set.add(camera_id)
+        store.set_memory(conn, "vision.alerts.disabled", sorted(disabled_set))
+        _send_json(self, 200, {"status": "ok", "camera_id": camera_id, "enabled": enabled})
 
     def _handle_suggestion(self) -> None:
         length = int(self.headers.get("Content-Length", "0"))

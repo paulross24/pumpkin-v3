@@ -168,10 +168,11 @@
           const res = await fetch("/notifications?limit=50");
           const data = await res.json();
           const items = Array.isArray(data.notifications) ? data.notifications : [];
-          countNode.textContent = `${data.count ?? items.length} alerts`;
+          const carItems = items.filter((item) => item.type === "car.alert");
+          countNode.textContent = `${carItems.length} alerts`;
 
           const grouped = {};
-          items.forEach((alert) => {
+          carItems.forEach((alert) => {
             const concerns = Array.isArray(alert.concerns) ? alert.concerns : [];
             const anomalies = Array.isArray(alert.anomalies) ? alert.anomalies : [];
             const bucket = concerns[0] || anomalies[0] || "General";
