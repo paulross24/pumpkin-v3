@@ -3534,6 +3534,10 @@ def _safe_snapshot_path(raw_path: str) -> Path | None:
 
 
 def _list_unknown_faces(conn, limit: int = 50) -> list[Dict[str, Any]]:
+    false_positives = store.get_memory(conn, "vision.false_positives") or []
+    if not isinstance(false_positives, list):
+        false_positives = []
+    false_positive_set = {str(item) for item in false_positives}
     rows = conn.execute(
         "SELECT * FROM events WHERE type = ? ORDER BY id DESC LIMIT ?",
         ("face.unknown", int(limit)),
@@ -3544,6 +3548,9 @@ def _list_unknown_faces(conn, limit: int = 50) -> list[Dict[str, Any]]:
             payload = json.loads(row["payload_json"])
         except Exception:
             payload = {}
+        snapshot_hash = payload.get("snapshot_hash") if isinstance(payload, dict) else None
+        if snapshot_hash and str(snapshot_hash) in false_positive_set:
+            continue
         snapshot_path = payload.get("snapshot_path") if isinstance(payload, dict) else None
         snapshot_url = None
         safe_path = None
@@ -3560,7 +3567,7 @@ def _list_unknown_faces(conn, limit: int = 50) -> list[Dict[str, Any]]:
                 "label": payload.get("label") if isinstance(payload, dict) else None,
                 "snapshot_path": snapshot_path,
                 "snapshot_url": snapshot_url,
-                "snapshot_hash": payload.get("snapshot_hash") if isinstance(payload, dict) else None,
+                "snapshot_hash": snapshot_hash,
                 "face_box": payload.get("face_box") if isinstance(payload, dict) else None,
             }
         )
@@ -3750,6 +3757,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
             if self.path == "/vision/false_positive":
                 self._handle_vision_false_positive()
                 return
+            if self.path == "/vision/unknown/clear":
+                self._handle_vision_unknown_clear()
+                return
             if self.path == "/identity/link":
                 self._handle_identity_link()
                 return
@@ -3914,6 +3924,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "POST /vision/alerts",
                             "POST /vision/enroll",
                             "POST /vision/false_positive",
+                            "POST /vision/unknown/clear",
                             "POST /suggestions",
                             "POST /notifications/test",
                             "POST /ha/webhook",
@@ -4430,6 +4441,11 @@ class VoiceHandler(BaseHTTPRequestHandler):
                                             }
                                         }
                                     },
+                                }
+                            },
+                            "/vision/unknown/clear": {
+                                "post": {
+                                    "summary": "Clear unknown face events",
                                 }
                             },
                             "/suggestions": {
@@ -5561,6 +5577,14 @@ class VoiceHandler(BaseHTTPRequestHandler):
         false_set.add(snapshot_hash)
         store.set_memory(conn, "vision.false_positives", sorted(false_set))
         _send_json(self, 200, {"status": "ok", "snapshot_hash": snapshot_hash})
+
+    def _handle_vision_unknown_clear(self) -> None:
+        conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+        cursor = conn.execute("SELECT COUNT(*) FROM events WHERE type = ?", ("face.unknown",))
+        count = cursor.fetchone()[0] if cursor else 0
+        conn.execute("DELETE FROM events WHERE type = ?", ("face.unknown",))
+        conn.commit()
+        _send_json(self, 200, {"status": "ok", "cleared": count})
 
     def _handle_suggestion(self) -> None:
         length = int(self.headers.get("Content-Length", "0"))

@@ -185,6 +185,7 @@
         <div class="row">
           <span class="sub" id="count">0 unknown faces</span>
           <button id="refresh" class="secondary">Refresh</button>
+          <button id="clear-unknown" class="secondary">Clear unknowns</button>
         </div>
       </section>
       <section class="card faces" id="face-list">
@@ -352,6 +353,16 @@
       };
 
       document.getElementById("refresh").addEventListener("click", load);
+      document.getElementById("clear-unknown").addEventListener("click", async () => {
+        const ok = confirm("Clear all unknown face entries?");
+        if (!ok) return;
+        try {
+          await fetch("/vision/unknown/clear", { method: "POST" });
+          load();
+        } catch (err) {
+          countNode.textContent = "Clear failed";
+        }
+      });
       lightboxClose.addEventListener("click", () => {
         lightbox.classList.remove("open");
         lightbox.setAttribute("aria-hidden", "true");
