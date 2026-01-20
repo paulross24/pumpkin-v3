@@ -11,6 +11,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 from ipaddress import ip_address
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -674,6 +675,365 @@ def _parse_limit(value: str | None, default: int = 25, max_limit: int = 200) -> 
         return default
 
 
+def _build_area_context(summary: Dict[str, Any]) -> tuple[list, dict, dict, set[str], set[str]]:
+    areas_list = summary.get("areas") or []
+    if not isinstance(areas_list, list):
+        areas_list = []
+    area_map = summary.get("entity_areas") if isinstance(summary, dict) else {}
+    if not isinstance(area_map, dict):
+        area_map = {}
+    area_names = {}
+    for area in areas_list:
+        if isinstance(area, dict):
+            aid = area.get("area_id")
+            name = area.get("name")
+            if aid and name:
+                area_names[aid] = str(name)
+    upstairs_entities = set(summary.get("upstairs_entities") or [])
+    downstairs_entities = set(summary.get("downstairs_entities") or [])
+    return areas_list, area_map, area_names, upstairs_entities, downstairs_entities
+
+
+def _domain_entities(entities: Dict[str, Dict[str, Any]], domain: str) -> List[str]:
+    return [eid for eid in entities.keys() if isinstance(eid, str) and eid.startswith(domain + ".")]
+
+
+def _match_domain_entity_by_name(
+    entities: Dict[str, Dict[str, Any]],
+    domain: str,
+    name_hint: str,
+) -> str | None:
+    needle = name_hint.lower()
+    for entity_id, payload in entities.items():
+        if not isinstance(entity_id, str) or not entity_id.startswith(domain + "."):
+            continue
+        attributes = payload.get("attributes", {}) if isinstance(payload, dict) else {}
+        if isinstance(attributes, dict):
+            friendly = str(attributes.get("friendly_name") or "").lower()
+            if friendly and needle in friendly:
+                return entity_id
+        if needle in entity_id.lower():
+            return entity_id
+    return None
+
+
+def _select_entity_for_domain(
+    entities: Dict[str, Dict[str, Any]],
+    summary: Dict[str, Any],
+    domain: str,
+    text: str,
+    name_hint: str | None = None,
+) -> str | None:
+    if name_hint:
+        match = _match_domain_entity_by_name(entities, domain, name_hint)
+        if match:
+            return match
+    areas_list, area_map, area_names, upstairs_entities, downstairs_entities = _build_area_context(summary)
+    area = _match_area(areas_list, text)
+    area_hint = area.get("name") if area else _extract_area_hint(text)
+    if area_hint:
+        candidates = _match_entities_by_area_hint(
+            entities,
+            domain,
+            str(area_hint),
+            area_map=area_map,
+            area_names=area_names,
+            upstairs_entities=upstairs_entities,
+            downstairs_entities=downstairs_entities,
+        )
+        if candidates:
+            return candidates[0]
+    domain_list = _domain_entities(entities, domain)
+    return domain_list[0] if domain_list else None
+
+
+def _parse_duration_seconds(text: str) -> int | None:
+    lowered = text.lower()
+    total = 0.0
+    matches = re.findall(r"(\d+(?:\.\d+)?)\s*(hours?|hrs?|hr|h|minutes?|mins?|min|m|seconds?|secs?|sec|s)", lowered)
+    for value, unit in matches:
+        try:
+            amount = float(value)
+        except ValueError:
+            continue
+        if unit.startswith("h"):
+            total += amount * 3600
+        elif unit.startswith("m"):
+            total += amount * 60
+        else:
+            total += amount
+    if total > 0:
+        return int(total)
+    colon = re.search(r"\b(\d{1,2}):(\d{2})\b", lowered)
+    if colon:
+        mins = int(colon.group(1))
+        secs = int(colon.group(2))
+        return mins * 60 + secs
+    plain = re.search(r"\b(\d+)\b", lowered)
+    if plain:
+        return int(plain.group(1)) * 60
+    return None
+
+
+def _format_duration(seconds: int) -> str:
+    seconds = max(1, int(seconds))
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    secs = seconds % 60
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def _schedule_timer_announcement(conn, seconds: int, label: str) -> None:
+    entries = store.get_memory(conn, "voice.timer_announcements") or []
+    if not isinstance(entries, list):
+        entries = []
+    now = datetime.now(timezone.utc)
+    due = now + timedelta(seconds=seconds)
+    entries.append(
+        {
+            "id": uuid.uuid4().hex,
+            "due_ts": due.isoformat(),
+            "created_ts": now.isoformat(),
+            "message": label,
+        }
+    )
+    store.set_memory(conn, "voice.timer_announcements", entries)
+
+
+def _handle_timer_alarm(text: str, conn, device: str | None) -> str | None:
+    lowered = text.lower()
+    if "timer" not in lowered and "alarm" not in lowered:
+        return None
+    seconds = _parse_duration_seconds(lowered)
+    if not seconds:
+        return "How long should the timer be?"
+    base_url, token, error = _load_ha_connection(conn)
+    if error:
+        return error
+    entities = store.get_memory(conn, "homeassistant.entities") or {}
+    if not isinstance(entities, dict):
+        entities = {}
+    summary = store.get_memory(conn, "homeassistant.summary") or {}
+    timer_id = _select_entity_for_domain(entities, summary, "timer", text)
+    if not timer_id:
+        return "I couldn't find any timers in Home Assistant."
+    duration = _format_duration(seconds)
+    result = ha_client.call_service(
+        base_url=base_url,
+        token=token,
+        domain="timer",
+        service="start",
+        payload={"entity_id": timer_id, "duration": duration},
+        timeout=settings.ha_request_timeout_seconds(),
+    )
+    if not result.get("ok"):
+        return "Home Assistant rejected that timer."
+    label = "Timer finished."
+    _schedule_timer_announcement(conn, seconds, label)
+    return f"Timer set for {duration}. I'll announce on all speakers."
+
+
+def _extract_todo_item(text: str) -> str | None:
+    lowered = text.lower()
+    remind = re.search(r"remind me to (.+)", lowered)
+    if remind:
+        return remind.group(1).strip()
+    add = re.search(r"add (.+?) to (?:the )?(?:shopping|grocery|todo|to-do)? ?list", lowered)
+    if add:
+        return add.group(1).strip()
+    add_simple = re.search(r"add (.+)", lowered)
+    if add_simple:
+        return add_simple.group(1).strip()
+    return None
+
+
+def _extract_todo_list(text: str) -> str | None:
+    lowered = text.lower()
+    if "shopping" in lowered:
+        return "shopping"
+    if "grocery" in lowered or "groceries" in lowered:
+        return "grocery"
+    if "todo" in lowered or "to-do" in lowered:
+        return "todo"
+    if "list" in lowered:
+        return "list"
+    return None
+
+
+def _handle_todo_command(text: str, conn, device: str | None) -> str | None:
+    lowered = text.lower()
+    if "remind me" not in lowered and "list" not in lowered and "todo" not in lowered:
+        return None
+    item = _extract_todo_item(text)
+    if not item:
+        return None
+    base_url, token, error = _load_ha_connection(conn)
+    if error:
+        return error
+    entities = store.get_memory(conn, "homeassistant.entities") or {}
+    if not isinstance(entities, dict):
+        entities = {}
+    summary = store.get_memory(conn, "homeassistant.summary") or {}
+    list_hint = _extract_todo_list(text)
+    todo_id = _select_entity_for_domain(entities, summary, "todo", text, name_hint=list_hint)
+    if not todo_id:
+        return "I couldn't find any todo lists in Home Assistant."
+    result = ha_client.call_service(
+        base_url=base_url,
+        token=token,
+        domain="todo",
+        service="add_item",
+        payload={"entity_id": todo_id, "item": item},
+        timeout=settings.ha_request_timeout_seconds(),
+    )
+    if not result.get("ok"):
+        return "Home Assistant rejected that todo update."
+    return f"Added '{item}' to your list."
+
+
+def _handle_weather_query(text: str, conn) -> str | None:
+    lowered = text.lower()
+    if "weather" not in lowered and "forecast" not in lowered and "temperature" not in lowered:
+        return None
+    entities = store.get_memory(conn, "homeassistant.entities") or {}
+    if not isinstance(entities, dict):
+        entities = {}
+    summary = store.get_memory(conn, "homeassistant.summary") or {}
+    weather_id = _select_entity_for_domain(entities, summary, "weather", text)
+    if not weather_id:
+        return "I couldn't find any weather entity in Home Assistant."
+    payload = entities.get(weather_id, {})
+    state = payload.get("state")
+    attributes = payload.get("attributes", {}) if isinstance(payload, dict) else {}
+    temp = attributes.get("temperature")
+    humidity = attributes.get("humidity")
+    wind = attributes.get("wind_speed")
+    parts = []
+    if state:
+        parts.append(str(state).replace("_", " "))
+    if temp is not None:
+        parts.append(f"{temp}°")
+    if humidity is not None:
+        parts.append(f"humidity {humidity}%")
+    if wind is not None:
+        parts.append(f"wind {wind}")
+    summary_text = ", ".join(parts) if parts else "Weather data is available."
+    return f"Weather: {summary_text}."
+
+
+def _handle_news_query(text: str, conn) -> str | None:
+    lowered = text.lower()
+    if "news" not in lowered and "headlines" not in lowered:
+        return None
+    entities = store.get_memory(conn, "homeassistant.entities") or {}
+    if not isinstance(entities, dict):
+        entities = {}
+    bbc_candidates = []
+    for entity_id, payload in entities.items():
+        if not isinstance(entity_id, str) or not entity_id.startswith("sensor."):
+            continue
+        attributes = payload.get("attributes", {}) if isinstance(payload, dict) else {}
+        name = str(attributes.get("friendly_name") or "").lower()
+        if "bbc" in entity_id or ("bbc" in name and "news" in name):
+            bbc_candidates.append(entity_id)
+    if not bbc_candidates:
+        return "I couldn't find a BBC news feed in Home Assistant."
+    news_id = bbc_candidates[0]
+    payload = entities.get(news_id, {})
+    attributes = payload.get("attributes", {}) if isinstance(payload, dict) else {}
+    entries = attributes.get("entries") or attributes.get("items") or attributes.get("articles") or []
+    headlines = []
+    if isinstance(entries, list):
+        for entry in entries:
+            if isinstance(entry, dict):
+                title = entry.get("title") or entry.get("headline")
+                if title:
+                    headlines.append(str(title))
+            if len(headlines) >= 3:
+                break
+    if not headlines:
+        state = payload.get("state")
+        if isinstance(state, str) and state.strip():
+            return f"BBC news: {state}"
+        return "BBC news feed is available but no headlines were found."
+    return "BBC headlines: " + "; ".join(headlines) + "."
+
+
+def _handle_media_command(text: str, conn, device: str | None) -> str | None:
+    lowered = text.lower()
+    if "music" not in lowered and "song" not in lowered and "track" not in lowered:
+        if "volume" not in lowered and "pause" not in lowered and "play" not in lowered and "resume" not in lowered:
+            if "next" not in lowered and "previous" not in lowered and "skip" not in lowered and "stop" not in lowered:
+                return None
+    base_url, token, error = _load_ha_connection(conn)
+    if error:
+        return error
+    entities = store.get_memory(conn, "homeassistant.entities") or {}
+    if not isinstance(entities, dict):
+        entities = {}
+    summary = store.get_memory(conn, "homeassistant.summary") or {}
+    player_id = _select_entity_for_domain(entities, summary, "media_player", text)
+    if not player_id:
+        return "I couldn't find any media players in Home Assistant."
+    service = None
+    payload = {"entity_id": player_id}
+    if "volume" in lowered:
+        value = None
+        match = re.search(r"volume (?:to|at) (\d{1,3})", lowered)
+        if match:
+            try:
+                value = max(0, min(100, int(match.group(1))))
+            except ValueError:
+                value = None
+        if value is not None:
+            service = "volume_set"
+            payload["volume_level"] = value / 100.0
+        elif "up" in lowered:
+            service = "volume_up"
+        elif "down" in lowered:
+            service = "volume_down"
+    elif "next" in lowered or "skip" in lowered:
+        service = "media_next_track"
+    elif "previous" in lowered or "back" in lowered:
+        service = "media_previous_track"
+    elif "pause" in lowered:
+        service = "media_pause"
+    elif "stop" in lowered:
+        service = "media_stop"
+    elif "resume" in lowered or "play" in lowered:
+        if "amazon" in lowered:
+            attributes = entities.get(player_id, {}).get("attributes", {})
+            source_list = attributes.get("source_list") if isinstance(attributes, dict) else None
+            if isinstance(source_list, list):
+                for source in source_list:
+                    if isinstance(source, str) and "amazon" in source.lower():
+                        select_result = ha_client.call_service(
+                            base_url=base_url,
+                            token=token,
+                            domain="media_player",
+                            service="select_source",
+                            payload={"entity_id": player_id, "source": source},
+                            timeout=settings.ha_request_timeout_seconds(),
+                        )
+                        if not select_result.get("ok"):
+                            return "Home Assistant couldn't switch to Amazon Music."
+                        break
+        service = "media_play"
+    if not service:
+        return None
+    result = ha_client.call_service(
+        base_url=base_url,
+        token=token,
+        domain="media_player",
+        service=service,
+        payload=payload,
+        timeout=settings.ha_request_timeout_seconds(),
+    )
+    if not result.get("ok"):
+        return "Home Assistant rejected that media command."
+    return f"Media command sent: {service.replace('_', ' ')}."
+
+
 def _compute_ask_reply(
     text: str,
     device: str | None,
@@ -703,6 +1063,21 @@ def _compute_ask_reply(
     if _home_summary_query(text):
         summary_reply = _local_house_summary_reply(conn)
         return summary_reply, "home_summary", None
+    media_reply = _handle_media_command(text, conn, device)
+    if media_reply:
+        return media_reply, "media_control", None
+    timer_reply = _handle_timer_alarm(text, conn, device)
+    if timer_reply:
+        return timer_reply, "timer_alarm", None
+    todo_reply = _handle_todo_command(text, conn, device)
+    if todo_reply:
+        return todo_reply, "todo", None
+    weather_reply = _handle_weather_query(text, conn)
+    if weather_reply:
+        return weather_reply, "weather", None
+    news_reply = _handle_news_query(text, conn)
+    if news_reply:
+        return news_reply, "news", None
     control_reply = _execute_ha_command(text, conn, device)
     if control_reply:
         return control_reply, "ha_control", None
@@ -5882,12 +6257,98 @@ def _executor_loop(stop_event: threading.Event, interval_seconds: int = 300) -> 
             )
 
 
+def _process_timer_announcements() -> None:
+    conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+    entries = store.get_memory(conn, "voice.timer_announcements") or []
+    if not isinstance(entries, list) or not entries:
+        return
+    now = datetime.now(timezone.utc)
+    remaining = []
+    ready = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        due_ts = entry.get("due_ts")
+        if not isinstance(due_ts, str):
+            continue
+        try:
+            due = datetime.fromisoformat(due_ts)
+        except ValueError:
+            continue
+        if due.tzinfo is None:
+            due = due.replace(tzinfo=timezone.utc)
+        if due <= now:
+            ready.append(entry)
+        else:
+            remaining.append(entry)
+    if not ready:
+        return
+    base_url, token, error = _load_ha_connection(conn)
+    if error:
+        for entry in ready:
+            entry["due_ts"] = (now + timedelta(seconds=60)).isoformat()
+            remaining.append(entry)
+        store.set_memory(conn, "voice.timer_announcements", remaining)
+        store.insert_event(
+            conn,
+            source="voice",
+            event_type="timer.notify_failed",
+            payload={"error": error},
+            severity="warn",
+        )
+        return
+    for entry in ready:
+        message = entry.get("message") or "Timer finished."
+        result = ha_client.call_service(
+            base_url=base_url,
+            token=token,
+            domain="notify",
+            service="notify",
+            payload={"message": message, "title": "Pumpkin Timer"},
+            timeout=settings.ha_request_timeout_seconds(),
+        )
+        if result.get("ok"):
+            store.insert_event(
+                conn,
+                source="voice",
+                event_type="timer.finished",
+                payload={"message": message},
+                severity="info",
+            )
+        else:
+            entry["due_ts"] = (now + timedelta(seconds=60)).isoformat()
+            remaining.append(entry)
+            store.insert_event(
+                conn,
+                source="voice",
+                event_type="timer.notify_failed",
+                payload={"error": result.get("error")},
+                severity="warn",
+            )
+    store.set_memory(conn, "voice.timer_announcements", remaining)
+
+
+def _timer_announcement_loop(stop_event: threading.Event, interval_seconds: int = 5) -> None:
+    while not stop_event.wait(interval_seconds):
+        try:
+            _process_timer_announcements()
+        except Exception as exc:  # pragma: no cover
+            append_jsonl(
+                str(settings.audit_path()),
+                {"kind": "timer.announcement_error", "error": str(exc)},
+            )
+
+
 def run_server(host: str | None = None, port: int | None = None) -> None:
     stop_event = threading.Event()
     executor_thread = threading.Thread(
         target=_executor_loop, args=(stop_event,), daemon=True
     )
     executor_thread.start()
+    timer_thread = threading.Thread(
+        target=_timer_announcement_loop, args=(stop_event,), daemon=True
+    )
+    timer_thread.start()
     bind_host = host or settings.voice_server_host()
     bind_port = port or settings.voice_server_port()
     append_jsonl(
