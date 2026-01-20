@@ -33,10 +33,17 @@
         min-height: 100vh;
       }
       header {
-        padding: 32px 24px 16px;
+        padding: 28px 24px 12px;
         display: flex;
         flex-direction: column;
-        gap: 8px;
+        gap: 10px;
+      }
+      .title-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
       }
       .title {
         display: flex;
@@ -53,11 +60,26 @@
       .sub {
         color: var(--muted);
       }
+      .menu {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .menu a {
+        text-decoration: none;
+        color: var(--pumpkin-dark);
+        background: rgba(230, 124, 46, 0.12);
+        padding: 6px 12px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 600;
+        border: 1px solid var(--line);
+      }
       .actions {
-        margin-top: 8px;
         display: flex;
         gap: 8px;
         flex-wrap: wrap;
+        align-items: center;
       }
       button {
         border: 1px solid var(--line);
@@ -73,9 +95,9 @@
         box-shadow: 0 8px 16px rgba(0, 0, 0, 0.08);
       }
       main {
-        padding: 16px 24px 40px;
+        padding: 8px 24px 40px;
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
         gap: 16px;
       }
       .card {
@@ -85,10 +107,12 @@
         padding: 16px;
         box-shadow: 0 12px 32px rgba(50, 33, 22, 0.08);
         animation: fadeUp 0.4s ease both;
+        display: grid;
+        gap: 8px;
       }
       .card h3 {
-        margin: 0 0 8px;
-        font-size: 16px;
+        margin: 0;
+        font-size: 14px;
         text-transform: uppercase;
         letter-spacing: 0.08em;
         color: var(--muted);
@@ -98,12 +122,12 @@
         font-weight: 700;
       }
       .list {
-        margin: 8px 0 0;
+        margin: 0;
         padding: 0;
         list-style: none;
         display: grid;
         gap: 6px;
-        font-size: 14px;
+        font-size: 13px;
         color: var(--muted);
       }
       .pill {
@@ -115,6 +139,19 @@
         font-size: 12px;
         font-weight: 600;
       }
+      .link {
+        color: var(--pumpkin-dark);
+        text-decoration: none;
+        font-weight: 600;
+      }
+      .grid-span {
+        grid-column: span 2;
+      }
+      @media (max-width: 720px) {
+        .grid-span {
+          grid-column: span 1;
+        }
+      }
       .status-ok {
         color: var(--ok);
       }
@@ -124,12 +161,82 @@
       .status-bad {
         color: var(--bad);
       }
-      .grid-span {
-        grid-column: span 2;
+      .pulse-card {
+        display: grid;
+        grid-template-columns: 160px 1fr;
+        align-items: center;
+        gap: 16px;
       }
       @media (max-width: 720px) {
-        .grid-span {
-          grid-column: span 1;
+        .pulse-card {
+          grid-template-columns: 1fr;
+          text-align: center;
+        }
+      }
+      .pulse-shell {
+        width: 140px;
+        height: 140px;
+        position: relative;
+        margin: 0 auto;
+      }
+      .pulse-core,
+      .pulse-ring,
+      .pulse-ring.ring-2 {
+        position: absolute;
+        inset: 0;
+        border-radius: 50%;
+      }
+      .pulse-core {
+        background: radial-gradient(circle at 35% 35%, #ffb36b, var(--pumpkin));
+        box-shadow: 0 0 30px rgba(230, 124, 46, 0.5);
+        animation: pulseSlow 4.5s ease-in-out infinite;
+      }
+      .pulse-ring {
+        border: 1px solid rgba(230, 124, 46, 0.35);
+        animation: ringSlow 6s linear infinite;
+      }
+      .pulse-ring.ring-2 {
+        border: 1px dashed rgba(178, 85, 25, 0.4);
+        animation: ringSlow 8s linear infinite reverse;
+        transform: scale(0.86);
+      }
+      .pulse-shell[data-level="1"] .pulse-core {
+        animation-duration: 3.2s;
+      }
+      .pulse-shell[data-level="2"] .pulse-core {
+        animation-duration: 2.2s;
+      }
+      .pulse-shell[data-level="3"] .pulse-core {
+        animation-duration: 1.4s;
+      }
+      .pulse-shell[data-level="3"] .pulse-ring {
+        border-color: rgba(196, 59, 43, 0.5);
+      }
+      .pulse-shell[data-level="3"] .pulse-ring.ring-2 {
+        border-color: rgba(196, 59, 43, 0.35);
+      }
+      @keyframes pulseSlow {
+        0%, 100% {
+          transform: scale(0.95);
+          opacity: 0.85;
+        }
+        50% {
+          transform: scale(1.05);
+          opacity: 1;
+        }
+      }
+      @keyframes ringSlow {
+        0% {
+          transform: scale(1);
+          opacity: 0.7;
+        }
+        50% {
+          transform: scale(1.1);
+          opacity: 0.45;
+        }
+        100% {
+          transform: scale(1);
+          opacity: 0.7;
         }
       }
       @keyframes fadeUp {
@@ -146,132 +253,86 @@
   </head>
   <body>
     <header>
-      <div class="title">
-        <svg class="pumpkin-icon" viewBox="0 0 64 64" aria-hidden="true">
-          <rect x="29" y="10" width="6" height="12" fill="var(--muted)" />
-          <circle cx="32" cy="36" r="20" fill="var(--pumpkin)" />
-          <circle cx="20" cy="36" r="14" fill="#f08a3a" opacity="0.85" />
-          <circle cx="44" cy="36" r="14" fill="#f08a3a" opacity="0.85" />
-        </svg>
-        Pumpkin Voice Control
+      <div class="title-row">
+        <div class="title">
+          <svg class="pumpkin-icon" viewBox="0 0 64 64" aria-hidden="true">
+            <rect x="29" y="10" width="6" height="12" fill="var(--muted)" />
+            <circle cx="32" cy="36" r="20" fill="var(--pumpkin)" />
+            <circle cx="20" cy="36" r="14" fill="#f08a3a" opacity="0.85" />
+            <circle cx="44" cy="36" r="14" fill="#f08a3a" opacity="0.85" />
+          </svg>
+          Pumpkin Command Center
+        </div>
+        <div class="actions">
+          <button id="refresh">Refresh now</button>
+          <span class="pill" id="heartbeat">Waiting for heartbeat</span>
+        </div>
       </div>
       <div class="sub" id="subtitle">Loading status...</div>
-      <div class="actions">
-        <button id="refresh">Refresh now</button>
-        <span class="pill" id="heartbeat">Waiting for heartbeat</span>
-      </div>
+      <nav class="menu">
+        <a href="/ui">Overview</a>
+        <a href="/ui/proposals">Proposals</a>
+        <a href="/ui/network">Network</a>
+        <a href="/ui/vision">Vision</a>
+        <a href="/ui/car">Car</a>
+        <a href="/ui/car/alerts">Alerts</a>
+        <a href="/ui/inventory">Inventory</a>
+      </nav>
     </header>
     <main>
+      <section class="card grid-span pulse-card">
+        <div class="pulse-shell" id="thought-pulse" data-level="0">
+          <div class="pulse-core"></div>
+          <div class="pulse-ring"></div>
+          <div class="pulse-ring ring-2"></div>
+        </div>
+        <div>
+          <h3>Thought Pulse</h3>
+          <div class="stat" id="thought-status">Listening...</div>
+          <ul class="list" id="thought-meta"></ul>
+        </div>
+      </section>
       <section class="card">
-        <h3>Health</h3>
+        <h3>System Health</h3>
         <div class="stat" id="health-status">...</div>
         <ul class="list" id="health-details"></ul>
       </section>
       <section class="card">
-        <h3>Identity &amp; Memory</h3>
+        <h3>Identity</h3>
         <div class="stat" id="identity-name">Unknown</div>
         <ul class="list" id="identity-meta"></ul>
-        <ul class="list" id="memory-meta"></ul>
-        <div class="sub" style="margin-top: 8px;">Link this device to a Home Assistant person.</div>
-        <div class="actions" style="margin-top: 8px;">
-          <select id="identity-person" style="padding:8px;border-radius:10px;border:1px solid var(--line);">
-            <option value="">Select person</option>
-          </select>
-          <button id="identity-link">Link</button>
-        </div>
       </section>
       <section class="card">
         <h3>Proposals</h3>
         <div class="stat" id="proposal-count">0</div>
-        <div class="sub" style="margin-bottom: 8px;">
-          <a href="/ui/proposals" style="color: var(--pumpkin-dark); text-decoration: none;">
-            Open proposal desk →
-          </a>
+        <div class="sub">
+          <a class="link" href="/ui/proposals">Open proposal desk →</a>
         </div>
         <ul class="list" id="proposal-list"></ul>
       </section>
       <section class="card">
-        <h3>Suggestion Box</h3>
-        <div class="sub" style="margin-bottom: 8px;">
-          Drop an idea and Pumpkin will draft a proposal with an implementation plan.
-        </div>
-        <textarea id="suggestion-text" placeholder="E.g. Add alerts for front door opened after 10pm." style="padding:8px;border-radius:10px;border:1px solid var(--line);min-height:80px;"></textarea>
-        <div class="actions" style="margin-top: 8px;">
-          <button id="suggestion-send">Submit suggestion</button>
-          <div class="sub" id="suggestion-note"></div>
-        </div>
-      </section>
-      <section class="card">
-        <h3>Issues</h3>
-        <div class="stat" id="issues-count">0</div>
-        <ul class="list" id="issues-list"></ul>
-      </section>
-      <section class="card">
-        <h3>LLM Key</h3>
-        <div class="stat" id="llm-status">unknown</div>
-        <div class="sub" style="margin-bottom: 8px;">
-          Store the OpenAI key on the server and share it with all Pumpkin services.
-        </div>
-        <div style="display: grid; gap: 8px;">
-          <input id="llm-key" type="password" placeholder="sk-..." style="padding:8px;border-radius:10px;border:1px solid var(--line);" />
-          <button id="llm-save">Save key</button>
-          <div class="sub" id="llm-note"></div>
-        </div>
-      </section>
-      <section class="card">
         <h3>Alerts</h3>
         <div class="stat" id="alerts-count">0</div>
-        <div class="sub" style="margin-bottom: 8px;">
-          <a href="/ui/car/alerts" style="color: var(--pumpkin-dark); text-decoration: none;">
-            Open car alerts →
-          </a>
-        </div>
-        <div class="sub" style="margin-bottom: 8px;">
-          <a href="/ui/vision" style="color: var(--pumpkin-dark); text-decoration: none;">
-            Review unknown faces →
-          </a>
+        <div class="sub">
+          <a class="link" href="/ui/car/alerts">Open alerts →</a>
         </div>
         <ul class="list" id="alerts-list"></ul>
       </section>
       <section class="card">
-        <h3>Network Scan</h3>
+        <h3>Network</h3>
         <div class="stat" id="network-count">0 devices</div>
-        <div class="sub" style="margin-bottom: 8px;">
-          <a href="/ui/network" style="color: var(--pumpkin-dark); text-decoration: none;">
-            Open network desk →
-          </a>
+        <div class="sub">
+          <a class="link" href="/ui/network">Open network desk →</a>
         </div>
         <ul class="list" id="network-list"></ul>
       </section>
       <section class="card">
-        <h3>Opportunities</h3>
-        <div class="stat" id="opportunity-count">0</div>
-        <div class="sub" style="margin-bottom: 8px;">
-          <a href="/ui/inventory" style="color: var(--pumpkin-dark); text-decoration: none;">
-            Open inventory →
-          </a>
+        <h3>Cameras</h3>
+        <div class="stat" id="camera-count">0</div>
+        <div class="sub">
+          <a class="link" href="/ui/vision">Review unknown faces →</a>
         </div>
-        <ul class="list" id="opportunity-list"></ul>
-      </section>
-      <section class="card">
-        <h3>Car Telemetry</h3>
-        <div class="stat" id="car-count">0 samples</div>
-        <div class="sub" style="margin-bottom: 8px;">
-          <a href="/ui/car" style="color: var(--pumpkin-dark); text-decoration: none;">
-            Open car desk →
-          </a>
-        </div>
-        <ul class="list" id="car-list"></ul>
-      </section>
-      <section class="card">
-        <h3>SSDP Devices</h3>
-        <div class="stat" id="ssdp-count">0</div>
-        <ul class="list" id="ssdp-list"></ul>
-      </section>
-      <section class="card">
-        <h3>Recent Decisions</h3>
-        <div class="stat" id="decision-count">0</div>
-        <ul class="list" id="decision-list"></ul>
+        <ul class="list" id="camera-list"></ul>
       </section>
       <section class="card">
         <h3>Insights</h3>
@@ -279,53 +340,19 @@
         <div class="sub" id="briefing-text">No briefing yet.</div>
         <ul class="list" id="insight-list"></ul>
       </section>
-      <section class="card grid-span">
-        <h3>Latest Home Assistant Event</h3>
+      <section class="card">
+        <h3>Home Assistant</h3>
         <div class="stat" id="ha-last">none</div>
         <ul class="list" id="ha-meta"></ul>
       </section>
     </main>
     <script>
       const byId = (id) => document.getElementById(id);
-      const subtitle = byId("subtitle");
-      const heartbeat = byId("heartbeat");
-      const healthStatus = byId("health-status");
-      const healthDetails = byId("health-details");
-      const proposalCount = byId("proposal-count");
-      const proposalList = byId("proposal-list");
-      const issuesCount = byId("issues-count");
-      const issuesList = byId("issues-list");
-      const alertsCount = byId("alerts-count");
-      const alertsList = byId("alerts-list");
-      const networkCount = byId("network-count");
-      const networkList = byId("network-list");
-      const opportunityCount = byId("opportunity-count");
-      const opportunityList = byId("opportunity-list");
-      const carCount = byId("car-count");
-      const carList = byId("car-list");
-      const ssdpCount = byId("ssdp-count");
-      const ssdpList = byId("ssdp-list");
-      const haLast = byId("ha-last");
-      const haMeta = byId("ha-meta");
-      const identityName = byId("identity-name");
-      const identityMeta = byId("identity-meta");
-      const memoryMeta = byId("memory-meta");
-      const identityPerson = byId("identity-person");
-      const identityLink = byId("identity-link");
-      const decisionCount = byId("decision-count");
-      const decisionList = byId("decision-list");
-      const insightCount = byId("insight-count");
-      const insightList = byId("insight-list");
-      const briefingText = byId("briefing-text");
-      const llmStatus = byId("llm-status");
-      const llmKeyInput = byId("llm-key");
-      const llmSaveBtn = byId("llm-save");
-      const llmNote = byId("llm-note");
-      const suggestionText = byId("suggestion-text");
-      const suggestionSend = byId("suggestion-send");
-      const suggestionNote = byId("suggestion-note");
-
+      const setText = (node, text) => {
+        if (node) node.textContent = text;
+      };
       const setList = (node, items) => {
+        if (!node) return;
         node.innerHTML = "";
         if (!items.length) {
           const li = document.createElement("li");
@@ -340,7 +367,29 @@
         });
       };
 
-      const formatIssue = (issue) => `${issue.kind}: ${issue.message}`;
+      const subtitle = byId("subtitle");
+      const heartbeat = byId("heartbeat");
+      const healthStatus = byId("health-status");
+      const healthDetails = byId("health-details");
+      const proposalCount = byId("proposal-count");
+      const proposalList = byId("proposal-list");
+      const alertsCount = byId("alerts-count");
+      const alertsList = byId("alerts-list");
+      const networkCount = byId("network-count");
+      const networkList = byId("network-list");
+      const cameraCount = byId("camera-count");
+      const cameraList = byId("camera-list");
+      const haLast = byId("ha-last");
+      const haMeta = byId("ha-meta");
+      const identityName = byId("identity-name");
+      const identityMeta = byId("identity-meta");
+      const insightCount = byId("insight-count");
+      const insightList = byId("insight-list");
+      const briefingText = byId("briefing-text");
+      const thoughtPulse = byId("thought-pulse");
+      const thoughtStatus = byId("thought-status");
+      const thoughtMeta = byId("thought-meta");
+
       const formatProposal = (proposal) => `${proposal.summary} (${proposal.status})`;
       const formatDevice = (device) => {
         const ip = device.ip || "unknown";
@@ -352,20 +401,53 @@
           : "";
         return `${ip} - ${ports}${hints}`;
       };
-      const formatDecision = (item) => {
-        const payload = item.payload || {};
-        const route = payload.route || "unknown";
-        const confidence = payload.confidence ?? "n/a";
-        const action = payload.action || "";
-        const target = payload.target || payload.area || payload.device || "";
-        const domain = payload.domain ? ` ${payload.domain}` : "";
-        const detail = [action, target].filter(Boolean).join(" ");
-        return `${route} (${confidence}) ${detail}${domain}`.trim();
-      };
       const formatInsight = (item) => {
         const title = item.title || "Insight";
         const detail = item.detail ? ` - ${item.detail}` : "";
         return `${title}${detail}`;
+      };
+      const formatCamera = (camera) => {
+        const label = camera.label || camera.id || camera.ip || "camera";
+        const source = camera.source || "unknown";
+        return `${label} (${source})`;
+      };
+
+      const pulseLevel = (summary, alertsCountValue) => {
+        const issues = summary.issues || [];
+        const proposals = summary.proposals || [];
+        const insights = summary.insights || [];
+        const heartbeatEvent = summary.heartbeat;
+        let level = 0;
+        if (proposals.length || insights.length > 3) level = 1;
+        if (issues.length || alertsCountValue > 0) level = 2;
+        let heartbeatAge = null;
+        if (heartbeatEvent && heartbeatEvent.ts) {
+          const parsed = Date.parse(heartbeatEvent.ts);
+          if (!Number.isNaN(parsed)) {
+            heartbeatAge = Math.max(0, (Date.now() - parsed) / 1000);
+            if (heartbeatAge > 120) level = 3;
+          }
+        }
+        const status = level === 3 ? "Stalled" : level === 2 ? "Alert" : level === 1 ? "Active" : "Idle";
+        return { level, status, heartbeatAge };
+      };
+
+      const loadAlerts = async () => {
+        try {
+          const res = await fetch("/notifications?limit=5");
+          const data = await res.json();
+          const items = Array.isArray(data.notifications) ? data.notifications : [];
+          setText(alertsCount, data.count ?? items.length);
+          setList(
+            alertsList,
+            items.map((alert) => `${alert.ts || "unknown"} - ${alert.message || "alert"}`)
+          );
+          return data.count ?? items.length;
+        } catch (err) {
+          setText(alertsCount, "0");
+          setList(alertsList, ["Failed to load alerts"]);
+          return 0;
+        }
       };
 
       const load = async () => {
@@ -379,11 +461,19 @@
           const summary = await summaryRes.json();
           const config = await configRes.json();
 
-          subtitle.textContent = `${config.service?.name || "Pumpkin"} ${config.service?.version || ""} at ${config.http?.host || "host"}:${config.http?.port || "port"}`;
-          heartbeat.textContent = summary.heartbeat ? `Heartbeat ${summary.heartbeat.ts}` : "No heartbeat yet";
+          setText(
+            subtitle,
+            `${config.service?.name || "Pumpkin"} ${config.service?.version || ""} at ${config.http?.host || "host"}:${config.http?.port || "port"}`
+          );
+          setText(
+            heartbeat,
+            summary.heartbeat ? `Heartbeat ${summary.heartbeat.ts}` : "No heartbeat yet"
+          );
 
-          healthStatus.textContent = health.status || "unknown";
-          healthStatus.className = "stat " + (health.status === "ok" ? "status-ok" : "status-warn");
+          setText(healthStatus, health.status || "unknown");
+          if (healthStatus) {
+            healthStatus.className = "stat " + (health.status === "ok" ? "status-ok" : "status-warn");
+          }
           const metrics = health.metrics || {};
           setList(healthDetails, [
             `load: ${metrics.loadavg?.["1m"] ?? "-"}`,
@@ -391,291 +481,77 @@
             `mem: ${metrics.meminfo_kb?.MemAvailable ?? "-"} KB`,
           ]);
 
-          proposalCount.textContent = summary.proposal_count || 0;
-          const proposals = (summary.proposals || []).slice(0, 3).map(formatProposal);
-          setList(proposalList, proposals);
-
-          issuesCount.textContent = (summary.issues || []).length;
-          setList(issuesList, (summary.issues || []).slice(0, 4).map(formatIssue));
-
           const identity = summary.identity || {};
           const profile = identity.profile || {};
-          const memory = identity.memory || {};
           const deviceId = profile.last_device || identity.device || "n/a";
-          identityName.textContent = profile.name || "Unknown speaker (unlinked)";
+          setText(identityName, profile.name || "Unknown speaker (unlinked)");
           setList(identityMeta, [
             `last seen: ${profile.last_seen_ts || "n/a"}`,
             `turns: ${profile.turns_count ?? "n/a"}`,
             `device: ${deviceId}`,
-            `preferences: ${Object.keys(profile.preferences || {}).length}`,
           ]);
-          setList(memoryMeta, [
-            `summary: ${memory.summary ? memory.summary.slice(0, 80) + "…" : "none"}`,
-            `facts: ${memory.facts_count ?? 0}`,
-            `turns: ${memory.turns ?? "n/a"}`,
-          ]);
-          const people = summary.homeassistant?.people || [];
-          identityPerson.innerHTML = "<option value=\"\">Select person</option>";
-          people.forEach((person) => {
-            if (!person || !person.entity_id) return;
-            const option = document.createElement("option");
-            option.value = person.entity_id;
-            option.textContent = person.name || person.entity_id;
-            identityPerson.appendChild(option);
-          });
-          if (profile.ha_person_id) {
-            identityPerson.value = profile.ha_person_id;
-          }
+
+          setText(proposalCount, summary.proposal_count || 0);
+          const proposals = (summary.proposals || []).slice(0, 3).map(formatProposal);
+          setList(proposalList, proposals);
 
           const discovery = summary.network_discovery || {};
-          networkCount.textContent = `${discovery.device_count || 0} devices`;
-          setList(networkList, (discovery.devices || []).slice(0, 6).map(formatDevice));
+          setText(networkCount, `${discovery.device_count || 0} devices`);
+          setList(networkList, (discovery.devices || []).slice(0, 4).map(formatDevice));
 
-          const opportunities = summary.opportunities || [];
-          opportunityCount.textContent = opportunities.length;
-          setList(
-            opportunityList,
-            opportunities.map((item) => `${item.title} — ${item.example}`)
-          );
-
-          const carTelemetry = summary.car_telemetry || {};
-          carCount.textContent = `${carTelemetry.count || 0} samples`;
-          const carLast = carTelemetry.last || {};
-          const carReadings = carLast.readings || {};
-          const carItems = [];
-          if (carLast.profile) carItems.push(`Profile: ${carLast.profile}`);
-          if (carLast.make || carLast.model) {
-            const name = `${carLast.make || ""} ${carLast.model || ""}`.trim();
-            if (name) carItems.push(`Vehicle: ${name}`);
-          }
-          if (carLast.year) carItems.push(`Year: ${carLast.year}`);
-          if (carReadings.speed_kph != null) {
-            const mph = carReadings.speed_kph * 0.621371;
-            carItems.push(`Speed: ${mph.toFixed(1)} mph`);
-          }
-          if (carReadings.rpm != null) carItems.push(`RPM: ${carReadings.rpm}`);
-          if (carReadings.coolant_c != null) carItems.push(`Coolant: ${carReadings.coolant_c}°C`);
-          setList(carList, carItems);
-
-          const ssdp = discovery.ssdp || [];
-          ssdpCount.textContent = ssdp.length;
-          setList(
-            ssdpList,
-            ssdp.slice(0, 6).map((entry) => `${entry.ip || "unknown"} - ${(entry.service_type || entry.server || "ssdp").slice(0, 60)}`)
-          );
-
-          const decisions = summary.router_events || [];
-          decisionCount.textContent = decisions.length;
-          setList(decisionList, decisions.map(formatDecision));
+          const cameras = Array.isArray(summary.camera_registry) ? summary.camera_registry : [];
+          setText(cameraCount, cameras.length || 0);
+          setList(cameraList, cameras.slice(0, 4).map(formatCamera));
 
           const insights = summary.insights || [];
-          insightCount.textContent = insights.length;
-          setList(insightList, insights.map(formatInsight));
+          setText(insightCount, insights.length);
+          setList(insightList, insights.slice(0, 4).map(formatInsight));
           if (summary.briefing && summary.briefing.summary) {
-            briefingText.textContent = summary.briefing.summary;
+            setText(briefingText, summary.briefing.summary);
           } else {
-            briefingText.textContent = "No briefing yet.";
+            setText(briefingText, "No briefing yet.");
           }
 
           const last = summary.homeassistant_last_event;
           if (last) {
-            haLast.textContent = `${last.event_type || "event"} at ${last.time_fired || "unknown"}`;
+            setText(haLast, `${last.event_type || "event"} at ${last.time_fired || "unknown"}`);
             const payload = last.payload || {};
             setList(haMeta, [
               `entity: ${payload.entity_id || "n/a"}`,
               `state: ${payload.state || "n/a"}`,
             ]);
           } else {
-            haLast.textContent = "none";
+            setText(haLast, "none");
             setList(haMeta, []);
           }
-          await loadAlerts();
-          await loadLlmConfig();
-          await loadPendingProposals();
-        } catch (err) {
-          subtitle.textContent = "Failed to load status.";
-        }
-      };
 
-      const loadAlerts = async () => {
-        try {
-          const res = await fetch("/notifications?limit=5");
-          const data = await res.json();
-          const items = Array.isArray(data.notifications) ? data.notifications : [];
-          alertsCount.textContent = data.count ?? items.length;
-          setList(
-            alertsList,
-            items.map((alert) => `${alert.ts || "unknown"} - ${alert.message || "alert"}`)
-          );
-        } catch (err) {
-          alertsCount.textContent = "0";
-          setList(alertsList, ["Failed to load alerts"]);
-        }
-      };
-
-      const loadLlmConfig = async () => {
-        try {
-          const res = await fetch("/llm/config");
-          const data = await res.json();
-          if (data && data.enabled) {
-            llmStatus.textContent = "configured";
-            llmStatus.className = "stat status-ok";
-          } else {
-            llmStatus.textContent = "missing key";
-            llmStatus.className = "stat status-warn";
+          const alertCountValue = await loadAlerts();
+          const pulse = pulseLevel(summary, alertCountValue);
+          if (thoughtPulse) {
+            thoughtPulse.dataset.level = String(pulse.level);
           }
+          setText(thoughtStatus, pulse.status);
+          const pulseMeta = [
+            `issues: ${(summary.issues || []).length}`,
+            `alerts: ${alertCountValue}`,
+            `proposals: ${summary.proposal_count || 0}`,
+            `insights: ${insights.length}`,
+          ];
+          if (pulse.heartbeatAge != null) {
+            pulseMeta.push(`heartbeat age: ${pulse.heartbeatAge.toFixed(0)}s`);
+          }
+          setList(thoughtMeta, pulseMeta);
         } catch (err) {
-          llmStatus.textContent = "error";
-          llmStatus.className = "stat status-bad";
+          setText(subtitle, "Failed to load status.");
         }
       };
 
-      llmSaveBtn.addEventListener("click", async () => {
-        const key = llmKeyInput.value.trim();
-        if (!key) {
-          llmNote.textContent = "Enter a key first.";
-          return;
-        }
-        llmNote.textContent = "Saving...";
-        try {
-          const res = await fetch("/llm/config", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ api_key: key }),
-          });
-          if (!res.ok) throw new Error("save failed");
-          llmKeyInput.value = "";
-          llmNote.textContent = "Saved.";
-          await loadLlmConfig();
-        } catch (err) {
-          llmNote.textContent = "Save failed.";
-        }
-      });
-
-      const loadPendingProposals = async () => {
-        try {
-          const res = await fetch("/proposals?status=pending&limit=10");
-          const data = await res.json();
-          const items = Array.isArray(data.proposals) ? data.proposals : [];
-          proposalCount.textContent = data.count ?? items.length;
-          proposalList.innerHTML = "";
-          if (!items.length) {
-            const li = document.createElement("li");
-            li.textContent = "None";
-            proposalList.appendChild(li);
-            return;
-          }
-          items.forEach((proposal) => {
-            const li = document.createElement("li");
-            const row = document.createElement("div");
-            row.style.display = "flex";
-            row.style.flexDirection = "column";
-            row.style.gap = "6px";
-
-            const text = document.createElement("div");
-            text.textContent = `${proposal.summary} (${proposal.status})`;
-
-            const actions = document.createElement("div");
-            actions.style.display = "flex";
-            actions.style.gap = "6px";
-
-            const approve = document.createElement("button");
-            approve.textContent = "Approve";
-            approve.addEventListener("click", () =>
-              sendDecision(proposal.id, "approved")
-            );
-
-            const reject = document.createElement("button");
-            reject.textContent = "Reject";
-            reject.addEventListener("click", () =>
-              sendDecision(proposal.id, "rejected")
-            );
-
-            actions.appendChild(approve);
-            actions.appendChild(reject);
-            row.appendChild(text);
-            row.appendChild(actions);
-            li.appendChild(row);
-            proposalList.appendChild(li);
-          });
-        } catch (err) {
-          proposalList.innerHTML = "";
-          const li = document.createElement("li");
-          li.textContent = "Failed to load proposals.";
-          proposalList.appendChild(li);
-        }
-      };
-
-      const sendDecision = async (id, decision) => {
-        const reason = window.prompt("Reason (optional):") || "";
-        const payload = {
-          id,
-          actor: "web",
-          reason: reason.trim() || null,
-        };
-        const url = decision === "approved" ? "/proposals/approve" : "/proposals/reject";
-        try {
-          const res = await fetch(url, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-          });
-          if (!res.ok) {
-            throw new Error("Request failed");
-          }
-          await loadPendingProposals();
-        } catch (err) {
-          window.alert("Failed to update proposal.");
-        }
-      };
-
-      document.getElementById("refresh").addEventListener("click", load);
-      identityLink.addEventListener("click", async () => {
-        const personId = identityPerson.value;
-        if (!personId) {
-          window.alert("Select a Home Assistant person.");
-          return;
-        }
-        try {
-          const res = await fetch("/identity/link", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ person_id: personId }),
-          });
-          if (!res.ok) {
-            throw new Error("Request failed");
-          }
-          window.alert("Linked to Home Assistant person.");
-          load();
-        } catch (err) {
-          window.alert("Failed to link identity.");
-        }
-      });
+      const refreshBtn = byId("refresh");
+      if (refreshBtn) {
+        refreshBtn.addEventListener("click", load);
+      }
       load();
       setInterval(load, 15000);
-
-      suggestionSend.addEventListener("click", async () => {
-        const text = (suggestionText.value || "").trim();
-        if (!text) {
-          suggestionNote.textContent = "Enter a suggestion first.";
-          return;
-        }
-        try {
-          const res = await fetch("/suggestions", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ text }),
-          });
-          if (!res.ok) {
-            throw new Error("Request failed");
-          }
-          suggestionText.value = "";
-          suggestionNote.textContent = "Suggestion received and queued for proposal.";
-          load();
-        } catch (err) {
-          suggestionNote.textContent = "Failed to submit suggestion.";
-        }
-      });
     </script>
   </body>
 </html>
