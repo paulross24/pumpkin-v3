@@ -107,6 +107,50 @@
         object-fit: cover;
         border-radius: 10px;
         border: 1px solid var(--line);
+        cursor: zoom-in;
+      }
+      .thumb {
+        position: relative;
+        display: inline-block;
+      }
+      .face-box {
+        position: absolute;
+        border: 2px solid #f08a3a;
+        box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.6);
+        display: none;
+        pointer-events: none;
+      }
+      .lightbox {
+        position: fixed;
+        inset: 0;
+        background: rgba(24, 16, 10, 0.7);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+        padding: 24px;
+      }
+      .lightbox.open {
+        display: flex;
+      }
+      .lightbox img {
+        max-width: min(90vw, 960px);
+        max-height: 85vh;
+        border-radius: 16px;
+        border: 2px solid var(--line);
+        box-shadow: 0 20px 60px rgba(20, 12, 8, 0.4);
+        background: #fff;
+      }
+      .lightbox button {
+        position: absolute;
+        top: 20px;
+        right: 20px;
+        background: #fff;
+        color: var(--ink);
+        border: 1px solid var(--line);
+      }
+      .lightbox .fullscreen {
+        right: 100px;
       }
       .meta {
         color: var(--muted);
@@ -147,9 +191,18 @@
         Loading...
       </section>
     </main>
+    <div class="lightbox" id="lightbox" aria-hidden="true">
+      <button id="lightbox-close" class="secondary">Close</button>
+      <button id="lightbox-fullscreen" class="secondary fullscreen">Fullscreen</button>
+      <img id="lightbox-img" alt="Face snapshot" />
+    </div>
     <script>
       const listNode = document.getElementById("face-list");
       const countNode = document.getElementById("count");
+      const lightbox = document.getElementById("lightbox");
+      const lightboxImg = document.getElementById("lightbox-img");
+      const lightboxClose = document.getElementById("lightbox-close");
+      const lightboxFullscreen = document.getElementById("lightbox-fullscreen");
 
       const render = (items) => {
         listNode.innerHTML = "";
@@ -164,10 +217,14 @@
           const snapshotUrl = item.snapshot_url || "";
           const time = item.ts || "unknown time";
 
+          const faceBox = item.face_box ? JSON.stringify(item.face_box) : "";
           card.innerHTML = `
             <div class="face-row">
               <div>
-                ${snapshotUrl ? `<img src="${snapshotUrl}" alt="Unknown face" />` : "<div class='meta'>No snapshot</div>"}
+                ${snapshotUrl ? `<div class="thumb" data-box='${faceBox}'>
+                  <img src="${snapshotUrl}" alt="Unknown face" data-snapshot="${snapshotUrl}" />
+                  <div class="face-box"></div>
+                </div>` : "<div class='meta'>No snapshot</div>"}
               </div>
               <div>
                 <div><strong>${label}</strong></div>
@@ -176,13 +233,55 @@
                   <input type="text" placeholder="Subject name" />
                   <button>Enroll</button>
                 </div>
+                <div class="row" style="margin-top: 8px;">
+                  <button class="secondary mark-false">Mark false positive</button>
+                </div>
                 <div class="meta status" style="margin-top: 6px;"></div>
               </div>
             </div>
           `;
           const input = card.querySelector("input");
           const button = card.querySelector("button");
+          const falseButton = card.querySelector(".mark-false");
           const status = card.querySelector(".status");
+          const img = card.querySelector("img");
+          const thumb = card.querySelector(".thumb");
+          const boxNode = card.querySelector(".face-box");
+          if (thumb && boxNode && item.face_box) {
+            const box = item.face_box;
+            const applyBox = () => {
+              const imgEl = thumb.querySelector("img");
+              if (!imgEl || !imgEl.naturalWidth || !imgEl.naturalHeight) return;
+              const scaleX = imgEl.clientWidth / imgEl.naturalWidth;
+              const scaleY = imgEl.clientHeight / imgEl.naturalHeight;
+              const xMin = Number(box.x_min ?? 0);
+              const yMin = Number(box.y_min ?? 0);
+              const xMax = Number(box.x_max ?? 0);
+              const yMax = Number(box.y_max ?? 0);
+              const left = xMin * scaleX;
+              const top = yMin * scaleY;
+              const width = Math.max(1, (xMax - xMin) * scaleX);
+              const height = Math.max(1, (yMax - yMin) * scaleY);
+              boxNode.style.left = `${left}px`;
+              boxNode.style.top = `${top}px`;
+              boxNode.style.width = `${width}px`;
+              boxNode.style.height = `${height}px`;
+              boxNode.style.display = "block";
+            };
+            if (img) {
+              img.addEventListener("load", applyBox);
+              if (img.complete) {
+                applyBox();
+              }
+            }
+          }
+          if (img && snapshotUrl) {
+            img.addEventListener("click", () => {
+              lightboxImg.src = snapshotUrl;
+              lightbox.classList.add("open");
+              lightbox.setAttribute("aria-hidden", "false");
+            });
+          }
           button.addEventListener("click", async () => {
             const subject = (input.value || "").trim();
             if (!subject) {
@@ -213,6 +312,29 @@
               button.textContent = "Enroll";
             }
           });
+          if (falseButton) {
+            falseButton.addEventListener("click", async () => {
+              if (!item.snapshot_hash) {
+                status.textContent = "Missing snapshot hash.";
+                return;
+              }
+              falseButton.textContent = "Saving...";
+              try {
+                const res = await fetch("/vision/false_positive", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ snapshot_hash: item.snapshot_hash }),
+                });
+                if (!res.ok) {
+                  falseButton.textContent = "Failed";
+                  return;
+                }
+                falseButton.textContent = "Marked";
+              } catch (err) {
+                falseButton.textContent = "Failed";
+              }
+            });
+          }
           listNode.appendChild(card);
         });
       };
@@ -230,6 +352,26 @@
       };
 
       document.getElementById("refresh").addEventListener("click", load);
+      lightboxClose.addEventListener("click", () => {
+        lightbox.classList.remove("open");
+        lightbox.setAttribute("aria-hidden", "true");
+        lightboxImg.src = "";
+      });
+      lightboxFullscreen.addEventListener("click", () => {
+        const target = lightbox;
+        if (document.fullscreenElement) {
+          document.exitFullscreen();
+        } else if (target.requestFullscreen) {
+          target.requestFullscreen().catch(() => {});
+        }
+      });
+      lightbox.addEventListener("click", (event) => {
+        if (event.target === lightbox) {
+          lightbox.classList.remove("open");
+          lightbox.setAttribute("aria-hidden", "true");
+          lightboxImg.src = "";
+        }
+      });
       load();
     </script>
   </body>

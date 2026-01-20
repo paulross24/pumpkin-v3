@@ -3560,6 +3560,8 @@ def _list_unknown_faces(conn, limit: int = 50) -> list[Dict[str, Any]]:
                 "label": payload.get("label") if isinstance(payload, dict) else None,
                 "snapshot_path": snapshot_path,
                 "snapshot_url": snapshot_url,
+                "snapshot_hash": payload.get("snapshot_hash") if isinstance(payload, dict) else None,
+                "face_box": payload.get("face_box") if isinstance(payload, dict) else None,
             }
         )
     return results
@@ -3745,6 +3747,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
             if self.path == "/vision/enroll":
                 self._handle_vision_enroll()
                 return
+            if self.path == "/vision/false_positive":
+                self._handle_vision_false_positive()
+                return
             if self.path == "/identity/link":
                 self._handle_identity_link()
                 return
@@ -3893,6 +3898,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "GET /vision/alerts",
                             "GET /vision/unknown",
                             "GET /vision/snapshot",
+                            "GET /vision/false_positives",
                             "GET /errors",
                             "GET /llm/config",
                             "POST /ask",
@@ -3907,6 +3913,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "POST /network/mark",
                             "POST /vision/alerts",
                             "POST /vision/enroll",
+                            "POST /vision/false_positive",
                             "POST /suggestions",
                             "POST /notifications/test",
                             "POST /ha/webhook",
@@ -3983,6 +3990,13 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
                 unknown = _list_unknown_faces(conn, limit=limit)
                 _send_json(self, 200, {"count": len(unknown), "items": unknown})
+                return
+            if path == "/vision/false_positives":
+                conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+                disabled = store.get_memory(conn, "vision.false_positives") or []
+                if not isinstance(disabled, list):
+                    disabled = []
+                _send_json(self, 200, {"items": disabled})
                 return
             if path == "/vision/snapshot":
                 raw_path = params.get("path", [None])[0]
@@ -4315,6 +4329,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "/vision/alerts": {"get": {"summary": "Unknown face alert settings"}},
                             "/vision/unknown": {"get": {"summary": "List unknown face events"}},
                             "/vision/snapshot": {"get": {"summary": "Fetch a captured snapshot"}},
+                            "/vision/false_positives": {"get": {"summary": "List false positive hashes"}},
                             "/notifications/test": {"post": {"summary": "Create a test alert"}},
                             "/identity/link": {
                                 "post": {
@@ -4393,6 +4408,24 @@ class VoiceHandler(BaseHTTPRequestHandler):
                                                         "snapshot_path": {"type": "string"},
                                                     },
                                                     "required": ["subject", "snapshot_path"],
+                                                }
+                                            }
+                                        }
+                                    },
+                                }
+                            },
+                            "/vision/false_positive": {
+                                "post": {
+                                    "summary": "Mark a snapshot hash as false positive",
+                                    "requestBody": {
+                                        "content": {
+                                            "application/json": {
+                                                "schema": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "snapshot_hash": {"type": "string"},
+                                                    },
+                                                    "required": ["snapshot_hash"],
                                                 }
                                             }
                                         }
@@ -5503,6 +5536,31 @@ class VoiceHandler(BaseHTTPRequestHandler):
             _send_json(self, 400, {"status": "error", "detail": result})
             return
         _send_json(self, 200, {"status": "ok", "subject": subject.strip(), "response": result.get("response")})
+
+    def _handle_vision_false_positive(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+        try:
+            data = _parse_json(body)
+        except ValueError:
+            _bad_request(self, "invalid JSON")
+            return
+        if not isinstance(data, dict):
+            _bad_request(self, "JSON body must be an object")
+            return
+        snapshot_hash = data.get("snapshot_hash")
+        if not isinstance(snapshot_hash, str) or not snapshot_hash.strip():
+            _bad_request(self, "snapshot_hash must be a string")
+            return
+        snapshot_hash = snapshot_hash.strip()
+        conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+        false_positives = store.get_memory(conn, "vision.false_positives") or []
+        if not isinstance(false_positives, list):
+            false_positives = []
+        false_set = {str(item) for item in false_positives}
+        false_set.add(snapshot_hash)
+        store.set_memory(conn, "vision.false_positives", sorted(false_set))
+        _send_json(self, 200, {"status": "ok", "snapshot_hash": snapshot_hash})
 
     def _handle_suggestion(self) -> None:
         length = int(self.headers.get("Content-Length", "0"))

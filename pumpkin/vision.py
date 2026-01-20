@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -122,10 +123,19 @@ def _compreface_recognize(image_bytes: bytes, provider: Dict[str, Any]) -> Optio
     if not subjects:
         return {"face_detected": True, "name": None, "confidence": None}
     subject = subjects[0]
+    box = candidate.get("box") if isinstance(candidate, dict) else None
+    if isinstance(box, dict):
+        box = {
+            "x_min": box.get("x_min"),
+            "y_min": box.get("y_min"),
+            "x_max": box.get("x_max"),
+            "y_max": box.get("y_max"),
+        }
     return {
         "name": subject.get("subject"),
         "confidence": subject.get("similarity"),
         "face_detected": True,
+        "box": box,
     }
 
 
@@ -185,6 +195,10 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
     if not isinstance(disabled_alerts, list):
         disabled_alerts = []
     disabled_set = {str(item) for item in disabled_alerts}
+    false_positives = store.get_memory(conn, "vision.false_positives") or []
+    if not isinstance(false_positives, list):
+        false_positives = []
+    false_positive_set = {str(item) for item in false_positives}
 
     max_cameras = int(module_cfg.get("max_cameras_per_run", 1))
     timeout_seconds = float(module_cfg.get("timeout_seconds", 8))
@@ -247,7 +261,26 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
             )
             continue
         snapshot_path = _save_snapshot(str(camera_id), frame)
+        snapshot_hash = hashlib.sha256(frame).hexdigest() if frame else None
         recognition = _recognize_face(frame, provider if isinstance(provider, dict) else {})
+        face_box = recognition.get("box") if isinstance(recognition, dict) else None
+        if snapshot_hash and snapshot_hash in false_positive_set:
+            events.append(
+                {
+                    "source": "vision",
+                    "type": "face.false_positive",
+                    "payload": {
+                        "camera_id": camera_id,
+                        "label": cam.get("label"),
+                        "snapshot_path": str(snapshot_path) if snapshot_path else None,
+                        "snapshot_hash": snapshot_hash,
+                        "face_box": face_box,
+                    },
+                    "severity": "info",
+                }
+            )
+            processed += 1
+            continue
         if recognition and recognition.get("name") and recognition.get("confidence") is not None:
             if float(recognition["confidence"]) >= min_confidence:
                 events.append(
@@ -260,6 +293,8 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
                             "name": recognition.get("name"),
                             "confidence": recognition.get("confidence"),
                             "snapshot_path": str(snapshot_path) if snapshot_path else None,
+                            "snapshot_hash": snapshot_hash,
+                            "face_box": face_box,
                         },
                         "severity": "info",
                     }
@@ -271,6 +306,8 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
                         "camera_id": camera_id,
                         "label": cam.get("label"),
                         "snapshot_path": str(snapshot_path) if snapshot_path else None,
+                        "snapshot_hash": snapshot_hash,
+                        "face_box": face_box,
                     }
                     events.append(
                         {
@@ -293,6 +330,8 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
                     "camera_id": camera_id,
                     "label": cam.get("label"),
                     "snapshot_path": str(snapshot_path) if snapshot_path else None,
+                    "snapshot_hash": snapshot_hash,
+                    "face_box": face_box,
                 }
                 events.append(
                     {
