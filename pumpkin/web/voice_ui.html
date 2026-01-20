@@ -254,16 +254,21 @@
           <svg class="pumpkin-svg" viewBox="0 0 200 200" aria-hidden="true">
             <defs>
               <clipPath id="brain-cut">
-                <polygon points="35,70 175,35 175,125 55,160" />
+                <polygon points="32,70 178,36 178,110 52,142" />
+              </clipPath>
+              <clipPath id="pumpkin-cut">
+                <polygon points="24,200 176,200 176,118 24,118" />
               </clipPath>
             </defs>
             <g>
-              <ellipse cx="100" cy="125" rx="78" ry="58" fill="var(--pumpkin)" />
-              <ellipse cx="65" cy="125" rx="38" ry="52" fill="#f08a3a" opacity="0.9" />
-              <ellipse cx="135" cy="125" rx="38" ry="52" fill="#f08a3a" opacity="0.9" />
-              <path d="M46 125 Q100 166 154 125" fill="none" stroke="#c4652f" stroke-width="3" />
-              <path d="M54 96 Q62 70 70 52" fill="none" stroke="#d17833" stroke-width="4" />
-              <path d="M146 96 Q138 70 130 52" fill="none" stroke="#d17833" stroke-width="4" />
+              <g clip-path="url(#pumpkin-cut)">
+                <ellipse cx="100" cy="125" rx="78" ry="58" fill="var(--pumpkin)" />
+                <ellipse cx="65" cy="125" rx="38" ry="52" fill="#f08a3a" opacity="0.9" />
+                <ellipse cx="135" cy="125" rx="38" ry="52" fill="#f08a3a" opacity="0.9" />
+                <path d="M46 125 Q100 166 154 125" fill="none" stroke="#c4652f" stroke-width="3" />
+                <path d="M54 96 Q62 70 70 52" fill="none" stroke="#d17833" stroke-width="4" />
+                <path d="M146 96 Q138 70 130 52" fill="none" stroke="#d17833" stroke-width="4" />
+              </g>
               <rect x="92" y="24" width="16" height="30" fill="#5b4b41" />
             </g>
             <g class="brain" clip-path="url(#brain-cut)">
@@ -271,9 +276,8 @@
               <path d="M70 112 C88 100 118 104 134 118" stroke="#d86a34" stroke-width="3" fill="none" />
               <path d="M80 136 C98 126 124 134 138 148" stroke="#d86a34" stroke-width="3" fill="none" />
             </g>
-            <polygon points="35,70 175,35 175,125 55,160" fill="rgba(255, 214, 168, 0.7)" />
-            <line x1="35" y1="70" x2="175" y2="35" stroke="#e6b07f" stroke-width="4" />
-            <line x1="55" y1="160" x2="175" y2="125" stroke="#c97b3b" stroke-width="3" />
+            <line x1="32" y1="70" x2="178" y2="36" stroke="#e6b07f" stroke-width="4" />
+            <line x1="52" y1="142" x2="178" y2="110" stroke="#c97b3b" stroke-width="3" />
           </svg>
         </div>
         <div>
