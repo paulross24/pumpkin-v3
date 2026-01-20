@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib import request, error
+from urllib.parse import quote
 
 from . import act
 from . import cameras as cameras_mod
@@ -126,6 +127,41 @@ def _compreface_recognize(image_bytes: bytes, provider: Dict[str, Any]) -> Optio
         "confidence": subject.get("similarity"),
         "face_detected": True,
     }
+
+
+def _compreface_enroll(image_bytes: bytes, subject: str, provider: Dict[str, Any]) -> Dict[str, Any]:
+    endpoint = provider.get("endpoint")
+    api_key_env = provider.get("api_key_env")
+    if not endpoint or not api_key_env:
+        return {"ok": False, "error": "provider_not_configured"}
+    api_key = os.getenv(str(api_key_env))
+    if not api_key:
+        return {"ok": False, "error": "missing_api_key"}
+    if not subject:
+        return {"ok": False, "error": "missing_subject"}
+    base = endpoint.rsplit("/", 1)[0]
+    enroll_url = f"{base}/subjects/{quote(subject)}/add"
+    boundary = f"----pumpkin-{uuid.uuid4().hex}"
+    body = (
+        f"--{boundary}\r\n"
+        "Content-Disposition: form-data; name=\"file\"; filename=\"frame.jpg\"\r\n"
+        "Content-Type: image/jpeg\r\n\r\n"
+    ).encode("utf-8") + image_bytes + f"\r\n--{boundary}--\r\n".encode("utf-8")
+    headers = {
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+        "x-api-key": api_key,
+    }
+    req = request.Request(enroll_url, data=body, headers=headers, method="POST")
+    try:
+        with request.urlopen(req, timeout=provider.get("timeout_seconds", 6)) as resp:
+            payload = resp.read()
+    except error.URLError as exc:
+        return {"ok": False, "error": "request_failed", "detail": str(exc)}
+    try:
+        data = json.loads(payload.decode("utf-8"))
+    except json.JSONDecodeError:
+        data = {"raw": payload.decode("utf-8", errors="replace")}
+    return {"ok": True, "response": data}
 
 
 def _recognize_face(image_bytes: bytes, provider: Dict[str, Any]) -> Optional[Dict[str, Any]]:

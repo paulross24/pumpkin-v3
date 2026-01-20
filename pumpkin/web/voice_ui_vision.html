@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pumpkin Vision Review</title>
+    <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='29' y='10' width='6' height='12' fill='%235b4b41'/><circle cx='32' cy='36' r='20' fill='%23e67c2e'/><circle cx='20' cy='36' r='14' fill='%23f08a3a' opacity='0.85'/><circle cx='44' cy='36' r='14' fill='%23f08a3a' opacity='0.85'/></svg>" />
+    <style>
+      :root {
+        --bg: #f6efe8;
+        --bg-accent: #f2d6b5;
+        --ink: #2a1b12;
+        --muted: #5b4b41;
+        --pumpkin: #e67c2e;
+        --pumpkin-dark: #b95519;
+        --card: #fff8f2;
+        --line: #e5d6c6;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Iowan Old Style", "Palatino", "Bookman", "Georgia", serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at 10% 10%, rgba(230, 124, 46, 0.15), transparent 40%),
+          linear-gradient(160deg, var(--bg), var(--bg-accent));
+        min-height: 100vh;
+      }
+      header {
+        padding: 28px 24px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .title {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 26px;
+        font-weight: 700;
+      }
+      .pumpkin-icon {
+        width: 24px;
+        height: 24px;
+        flex: 0 0 auto;
+      }
+      .sub { color: var(--muted); }
+      main {
+        padding: 12px 24px 40px;
+        display: grid;
+        gap: 16px;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 16px;
+        box-shadow: 0 12px 32px rgba(50, 33, 22, 0.08);
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      button {
+        border: none;
+        border-radius: 999px;
+        padding: 8px 14px;
+        background: var(--pumpkin);
+        color: #fff;
+        cursor: pointer;
+        font-weight: 600;
+      }
+      button.secondary {
+        background: transparent;
+        border: 1px solid var(--line);
+        color: var(--ink);
+      }
+      input {
+        padding: 8px 10px;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        width: 180px;
+        font-family: inherit;
+      }
+      .faces {
+        display: grid;
+        gap: 16px;
+      }
+      .face-card {
+        display: grid;
+        gap: 12px;
+        padding: 12px;
+        border-radius: 12px;
+        border: 1px solid var(--line);
+        background: #fff;
+      }
+      .face-row {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: 120px 1fr;
+      }
+      .face-row img {
+        width: 120px;
+        height: 90px;
+        object-fit: cover;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+      }
+      .meta {
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+      @media (max-width: 720px) {
+        .face-row {
+          grid-template-columns: 1fr;
+        }
+        .face-row img {
+          width: 100%;
+          height: auto;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="title">
+        <svg class="pumpkin-icon" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+          <rect x="29" y="10" width="6" height="12" fill="#5b4b41"/>
+          <circle cx="32" cy="36" r="20" fill="#e67c2e"/>
+          <circle cx="20" cy="36" r="14" fill="#f08a3a" opacity="0.85"/>
+          <circle cx="44" cy="36" r="14" fill="#f08a3a" opacity="0.85"/>
+        </svg>
+        Vision Review
+      </div>
+      <div class="sub">Review unknown faces and enroll them into CompreFace.</div>
+    </header>
+    <main>
+      <section class="card">
+        <div class="row">
+          <span class="sub" id="count">0 unknown faces</span>
+          <button id="refresh" class="secondary">Refresh</button>
+        </div>
+      </section>
+      <section class="card faces" id="face-list">
+        Loading...
+      </section>
+    </main>
+    <script>
+      const listNode = document.getElementById("face-list");
+      const countNode = document.getElementById("count");
+
+      const render = (items) => {
+        listNode.innerHTML = "";
+        if (!items.length) {
+          listNode.textContent = "No unknown faces logged yet.";
+          return;
+        }
+        items.forEach((item) => {
+          const card = document.createElement("div");
+          card.className = "face-card";
+          const label = item.label || item.camera_id || "camera";
+          const snapshotUrl = item.snapshot_url || "";
+          const time = item.ts || "unknown time";
+
+          card.innerHTML = `
+            <div class="face-row">
+              <div>
+                ${snapshotUrl ? `<img src="${snapshotUrl}" alt="Unknown face" />` : "<div class='meta'>No snapshot</div>"}
+              </div>
+              <div>
+                <div><strong>${label}</strong></div>
+                <div class="meta">${time}</div>
+                <div class="row" style="margin-top: 8px;">
+                  <input type="text" placeholder="Subject name" />
+                  <button>Enroll</button>
+                </div>
+                <div class="meta status" style="margin-top: 6px;"></div>
+              </div>
+            </div>
+          `;
+          const input = card.querySelector("input");
+          const button = card.querySelector("button");
+          const status = card.querySelector(".status");
+          button.addEventListener("click", async () => {
+            const subject = (input.value || "").trim();
+            if (!subject) {
+              status.textContent = "Enter a subject name.";
+              return;
+            }
+            button.textContent = "Enrolling...";
+            status.textContent = "";
+            try {
+              const res = await fetch("/vision/enroll", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  subject,
+                  snapshot_path: item.snapshot_path,
+                }),
+              });
+              const data = await res.json();
+              if (!res.ok) {
+                status.textContent = data.error || data.detail?.error || "Enroll failed.";
+                button.textContent = "Enroll";
+                return;
+              }
+              status.textContent = `Enrolled ${subject}.`;
+              button.textContent = "Enrolled";
+            } catch (err) {
+              status.textContent = "Enroll failed.";
+              button.textContent = "Enroll";
+            }
+          });
+          listNode.appendChild(card);
+        });
+      };
+
+      const load = async () => {
+        try {
+          const res = await fetch("/vision/unknown?limit=25");
+          const data = await res.json();
+          const items = Array.isArray(data.items) ? data.items : [];
+          countNode.textContent = `${data.count ?? items.length} unknown faces`;
+          render(items);
+        } catch (err) {
+          listNode.textContent = "Failed to load unknown faces.";
+        }
+      };
+
+      document.getElementById("refresh").addEventListener("click", load);
+      load();
+    </script>
+  </body>
+</html>

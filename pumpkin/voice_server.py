@@ -33,6 +33,7 @@ from . import intent
 from . import policy as policy_mod
 from . import propose
 from . import act
+from . import vision
 from . import telemetry
 from .audit import append_jsonl
 from .db import init_db, utc_now_iso
@@ -3514,6 +3515,56 @@ def _list_alerts(conn, limit: int = 50) -> list[Dict[str, Any]]:
     return alerts
 
 
+def _safe_snapshot_path(raw_path: str) -> Path | None:
+    if not raw_path:
+        return None
+    base_dir = (settings.data_dir() / "camera_captures").resolve()
+    path = Path(raw_path)
+    if not path.is_absolute():
+        path = (base_dir / path).resolve()
+    else:
+        path = path.resolve()
+    try:
+        path.relative_to(base_dir)
+    except ValueError:
+        return None
+    if not path.exists() or not path.is_file():
+        return None
+    return path
+
+
+def _list_unknown_faces(conn, limit: int = 50) -> list[Dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM events WHERE type = ? ORDER BY id DESC LIMIT ?",
+        ("face.unknown", int(limit)),
+    ).fetchall()
+    results: list[Dict[str, Any]] = []
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"])
+        except Exception:
+            payload = {}
+        snapshot_path = payload.get("snapshot_path") if isinstance(payload, dict) else None
+        snapshot_url = None
+        safe_path = None
+        if isinstance(snapshot_path, str):
+            safe_path = _safe_snapshot_path(snapshot_path)
+        if safe_path:
+            snapshot_url = f"/vision/snapshot?path={quote(str(safe_path))}"
+        results.append(
+            {
+                "id": row["id"],
+                "ts": row["ts"],
+                "severity": row["severity"],
+                "camera_id": payload.get("camera_id") if isinstance(payload, dict) else None,
+                "label": payload.get("label") if isinstance(payload, dict) else None,
+                "snapshot_path": snapshot_path,
+                "snapshot_url": snapshot_url,
+            }
+        )
+    return results
+
+
 def _load_network_module_cfg() -> Dict[str, Any]:
     config_path = settings.modules_config_path()
     if not config_path.exists():
@@ -3691,6 +3742,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
             if self.path == "/vision/alerts":
                 self._handle_vision_alerts()
                 return
+            if self.path == "/vision/enroll":
+                self._handle_vision_enroll()
+                return
             if self.path == "/identity/link":
                 self._handle_identity_link()
                 return
@@ -3824,6 +3878,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "GET /ui/car/alerts",
                             "GET /ui/alerts",
                             "GET /ui/inventory",
+                            "GET /ui/vision",
                             "GET /config",
                             "GET /catalog",
                             "GET /capabilities",
@@ -3836,6 +3891,8 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "GET /inventory",
                             "GET /notifications",
                             "GET /vision/alerts",
+                            "GET /vision/unknown",
+                            "GET /vision/snapshot",
                             "GET /errors",
                             "GET /llm/config",
                             "POST /ask",
@@ -3849,6 +3906,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "POST /network/rtsp_probe",
                             "POST /network/mark",
                             "POST /vision/alerts",
+                            "POST /vision/enroll",
                             "POST /suggestions",
                             "POST /notifications/test",
                             "POST /ha/webhook",
@@ -3890,6 +3948,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
             if path == "/ui/alerts":
                 _send_html(self, 200, _load_voice_ui_asset("voice_ui_alerts.html"))
                 return
+            if path == "/ui/vision":
+                _send_html(self, 200, _load_voice_ui_asset("voice_ui_vision.html"))
+                return
             if path == "/ui/inventory":
                 _send_html(self, 200, _load_voice_ui_asset("voice_ui_inventory.html"))
                 return
@@ -3916,6 +3977,30 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
                 alerts = _list_alerts(conn, limit=limit)
                 _send_json(self, 200, {"count": len(alerts), "notifications": alerts})
+                return
+            if path == "/vision/unknown":
+                limit = _parse_limit(params.get("limit", [None])[0], default=25)
+                conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+                unknown = _list_unknown_faces(conn, limit=limit)
+                _send_json(self, 200, {"count": len(unknown), "items": unknown})
+                return
+            if path == "/vision/snapshot":
+                raw_path = params.get("path", [None])[0]
+                if not raw_path:
+                    self.send_response(400)
+                    self.end_headers()
+                    return
+                snapshot_path = _safe_snapshot_path(raw_path)
+                if not snapshot_path:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                payload = snapshot_path.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
                 return
             if path == "/vision/alerts":
                 conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
@@ -4226,7 +4311,10 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "/catalog": {"get": {"summary": "Module catalog"}},
                             "/capabilities": {"get": {"summary": "Capability snapshot"}},
                             "/car/telemetry": {"get": {"summary": "Car telemetry summary"}},
-                            "/notifications": {"get": {"summary": "Recent car telemetry alerts"}},
+                            "/notifications": {"get": {"summary": "Recent alerts"}},
+                            "/vision/alerts": {"get": {"summary": "Unknown face alert settings"}},
+                            "/vision/unknown": {"get": {"summary": "List unknown face events"}},
+                            "/vision/snapshot": {"get": {"summary": "Fetch a captured snapshot"}},
                             "/notifications/test": {"post": {"summary": "Create a test alert"}},
                             "/identity/link": {
                                 "post": {
@@ -4286,6 +4374,25 @@ class VoiceHandler(BaseHTTPRequestHandler):
                                                         },
                                                     },
                                                     "required": ["ip"],
+                                                }
+                                            }
+                                        }
+                                    },
+                                }
+                            },
+                            "/vision/enroll": {
+                                "post": {
+                                    "summary": "Enroll a face snapshot into CompreFace",
+                                    "requestBody": {
+                                        "content": {
+                                            "application/json": {
+                                                "schema": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "subject": {"type": "string"},
+                                                        "snapshot_path": {"type": "string"},
+                                                    },
+                                                    "required": ["subject", "snapshot_path"],
                                                 }
                                             }
                                         }
@@ -5359,6 +5466,43 @@ class VoiceHandler(BaseHTTPRequestHandler):
             disabled_set.add(camera_id)
         store.set_memory(conn, "vision.alerts.disabled", sorted(disabled_set))
         _send_json(self, 200, {"status": "ok", "camera_id": camera_id, "enabled": enabled})
+
+    def _handle_vision_enroll(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+        try:
+            data = _parse_json(body)
+        except ValueError:
+            _bad_request(self, "invalid JSON")
+            return
+        if not isinstance(data, dict):
+            _bad_request(self, "JSON body must be an object")
+            return
+        subject = data.get("subject")
+        snapshot_path = data.get("snapshot_path")
+        if not isinstance(subject, str) or not subject.strip():
+            _bad_request(self, "subject must be a string")
+            return
+        if not isinstance(snapshot_path, str) or not snapshot_path.strip():
+            _bad_request(self, "snapshot_path must be a string")
+            return
+        safe_path = _safe_snapshot_path(snapshot_path.strip())
+        if not safe_path:
+            _bad_request(self, "snapshot_path_invalid")
+            return
+        payload = safe_path.read_bytes()
+        config_path = settings.modules_config_path()
+        if not config_path.exists():
+            _send_json(self, 400, {"status": "error", "error": "modules_config_missing"})
+            return
+        config = module_config.load_config(str(config_path))
+        module_cfg = config.get("modules", {}).get("face.recognition", {})
+        provider = module_cfg.get("provider", {}) if isinstance(module_cfg, dict) else {}
+        result = vision._compreface_enroll(payload, subject.strip(), provider if isinstance(provider, dict) else {})
+        if not result.get("ok"):
+            _send_json(self, 400, {"status": "error", "detail": result})
+            return
+        _send_json(self, 200, {"status": "ok", "subject": subject.strip(), "response": result.get("response")})
 
     def _handle_suggestion(self) -> None:
         length = int(self.headers.get("Content-Length", "0"))
