@@ -316,6 +316,7 @@ def _context_pack(
                 "Propose first, act second",
                 "Destructive/system-altering actions always require approval",
                 "Policy changes always require approval",
+                "Network/DNS/cloudflared changes always require approval",
                 "All changes are auditable and reversible",
             ]
         },
@@ -324,8 +325,9 @@ def _context_pack(
 
 def _render_prompt(context_pack: Dict[str, Any]) -> str:
     instructions = (
-        "You are Pumpkin v3's planning module. "
-        "Improve efficiency, reliability, and usability of the existing system. "
+        "You are Pumpkin v3's autonomous planning module. "
+        "Continuously improve efficiency, reliability, usability, and self-expansion. "
+        "When new devices/services appear, propose concrete steps to identify and integrate them. "
         "Prioritize concrete fixes and upgrades (retry/backoff, caching, telemetry, validations, better prompts). "
         "Return ONLY JSON (no prose) with a top-level key 'proposals' (list). "
         "Each proposal object MUST include keys: kind, summary, details, risk, expected_outcome, "
@@ -341,6 +343,8 @@ def _render_prompt(context_pack: Dict[str, Any]) -> str:
         f"{settings.repo_root()}, with correct paths and no placeholders (never use <PATCH_TODO> or similar). "
         "If you cannot provide a real patch, omit that proposal entirely. "
         "Always include concrete steps that describe how to execute the proposal (no placeholders). "
+        "Network/DNS/cloudflared changes always require human approval. "
+        "If proposing an action.request, include a rollback_action_type and rollback_action_params when feasible. "
         "No extra top-level keys. Strict JSON only."
     )
     themes = [
@@ -1695,41 +1699,55 @@ def _rule_based_proposals(events: List[Any], conn) -> List[Dict[str, Any]]:
             continue
         if ip in auto_seen:
             continue
-        summary = f"Integrate camera at {ip}"
-        if store.proposal_exists(conn, summary, statuses=["pending", "approved"]):
+        scan_summary = f"Deep scan new camera at {ip}"
+        mark_summary = f"Mark camera at {ip} as useful"
+        if store.proposal_exists(conn, scan_summary, statuses=["pending", "approved"]) or store.proposal_exists(
+            conn, mark_summary, statuses=["pending", "approved"]
+        ):
             auto_seen.append(ip)
             continue
         proposals.append(
             {
-                "kind": "hardware.recommendation",
-                "summary": summary,
+                "kind": "action.request",
+                "summary": scan_summary,
                 "details": {
-                    "rationale": "A camera-like device was discovered on the network and should be integrated.",
-                    "device": {
-                        "ip": ip,
-                        "hints": hints,
-                        "open_ports": open_ports,
-                        "services": services,
-                    },
-                    "implementation": (
-                        "Identify the camera brand/protocol (RTSP/HTTP), "
-                        "capture stream URL or credentials, and draft an integration plan."
-                    ),
-                    "verification": (
-                        "Confirm the stream endpoint is reachable and appears in the network snapshot."
-                    ),
-                    "rollback_plan": "Remove the integration and stored credentials if needed.",
+                    "rationale": "Camera-like device discovered; scan to enrich service details.",
+                    "action_type": "network.deep_scan",
+                    "action_params": {"ip": ip},
+                    "implementation": "Run a deep scan to identify RTSP/HTTP/ONVIF services.",
+                    "verification": "Confirm deep scan results are saved for the device.",
+                    "rollback_plan": "No rollback needed; scan is read-only.",
                 },
-                "risk": 0.3,
-                "expected_outcome": "Integration plan is ready for approval.",
+                "risk": 0.1,
+                "expected_outcome": "Deep scan results recorded for the new camera.",
                 "source_event_ids": [],
                 "needs_new_capability": False,
                 "capability_request": None,
-                "steps": [
-                    "Identify camera protocol and access method.",
-                    "Draft integration plan and required credentials.",
-                    "Propose activation steps and verify reachability.",
-                ],
+                "steps": ["Run deep scan", "Review detected services/hints"],
+            }
+        )
+        proposals.append(
+            {
+                "kind": "action.request",
+                "summary": mark_summary,
+                "details": {
+                    "rationale": "Enable vision modules to auto-sync discovered camera.",
+                    "action_type": "network.mark_useful",
+                    "action_params": {
+                        "ip": ip,
+                        "label": "camera",
+                        "note": "Auto-marked from network discovery; review credentials if needed.",
+                    },
+                    "implementation": "Add the device to the useful list for camera sync.",
+                    "verification": "Confirm device appears in the useful list and camera registry.",
+                    "rollback_plan": "Remove the device from the useful list.",
+                },
+                "risk": 0.1,
+                "expected_outcome": "Camera is flagged for integration workflows.",
+                "source_event_ids": [],
+                "needs_new_capability": False,
+                "capability_request": None,
+                "steps": ["Mark device useful", "Verify camera registry updated"],
             }
         )
         auto_seen.append(ip)

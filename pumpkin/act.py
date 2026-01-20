@@ -9,6 +9,10 @@ import subprocess
 import urllib.request
 
 from . import settings
+from . import store
+from . import module_config
+from . import observe
+from .db import init_db, utc_now_iso
 
 from .audit import append_jsonl
 
@@ -23,6 +27,16 @@ ACTION_METADATA = {
         "description": "Apply a unified diff patch to an allowed repository root.",
         "verification": "Verify patch applied cleanly and service health is OK.",
         "rollback": "Revert the patch or restore from backup if needed.",
+    },
+    "network.deep_scan": {
+        "description": "Run a deep port scan on a single host and record findings.",
+        "verification": "Check deep scan results in network discovery memory.",
+        "rollback": "No rollback needed; scan is read-only.",
+    },
+    "network.mark_useful": {
+        "description": "Mark a discovered device as useful for downstream modules.",
+        "verification": "Confirm device appears in network.discovery.useful list.",
+        "rollback": "Remove the entry from network.discovery.useful.",
     },
 }
 
@@ -44,6 +58,10 @@ def execute_action(
         return notify_local(params.get("message", ""), audit_path)
     if action_type == "code.apply_patch":
         return apply_patch_action(params, audit_path)
+    if action_type == "network.deep_scan":
+        return network_deep_scan(params, audit_path)
+    if action_type == "network.mark_useful":
+        return network_mark_useful(params, audit_path)
     raise ValueError(f"unsupported action_type: {action_type}")
 
 
@@ -79,6 +97,154 @@ def apply_patch_action(params: Dict[str, Any], audit_path: str) -> Dict[str, Any
         },
     )
     return {"applied": True, "repo_root": repo_root}
+
+
+def _load_network_module_cfg() -> Dict[str, Any]:
+    config_path = settings.modules_config_path()
+    if not config_path.exists():
+        return {}
+    try:
+        config = module_config.load_config(str(config_path))
+    except Exception:
+        return {}
+    module_cfg = config.get("modules", {}).get("network.discovery", {})
+    return module_cfg if isinstance(module_cfg, dict) else {}
+
+
+def network_deep_scan(params: Dict[str, Any], audit_path: str) -> Dict[str, Any]:
+    ip = params.get("ip")
+    ports = params.get("ports")
+    if not isinstance(ip, str) or not ip.strip():
+        raise ValueError("ip_missing")
+    ports_payload = ports if isinstance(ports, list) else []
+    ports_list = []
+    for item in ports_payload:
+        try:
+            port = int(item)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= port <= 65535:
+            ports_list.append(port)
+    if not ports_list:
+        ports_list = [22, 80, 81, 443, 554, 8000, 8080, 8081, 8123, 8443, 8554, 9000, 9443]
+
+    conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+    module_cfg = _load_network_module_cfg()
+    timeout_seconds = float(module_cfg.get("deep_scan_timeout_seconds", 0.2))
+    max_workers = int(module_cfg.get("deep_scan_workers", 128))
+    active_cfg = module_cfg.get("active") if isinstance(module_cfg.get("active"), dict) else {}
+
+    state = store.get_memory(conn, "network.discovery.deep_scan")
+    if not isinstance(state, dict):
+        state = {"jobs": {}}
+    jobs = state.get("jobs")
+    if not isinstance(jobs, dict):
+        jobs = {}
+        state["jobs"] = jobs
+
+    job = jobs.get(ip, {})
+    job.update(
+        {
+            "ip": ip.strip(),
+            "status": "running",
+            "started_at": utc_now_iso(),
+            "ports": ports_payload,
+            "open_ports": [],
+            "services": [],
+            "hints": [],
+            "error": None,
+            "finished_at": None,
+        }
+    )
+    jobs[ip] = job
+    store.set_memory(conn, "network.discovery.deep_scan", state)
+
+    try:
+        result = observe.deep_scan_host(
+            ip=ip.strip(),
+            ports=ports_list,
+            timeout_seconds=timeout_seconds,
+            max_workers=max_workers,
+            active=active_cfg,
+        )
+        job.update(
+            {
+                "status": "complete",
+                "open_ports": result.get("open_ports", []),
+                "services": result.get("services", []),
+                "hints": result.get("hints", []),
+                "finished_at": utc_now_iso(),
+            }
+        )
+        store.insert_event(
+            conn,
+            source="network",
+            event_type="network.discovery.deep_scan",
+            payload=job,
+            severity="info",
+        )
+    except Exception as exc:
+        job.update(
+            {
+                "status": "error",
+                "error": str(exc),
+                "finished_at": utc_now_iso(),
+            }
+        )
+        store.insert_event(
+            conn,
+            source="network",
+            event_type="network.discovery.deep_scan.error",
+            payload=job,
+            severity="warn",
+        )
+        raise
+    finally:
+        jobs[ip] = job
+        store.set_memory(conn, "network.discovery.deep_scan", state)
+
+    append_jsonl(
+        audit_path,
+        {
+            "kind": "network.deep_scan",
+            "ip": ip.strip(),
+            "open_ports": job.get("open_ports", []),
+        },
+    )
+    return {"ok": True, "job": job}
+
+
+def network_mark_useful(params: Dict[str, Any], audit_path: str) -> Dict[str, Any]:
+    ip = params.get("ip")
+    label = params.get("label")
+    note = params.get("note")
+    if not isinstance(ip, str) or not ip.strip():
+        raise ValueError("ip_missing")
+    if label is not None and not isinstance(label, str):
+        raise ValueError("label_invalid")
+    if note is not None and not isinstance(note, str):
+        raise ValueError("note_invalid")
+    conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+    item = {
+        "ip": ip.strip(),
+        "label": (label or "useful").strip(),
+        "note": (note or "").strip(),
+        "ts": utc_now_iso(),
+    }
+    current = store.get_memory(conn, "network.discovery.useful")
+    if not isinstance(current, list):
+        current = []
+    current.append(item)
+    store.set_memory(conn, "network.discovery.useful", current[-200:])
+    store.insert_event(
+        conn,
+        source="network",
+        event_type="network.discovery.marked",
+        payload=item,
+        severity="info",
+    )
+    append_jsonl(audit_path, {"kind": "network.mark_useful", "ip": item["ip"], "label": item["label"]})
+    return {"ok": True, "marked": item}
 
 
 def verify_health(url: str, timeout: float = 5.0) -> Dict[str, Any]:

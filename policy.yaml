@@ -4,9 +4,11 @@ mode: strict
 defaults:
   require_approval: false
 approval:
-  max_auto_approve_risk: 0.35
+  max_auto_approve_risk: 1.0
   risky_action_types:
-    - code.apply_patch
+    - network.dns_change
+    - network.cloudflared_change
+    - network.firewall_change
 auto_approve: []
 actions:
   - action_type: notify.local
@@ -31,3 +33,31 @@ actions:
       required:
         - repo_root
         - patch
+  - action_type: network.deep_scan
+    params_schema:
+      type: object
+      properties:
+        ip:
+          type: string
+          maxLength: 128
+        ports:
+          type: array
+          items:
+            type: integer
+      required:
+        - ip
+  - action_type: network.mark_useful
+    params_schema:
+      type: object
+      properties:
+        ip:
+          type: string
+          maxLength: 128
+        label:
+          type: string
+          maxLength: 80
+        note:
+          type: string
+          maxLength: 200
+      required:
+        - ip

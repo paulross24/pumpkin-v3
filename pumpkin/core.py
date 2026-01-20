@@ -20,6 +20,7 @@ from . import module_config
 from . import inventory as inventory_mod
 from . import selfcheck
 from .db import init_db
+from . import act
 from .act import execute_action
 
 
@@ -451,7 +452,8 @@ def _maybe_auto_approve_action(
     return True
 
 
-def _execute_approved(conn, policy: policy_mod.Policy) -> None:
+def _execute_approved(conn, policy: policy_mod.Policy) -> int:
+    executed_count = 0
     approved = store.fetch_approved_unexecuted(conn)
     if not approved:
         pending = store.list_proposals(conn, status="pending", limit=50)
@@ -471,6 +473,9 @@ def _execute_approved(conn, policy: policy_mod.Policy) -> None:
         details = json.loads(row["details_json"])
         action_type = details.get("action_type")
         action_params = details.get("action_params", {})
+        rollback_type = details.get("rollback_action_type")
+        rollback_params = details.get("rollback_action_params")
+        verify_url = details.get("verify_url")
 
         if not action_type:
             suggestion = details.get("suggestion")
@@ -602,6 +607,10 @@ def _execute_approved(conn, policy: policy_mod.Policy) -> None:
                     "policy_hash": policy.policy_hash,
                 },
             )
+            if verify_url:
+                verify = act.verify_health(str(verify_url))
+                if not verify.get("ok"):
+                    raise RuntimeError(f"verification_failed: {verify}")
             _append_recent_memory(
                 conn,
                 "actions.recent",
@@ -613,6 +622,7 @@ def _execute_approved(conn, policy: policy_mod.Policy) -> None:
                     "status": "succeeded",
                 },
             )
+            executed_count += 1
         except Exception as exc:
             store.finish_action(conn, action_id, "failed", result={"error": str(exc)})
             store.update_proposal_status(conn, proposal_id, "failed")
@@ -627,6 +637,77 @@ def _execute_approved(conn, policy: policy_mod.Policy) -> None:
                     "policy_hash": policy.policy_hash,
                 },
             )
+            if rollback_type and isinstance(rollback_type, str) and isinstance(rollback_params, dict):
+                try:
+                    decision = policy_mod.evaluate_action(
+                        policy, rollback_type, rollback_params, risk=0.1
+                    )
+                except Exception as rollback_exc:
+                    audit.append_jsonl(
+                        str(settings.audit_path()),
+                        {
+                            "kind": "action.rollback_failed",
+                            "proposal_id": proposal_id,
+                            "action_type": rollback_type,
+                            "error": f"policy_validation_failed: {rollback_exc}",
+                            "policy_hash": policy.policy_hash,
+                        },
+                    )
+                    continue
+                if decision == "forbid":
+                    audit.append_jsonl(
+                        str(settings.audit_path()),
+                        {
+                            "kind": "action.rollback_blocked",
+                            "proposal_id": proposal_id,
+                            "action_type": rollback_type,
+                            "policy_hash": policy.policy_hash,
+                        },
+                    )
+                else:
+                    rollback_action_id = store.insert_action(
+                        conn,
+                        proposal_id=proposal_id,
+                        action_type=rollback_type,
+                        params=rollback_params,
+                        status="started",
+                        policy_hash=policy.policy_hash,
+                    )
+                    try:
+                        rollback_result = execute_action(
+                            rollback_type, rollback_params, str(settings.audit_path())
+                        )
+                        store.finish_action(
+                            conn, rollback_action_id, "succeeded", result=rollback_result
+                        )
+                        audit.append_jsonl(
+                            str(settings.audit_path()),
+                            {
+                                "kind": "action.rollback_succeeded",
+                                "proposal_id": proposal_id,
+                                "action_id": rollback_action_id,
+                                "action_type": rollback_type,
+                                "policy_hash": policy.policy_hash,
+                            },
+                        )
+                    except Exception as rollback_exc:
+                        store.finish_action(
+                            conn,
+                            rollback_action_id,
+                            "failed",
+                            result={"error": str(rollback_exc)},
+                        )
+                        audit.append_jsonl(
+                            str(settings.audit_path()),
+                            {
+                                "kind": "action.rollback_failed",
+                                "proposal_id": proposal_id,
+                                "action_id": rollback_action_id,
+                                "action_type": rollback_type,
+                                "error": str(rollback_exc),
+                                "policy_hash": policy.policy_hash,
+                            },
+                        )
             _append_recent_memory(
                 conn,
                 "actions.recent",
@@ -639,9 +720,11 @@ def _execute_approved(conn, policy: policy_mod.Policy) -> None:
                     "error": str(exc),
                 },
             )
+            executed_count += 1
+    return executed_count
 
 
-def run_once() -> None:
+def run_once() -> Dict[str, Any]:
     conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
     policy = policy_mod.load_policy(str(settings.policy_path()))
     _record_policy_snapshot_if_changed(conn, policy)
@@ -701,10 +784,16 @@ def run_once() -> None:
         store.set_memory(conn, "selfcheck.last_ts", now)
 
     _requeue_orphaned_suggestions(conn, policy.policy_hash)
-    _execute_approved(conn, policy)
+    executed_actions = _execute_approved(conn, policy)
+    return {
+        "new_event_count": len(new_events),
+        "executed_actions": executed_actions,
+    }
 
 
 def run_forever(interval: float) -> None:
     while True:
-        run_once()
-        time.sleep(interval)
+        info = run_once()
+        new_events = info.get("new_event_count", 0) if isinstance(info, dict) else 0
+        sleep_seconds = 1.0 if new_events else interval
+        time.sleep(sleep_seconds)
