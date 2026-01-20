@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Tuple
 
-from . import settings, module_config, store, ha_client, policy as policy_mod
+from . import settings, module_config, store, ha_client, observe, policy as policy_mod
 
 
 def _http_json(url: str, method: str = "GET", payload: Dict[str, Any] | None = None, timeout: float = 5.0) -> Tuple[int, Dict[str, Any]]:
@@ -100,6 +102,30 @@ def _ha_toggle(conn) -> Dict[str, Any]:
     }
 
 
+def _network_discovery_check(conn) -> Dict[str, Any]:
+    cfg = module_config.load_config(str(settings.modules_config_path()))
+    module_cfg = cfg.get("modules", {}).get("network.discovery", {}) if isinstance(cfg, dict) else {}
+    scan_interval = int(module_cfg.get("scan_interval_seconds", settings.selfcheck_interval_seconds()))
+    rows = store.list_events(conn, limit=1, event_type="network.discovery")
+    if not rows:
+        return {"check": "network.discovery", "ok": False, "error": "no_snapshot"}
+    last_ts = rows[0]["ts"]
+    try:
+        parsed = datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
+    except Exception:
+        return {"check": "network.discovery", "ok": False, "error": "invalid_timestamp", "last_seen": last_ts}
+    age_seconds = max(0.0, (datetime.now(timezone.utc) - parsed).total_seconds())
+    threshold = max(60, scan_interval * 2)
+    ok = age_seconds <= threshold
+    return {
+        "check": "network.discovery",
+        "ok": ok,
+        "last_seen": last_ts,
+        "age_seconds": round(age_seconds, 1),
+        "threshold_seconds": threshold,
+    }
+
+
 def _clean(value):
     if isinstance(value, dict):
         return {k: _clean(v) for k, v in value.items()}
@@ -118,6 +144,7 @@ def run_self_check(conn) -> Dict[str, Any]:
     results: List[Dict[str, Any]] = []
     results.extend(_voice_checks(host, port))
     results.append(_ha_toggle(conn))
+    results.append(_network_discovery_check(conn))
     failures = [r for r in results if not r.get("ok")]
     severity = "info" if not failures else "warn"
     cleaned_results = _clean(results)
@@ -130,6 +157,7 @@ def run_self_check(conn) -> Dict[str, Any]:
     )
     if failures:
         _maybe_raise_proposal(conn, _clean(failures))
+        _self_heal(conn, failures)
     return {"results": cleaned_results, "failures": _clean(failures)}
 
 
@@ -218,3 +246,123 @@ def _build_playbook(failures: List[Dict[str, Any]]) -> List[str]:
             seen.add(step)
             unique_steps.append(step)
     return unique_steps[:8]
+
+
+def _self_heal(conn, failures: List[Dict[str, Any]]) -> None:
+    cfg = module_config.load_config(str(settings.modules_config_path()))
+    module_cfg = cfg.get("modules", {}).get("selfheal", {}) if isinstance(cfg, dict) else {}
+    if not isinstance(module_cfg, dict):
+        module_cfg = {}
+    if not module_cfg.get("enabled", True):
+        return
+    cooldown_seconds = int(module_cfg.get("cooldown_seconds", 300))
+    max_actions = int(module_cfg.get("max_actions_per_run", 1))
+    last_action_ts = store.get_memory(conn, "selfheal.last_action_ts") or 0
+    try:
+        last_action_ts = float(last_action_ts)
+    except (TypeError, ValueError):
+        last_action_ts = 0.0
+    now = time.time()
+    if now - last_action_ts < cooldown_seconds:
+        return
+
+    checks = [f.get("check", "") for f in failures if isinstance(f, dict)]
+    actions: List[Dict[str, Any]] = []
+    if any(str(check).startswith("voice.") for check in checks):
+        if module_cfg.get("restart_voice", True):
+            actions.append({"action": "restart_service", "service": "pumpkin-voice.service"})
+    if any(str(check).startswith("ha.") for check in checks):
+        if module_cfg.get("reset_ha_cooldown", True):
+            actions.append({"action": "reset_cooldown", "key": "ha.request"})
+    if any(str(check).startswith("network.discovery") for check in checks):
+        if module_cfg.get("rescan_network", True):
+            actions.append({"action": "network_discovery"})
+
+    if not actions:
+        return
+
+    performed = 0
+    for item in actions:
+        if performed >= max_actions:
+            break
+        action = item.get("action")
+        if action == "restart_service":
+            ok, detail = _restart_service(item.get("service", ""))
+        elif action == "reset_cooldown":
+            key = item.get("key", "")
+            ok = bool(key)
+            detail = f"key={key}" if key else "missing_key"
+            if ok:
+                store.set_memory(conn, key, 0)
+        elif action == "network_discovery":
+            ok, detail = _run_network_discovery(conn)
+        else:
+            continue
+        performed += 1
+        store.insert_event(
+            conn,
+            source="selfheal",
+            event_type="selfheal.action",
+            payload={"action": action, "ok": ok, "detail": detail},
+            severity="info" if ok else "warn",
+        )
+
+    if performed:
+        store.set_memory(conn, "selfheal.last_action_ts", now)
+
+
+def _restart_service(service: str) -> Tuple[bool, str]:
+    if not service:
+        return False, "missing_service"
+    cmd = ["systemctl", "restart", service]
+    try:
+        if os.geteuid() == 0:
+            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True, "systemctl"
+        try:
+            subprocess.run(["sudo", "-n", *cmd], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True, "sudo"
+        except Exception:
+            return False, "insufficient_permissions"
+    except Exception as exc:
+        return False, f"restart_failed:{type(exc).__name__}"
+
+
+def _run_network_discovery(conn) -> Tuple[bool, str]:
+    cfg = module_config.load_config(str(settings.modules_config_path()))
+    module_cfg = cfg.get("modules", {}).get("network.discovery", {}) if isinstance(cfg, dict) else {}
+    if not isinstance(module_cfg, dict):
+        return False, "missing_config"
+    subnet = module_cfg.get("subnet")
+    tcp_ports = module_cfg.get("tcp_ports", [])
+    timeout_seconds = float(module_cfg.get("timeout_seconds", 0.2))
+    max_hosts = int(module_cfg.get("max_hosts", 128))
+    max_scan_seconds = module_cfg.get("max_scan_seconds")
+    if max_scan_seconds is not None:
+        try:
+            max_scan_seconds = float(max_scan_seconds)
+        except (TypeError, ValueError):
+            max_scan_seconds = None
+    fast_ports = module_cfg.get("fast_ports", [])
+    fast_timeout_seconds = module_cfg.get("fast_timeout_seconds")
+    active = module_cfg.get("active", {})
+    snapshot = observe.network_discovery(
+        subnet=subnet,
+        tcp_ports=tcp_ports if isinstance(tcp_ports, list) else [],
+        timeout_seconds=timeout_seconds,
+        max_hosts=max_hosts,
+        max_scan_seconds=max_scan_seconds,
+        fast_ports=fast_ports if isinstance(fast_ports, list) else [],
+        fast_timeout_seconds=fast_timeout_seconds,
+        active=active if isinstance(active, dict) else {},
+    )
+    store.set_memory(conn, "network.discovery.snapshot", snapshot)
+    store.insert_event(
+        conn,
+        source="network",
+        event_type="network.discovery",
+        payload=snapshot,
+        severity="info",
+    )
+    store.set_memory(conn, "network.discovery", time.time())
+    return True, f"device_count={snapshot.get('device_count', 0)}"

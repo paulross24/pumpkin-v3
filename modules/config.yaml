@@ -110,3 +110,10 @@ modules:
           pass: "PUMPKIN_KITCHEN_CAM_PASS"
         auto_probe: true
         enabled: true
+  selfheal:
+    enabled: true
+    cooldown_seconds: 300
+    max_actions_per_run: 1
+    restart_voice: true
+    reset_ha_cooldown: true
+    rescan_network: true
