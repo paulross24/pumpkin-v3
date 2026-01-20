@@ -181,6 +181,49 @@ def _collect_module_events(conn) -> List[Dict[str, Any]]:
             store.set_memory(conn, "homeassistant.sync", sync)
         if any(ev["type"] in {"homeassistant.request_failed", "homeassistant.states_failed"} for ev in ha_events):
             _record_cooldown(conn, "ha.request")
+        ha_error_types = {
+            "homeassistant.request_failed",
+            "homeassistant.states_failed",
+            "homeassistant.areas_failed",
+            "homeassistant.entity_registry_failed",
+            "homeassistant.device_registry_failed",
+            "homeassistant.token_missing",
+            "homeassistant.misconfigured",
+        }
+        current_errors = {
+            ev.get("type")
+            for ev in events
+            if ev.get("source") == "homeassistant" and ev.get("type") in ha_error_types
+        }
+        previous_errors = store.get_memory(conn, "homeassistant.last_errors") or []
+        if not isinstance(previous_errors, list):
+            previous_errors = []
+        if not previous_errors and not current_errors:
+            row = conn.execute(
+                "SELECT type, ts FROM events WHERE source = 'homeassistant' "
+                "AND type IN ({}) ORDER BY id DESC LIMIT 1".format(
+                    ",".join("?" for _ in ha_error_types)
+                ),
+                tuple(ha_error_types),
+            ).fetchone()
+            if row:
+                ts = _parse_ts(row["ts"]) if isinstance(row, dict) else _parse_ts(row[1])
+                if ts and (datetime.now(timezone.utc) - ts).total_seconds() < 3600:
+                    previous_errors = [row["type"] if isinstance(row, dict) else row[0]]
+        if current_errors:
+            store.set_memory(conn, "homeassistant.last_errors", sorted(current_errors))
+            store.set_memory(conn, "homeassistant.last_error_ts", datetime.now().isoformat())
+        elif previous_errors:
+            events.append(
+                {
+                    "source": "homeassistant",
+                    "type": "homeassistant.recovered",
+                    "payload": {"cleared": previous_errors},
+                    "severity": "info",
+                }
+            )
+            store.set_memory(conn, "homeassistant.last_errors", [])
+            store.set_memory(conn, "homeassistant.last_recovered_ts", datetime.now().isoformat())
 
     if "network.discovery" in enabled:
         module_cfg = modules_cfg.get("network.discovery", {})
@@ -247,6 +290,16 @@ def _inventory_change_event(conn) -> Dict[str, Any] | None:
         },
         "severity": "info",
     }
+
+
+def _parse_ts(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        cleaned = value.replace("Z", "+00:00")
+        return datetime.fromisoformat(cleaned)
+    except ValueError:
+        return None
 
 
 def _load_events_since_last(conn) -> List[Any]:
