@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib import request, error
 
+from . import act
 from . import cameras as cameras_mod
 from . import settings, store
 
@@ -44,8 +45,6 @@ def _capture_rtsp(url: str, timeout_seconds: float, ffmpeg_path: str) -> Optiona
         "error",
         "-rtsp_transport",
         "tcp",
-        "-stimeout",
-        str(int(timeout_seconds * 1_000_000)),
         "-i",
         url,
         "-frames:v",
@@ -111,16 +110,21 @@ def _compreface_recognize(image_bytes: bytes, provider: Dict[str, Any]) -> Optio
     except json.JSONDecodeError:
         return None
     result = data.get("result") if isinstance(data, dict) else None
-    if not isinstance(result, list) or not result:
+    if not isinstance(result, list):
         return None
+    if not result:
+        return {"face_detected": False}
     candidate = result[0]
     subjects = candidate.get("subjects") if isinstance(candidate, dict) else None
-    if not isinstance(subjects, list) or not subjects:
+    if not isinstance(subjects, list):
         return None
+    if not subjects:
+        return {"face_detected": True, "name": None, "confidence": None}
     subject = subjects[0]
     return {
         "name": subject.get("subject"),
         "confidence": subject.get("similarity"),
+        "face_detected": True,
     }
 
 
@@ -147,6 +151,29 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
     ffmpeg_path = str(module_cfg.get("ffmpeg_path", "ffmpeg"))
     provider = module_cfg.get("provider", {})
     min_confidence = float(provider.get("min_confidence", 0.7)) if isinstance(provider, dict) else 0.7
+
+    def _emit_unknown_alert(camera_id: str, label: Optional[str], snapshot_path: Optional[Path]) -> None:
+        message = f"Unknown face detected"
+        if label:
+            message = f"Unknown face detected at {label}"
+        events.append(
+            {
+                "source": "vision",
+                "type": "face.alert",
+                "payload": {
+                    "message": message,
+                    "camera_id": camera_id,
+                    "label": label,
+                    "snapshot_path": str(snapshot_path) if snapshot_path else None,
+                    "report_url": "/ui/network",
+                },
+                "severity": "warn",
+            }
+        )
+        try:
+            act.notify_local(message, str(settings.audit_path()))
+        except Exception:
+            pass
 
     processed = 0
     for cam in cameras:
@@ -196,31 +223,39 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
                     }
                 )
             else:
+                face_detected = bool(recognition.get("face_detected")) if isinstance(recognition, dict) else False
+                if face_detected:
+                    unknown_payload = {
+                        "camera_id": camera_id,
+                        "label": cam.get("label"),
+                        "snapshot_path": str(snapshot_path) if snapshot_path else None,
+                    }
+                    events.append(
+                        {
+                            "source": "vision",
+                            "type": "face.unknown",
+                            "payload": unknown_payload,
+                            "severity": "info",
+                        }
+                    )
+                    _emit_unknown_alert(camera_id, cam.get("label"), snapshot_path)
+        else:
+            face_detected = bool(recognition.get("face_detected")) if isinstance(recognition, dict) else False
+            if face_detected:
+                unknown_payload = {
+                    "camera_id": camera_id,
+                    "label": cam.get("label"),
+                    "snapshot_path": str(snapshot_path) if snapshot_path else None,
+                }
                 events.append(
                     {
                         "source": "vision",
                         "type": "face.unknown",
-                        "payload": {
-                            "camera_id": camera_id,
-                            "label": cam.get("label"),
-                            "snapshot_path": str(snapshot_path) if snapshot_path else None,
-                        },
+                        "payload": unknown_payload,
                         "severity": "info",
                     }
                 )
-        else:
-            events.append(
-                {
-                    "source": "vision",
-                    "type": "face.unknown",
-                    "payload": {
-                        "camera_id": camera_id,
-                        "label": cam.get("label"),
-                        "snapshot_path": str(snapshot_path) if snapshot_path else None,
-                    },
-                    "severity": "info",
-                }
-            )
+                _emit_unknown_alert(camera_id, cam.get("label"), snapshot_path)
         processed += 1
 
     if events:

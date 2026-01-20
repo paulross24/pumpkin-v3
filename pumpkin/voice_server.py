@@ -3490,8 +3490,8 @@ def _maybe_emit_car_alert(conn) -> None:
 
 def _list_alerts(conn, limit: int = 50) -> list[Dict[str, Any]]:
     rows = conn.execute(
-        "SELECT * FROM events WHERE type = ? ORDER BY id DESC LIMIT ?",
-        ("car.alert", int(limit)),
+        "SELECT * FROM events WHERE type IN (?, ?) ORDER BY id DESC LIMIT ?",
+        ("car.alert", "face.alert", int(limit)),
     ).fetchall()
     alerts: list[Dict[str, Any]] = []
     for row in rows:
