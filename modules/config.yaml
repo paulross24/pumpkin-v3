@@ -76,7 +76,7 @@ modules:
     ffmpeg_path: "ffmpeg"
     provider:
       type: "compreface"
-      endpoint: ""
+      endpoint: "http://127.0.0.1:8000/api/v1/recognition/recognize"
       api_key_env: "PUMPKIN_FACE_API_KEY"
       min_confidence: 0.7
       timeout_seconds: 6
