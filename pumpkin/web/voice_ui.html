@@ -163,7 +163,7 @@
       }
       .pulse-card {
         display: grid;
-        grid-template-columns: 160px 1fr;
+        grid-template-columns: 180px 1fr;
         align-items: center;
         gap: 16px;
       }
@@ -174,69 +174,53 @@
         }
       }
       .pulse-shell {
-        width: 140px;
-        height: 140px;
-        position: relative;
+        width: 170px;
+        height: 170px;
         margin: 0 auto;
+        position: relative;
       }
-      .pulse-core,
-      .pulse-ring,
-      .pulse-ring.ring-2 {
-        position: absolute;
-        inset: 0;
-        border-radius: 50%;
+      .pumpkin-svg {
+        width: 170px;
+        height: 170px;
       }
-      .pulse-core {
-        background: radial-gradient(circle at 35% 35%, #ffb36b, var(--pumpkin));
-        box-shadow: 0 0 30px rgba(230, 124, 46, 0.5);
-        animation: pulseSlow 4.5s ease-in-out infinite;
+      .brain {
+        transform-origin: 50% 50%;
+        animation: brainPulse 4.5s ease-in-out infinite;
+        filter: drop-shadow(0 0 10px rgba(230, 124, 46, 0.45));
       }
-      .pulse-ring {
-        border: 1px solid rgba(230, 124, 46, 0.35);
-        animation: ringSlow 6s linear infinite;
+      .lid {
+        transform-origin: 50% 60%;
+        animation: lidHover 5s ease-in-out infinite;
       }
-      .pulse-ring.ring-2 {
-        border: 1px dashed rgba(178, 85, 25, 0.4);
-        animation: ringSlow 8s linear infinite reverse;
-        transform: scale(0.86);
-      }
-      .pulse-shell[data-level="1"] .pulse-core {
+      .pulse-shell[data-level="1"] .brain {
         animation-duration: 3.2s;
       }
-      .pulse-shell[data-level="2"] .pulse-core {
+      .pulse-shell[data-level="2"] .brain {
         animation-duration: 2.2s;
       }
-      .pulse-shell[data-level="3"] .pulse-core {
+      .pulse-shell[data-level="3"] .brain {
         animation-duration: 1.4s;
+        filter: drop-shadow(0 0 12px rgba(196, 59, 43, 0.6));
       }
-      .pulse-shell[data-level="3"] .pulse-ring {
-        border-color: rgba(196, 59, 43, 0.5);
+      .pulse-shell[data-level="3"] .lid {
+        animation-duration: 2.4s;
       }
-      .pulse-shell[data-level="3"] .pulse-ring.ring-2 {
-        border-color: rgba(196, 59, 43, 0.35);
-      }
-      @keyframes pulseSlow {
+      @keyframes brainPulse {
         0%, 100% {
-          transform: scale(0.95);
+          transform: scale(0.96);
           opacity: 0.85;
         }
         50% {
-          transform: scale(1.05);
+          transform: scale(1.06);
           opacity: 1;
         }
       }
-      @keyframes ringSlow {
-        0% {
-          transform: scale(1);
-          opacity: 0.7;
+      @keyframes lidHover {
+        0%, 100% {
+          transform: translateY(0px) rotate(-1deg);
         }
         50% {
-          transform: scale(1.1);
-          opacity: 0.45;
-        }
-        100% {
-          transform: scale(1);
-          opacity: 0.7;
+          transform: translateY(-4px) rotate(2deg);
         }
       }
       @keyframes fadeUp {
@@ -282,9 +266,24 @@
     <main>
       <section class="card grid-span pulse-card">
         <div class="pulse-shell" id="thought-pulse" data-level="0">
-          <div class="pulse-core"></div>
-          <div class="pulse-ring"></div>
-          <div class="pulse-ring ring-2"></div>
+          <svg class="pumpkin-svg" viewBox="0 0 200 200" aria-hidden="true">
+            <g class="lid">
+              <ellipse cx="100" cy="52" rx="52" ry="16" fill="#c56a2b" opacity="0.9" />
+              <rect x="92" y="20" width="16" height="30" fill="#5b4b41" />
+              <path d="M60 52 Q100 20 140 52" fill="#d17833" />
+            </g>
+            <g class="brain">
+              <path d="M70 78 C60 62 82 50 96 62 C98 48 120 46 126 62 C144 58 152 78 138 88 C150 98 142 118 126 114 C120 130 96 130 92 114 C76 122 60 104 70 92 C56 90 58 70 70 78 Z" fill="#ff9e6a" />
+              <path d="M78 86 C88 80 104 82 114 92" stroke="#d86a34" stroke-width="3" fill="none" />
+              <path d="M88 104 C100 100 114 104 122 112" stroke="#d86a34" stroke-width="3" fill="none" />
+            </g>
+            <g>
+              <ellipse cx="100" cy="118" rx="68" ry="50" fill="var(--pumpkin)" />
+              <ellipse cx="70" cy="118" rx="34" ry="46" fill="#f08a3a" opacity="0.9" />
+              <ellipse cx="130" cy="118" rx="34" ry="46" fill="#f08a3a" opacity="0.9" />
+              <path d="M40 118 Q100 150 160 118" fill="none" stroke="#c4652f" stroke-width="3" />
+            </g>
+          </svg>
         </div>
         <div>
           <h3>Thought Pulse</h3>
