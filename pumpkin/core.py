@@ -857,6 +857,15 @@ def run_once() -> Dict[str, Any]:
 
     _requeue_orphaned_suggestions(conn, policy.policy_hash)
     executed_actions = _execute_approved(conn, policy)
+    total_executed = store.get_memory(conn, "actions.total_executed") or 0
+    try:
+        total_executed = int(total_executed)
+    except (TypeError, ValueError):
+        total_executed = 0
+    if executed_actions:
+        store.set_memory(conn, "actions.last_executed_ts", datetime.now().isoformat())
+    store.set_memory(conn, "actions.last_executed_count", executed_actions)
+    store.set_memory(conn, "actions.total_executed", total_executed + executed_actions)
     return {
         "new_event_count": len(new_events),
         "executed_actions": executed_actions,

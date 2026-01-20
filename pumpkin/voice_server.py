@@ -3976,6 +3976,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "GET /health",
                             "GET /ha/callback",
                             "GET /ui",
+                            "GET /ui/autonomy",
                             "GET /ui/homeassistant",
                             "GET /ui/proposals",
                             "GET /ui/network",
@@ -4040,6 +4041,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 return
             if path in {"/ui", "/ui/"}:
                 _send_html(self, 200, _load_voice_ui_asset("voice_ui.html"))
+                return
+            if path == "/ui/autonomy":
+                _send_html(self, 200, _load_voice_ui_asset("voice_ui_autonomy.html"))
                 return
             if path == "/ui/homeassistant":
                 _send_html(self, 200, _load_voice_ui_asset("voice_ui_homeassistant.html"))
@@ -4347,6 +4351,15 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 insights_latest = store.get_memory(conn, "insights.latest")
                 if not isinstance(insights_latest, list):
                     insights_latest = []
+                actions_recent = store.get_memory(conn, "actions.recent") or []
+                if not isinstance(actions_recent, list):
+                    actions_recent = []
+                autonomy = {
+                    "total_executed": store.get_memory(conn, "actions.total_executed") or 0,
+                    "last_executed_count": store.get_memory(conn, "actions.last_executed_count") or 0,
+                    "last_executed_ts": store.get_memory(conn, "actions.last_executed_ts"),
+                    "recent_actions": actions_recent[-5:],
+                }
                 briefing = store.get_memory(conn, "insights.last_briefing")
                 if not isinstance(briefing, dict):
                     briefing = None
@@ -4388,6 +4401,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "inventory": inventory_mod.summary(inventory),
                         "opportunities": opportunities[:5],
                         "issues": issues,
+                        "autonomy": autonomy,
                         "insights": insights_latest[-5:],
                         "briefing": briefing,
                         "router_events": router_events,
@@ -4604,6 +4618,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                                 }
                             },
                             "/inventory": {"get": {"summary": "Inventory snapshot and opportunities"}},
+                            "/ui/autonomy": {"get": {"summary": "Autonomy dashboard"}},
                             "/ui/homeassistant": {"get": {"summary": "Home Assistant dashboard"}},
                             "/ui/inventory": {"get": {"summary": "Inventory dashboard"}},
                             "/summary": {

@@ -289,6 +289,7 @@
       <nav class="menu">
         <a href="/ui">Overview</a>
         <a href="/ui/homeassistant">Home Assistant</a>
+        <a href="/ui/autonomy">Autonomy</a>
         <a href="/ui/proposals">Proposals</a>
         <a href="/ui/network">Network</a>
         <a href="/ui/vision">Vision</a>
@@ -341,6 +342,14 @@
           <a class="link" href="/ui/proposals">Open proposal desk →</a>
         </div>
         <ul class="list" id="proposal-list"></ul>
+      </section>
+      <section class="card">
+        <h3>Autonomy</h3>
+        <div class="stat" id="autonomy-total">0</div>
+        <div class="sub">
+          <a class="link" href="/ui/autonomy">Open autonomy desk →</a>
+        </div>
+        <ul class="list" id="autonomy-list"></ul>
       </section>
       <section class="card">
         <h3>Alerts</h3>
@@ -400,6 +409,8 @@
       const healthDetails = byId("health-details");
       const proposalCount = byId("proposal-count");
       const proposalList = byId("proposal-list");
+      const autonomyTotal = byId("autonomy-total");
+      const autonomyList = byId("autonomy-list");
       const alertsCount = byId("alerts-count");
       const alertsList = byId("alerts-list");
       const networkCount = byId("network-count");
@@ -546,6 +557,18 @@
           setText(proposalCount, summary.proposal_count || 0);
           const proposals = (summary.proposals || []).slice(0, 3).map(formatProposal);
           setList(proposalList, proposals);
+
+          const autonomy = summary.autonomy || {};
+          setText(autonomyTotal, autonomy.total_executed ?? 0);
+          const autonomyItems = [
+            `last run: ${autonomy.last_executed_ts || "n/a"}`,
+            `last executed: ${autonomy.last_executed_count ?? 0}`,
+          ];
+          const recentActions = autonomy.recent_actions || [];
+          if (recentActions.length) {
+            autonomyItems.push(`recent: ${recentActions.length}`);
+          }
+          setList(autonomyList, autonomyItems);
 
           const discovery = summary.network_discovery || {};
           setText(networkCount, `${discovery.device_count || 0} devices`);
