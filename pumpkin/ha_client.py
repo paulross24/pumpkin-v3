@@ -177,14 +177,13 @@ def fetch_areas(base_url: str, token: str, timeout: float) -> Dict[str, Any]:
 def fetch_areas_ws(base_url: str, token: str, timeout: float, fallback_reason: str) -> Dict[str, Any]:
     try:
         sock = _ws_connect(base_url, timeout)
-    except Exception as exc:
-        return {"ok": False, "error": f"{fallback_reason}:ws_connect_failed"}
-    try:
         auth_msg = _ws_read_json(sock, timeout)
         for _ in range(3):
             if isinstance(auth_msg, dict) and auth_msg.get("type") == "auth_required":
                 break
             auth_msg = _ws_read_json(sock, timeout)
+        if not isinstance(auth_msg, dict) or auth_msg.get("type") != "auth_required":
+            return {"ok": False, "error": f"{fallback_reason}:ws_auth_required_missing"}
         _ws_send_json(sock, {"type": "auth", "access_token": token})
         auth_reply = _ws_read_json(sock, timeout)
         if not isinstance(auth_reply, dict) or auth_reply.get("type") != "auth_ok":
@@ -198,6 +197,8 @@ def fetch_areas_ws(base_url: str, token: str, timeout: float, fallback_reason: s
                     return {"ok": True, "areas": reply["result"]}
                 return {"ok": False, "error": f"{fallback_reason}:ws_result_failed"}
         return {"ok": False, "error": f"{fallback_reason}:ws_no_result"}
+    except Exception as exc:
+        return {"ok": False, "error": f"{fallback_reason}:ws_error:{type(exc).__name__}"}
     finally:
         try:
             sock.close()
