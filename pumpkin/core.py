@@ -12,6 +12,7 @@ from . import audit
 from . import policy as policy_mod
 from . import settings
 from . import observe
+from . import vision
 from . import propose
 from . import store
 from . import insights
@@ -194,6 +195,13 @@ def _collect_module_events(conn) -> List[Dict[str, Any]]:
             )
             store.set_memory(conn, "network.discovery.snapshot", snapshot)
             _record_cooldown(conn, "network.discovery")
+
+    if "face.recognition" in enabled:
+        module_cfg = modules_cfg.get("face.recognition", {})
+        scan_interval = int(module_cfg.get("scan_interval_seconds", 300))
+        if _cooldown_elapsed(conn, "face.recognition", scan_interval):
+            events.extend(vision.run_face_recognition(conn, module_cfg))
+            _record_cooldown(conn, "face.recognition")
 
     return events
 

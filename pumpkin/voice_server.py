@@ -4038,6 +4038,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 network_discovery = store.get_memory(conn, "network.discovery.snapshot")
                 deep_scan_state = store.get_memory(conn, "network.discovery.deep_scan")
                 network_discovery = _merge_deep_scan_devices(network_discovery, deep_scan_state)
+                camera_registry = store.get_memory(conn, "camera.registry")
+                if not isinstance(camera_registry, list):
+                    camera_registry = []
                 car_telemetry = _car_telemetry_summary(conn)
                 inventory = inventory_mod.snapshot(conn)
                 opportunities = inventory_mod.opportunities(inventory)
@@ -4079,6 +4082,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "home_state": home_state,
                         "network_discovery": network_discovery,
                         "network_deep_scan": deep_scan_state,
+                        "camera_registry": camera_registry,
                         "car_telemetry": car_telemetry,
                         "inventory": inventory_mod.summary(inventory),
                         "opportunities": opportunities[:5],

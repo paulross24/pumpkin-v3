@@ -36,11 +36,11 @@ modules:
   - name: face.recognition
     type: capability
     description: Recognize people from camera feeds or snapshots.
-    status: planned
+    status: available
     safety_level: high
     prerequisites:
       packages:
-        - opencv
+        - ffmpeg
       services:
         - camera
       network_access: []

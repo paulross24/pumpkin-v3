@@ -3,6 +3,7 @@ enabled:
   - homeassistant.observer
   - code.assistant
   - network.discovery
+  - face.recognition
 modules:
   homeassistant.observer:
     base_url: "http://192.168.1.140:8123"
@@ -67,3 +68,35 @@ modules:
       max_banner_bytes: 256
       max_http_bytes: 2048
       max_ssdp_responses: 32
+  face.recognition:
+    enabled: true
+    scan_interval_seconds: 300
+    max_cameras_per_run: 1
+    timeout_seconds: 10
+    ffmpeg_path: "ffmpeg"
+    provider:
+      type: "compreface"
+      endpoint: ""
+      api_key_env: "PUMPKIN_FACE_API_KEY"
+      min_confidence: 0.7
+      timeout_seconds: 6
+    cameras:
+      - id: ring-doorbell
+        label: "front door"
+        source: "rtsp"
+        rtsp_url: "rtsp://192.168.1.157:37153/573b5ae1a0487989"
+        enabled: true
+      - id: kitchen-cam
+        label: "kitchen"
+        source: "onvif"
+        ip: "192.168.1.127"
+        rtsp_port: 8554
+        rtsp_paths:
+          - /Streaming/Channels/101
+          - /live
+          - /h264
+        auth_env:
+          user: "PUMPKIN_KITCHEN_CAM_USER"
+          pass: "PUMPKIN_KITCHEN_CAM_PASS"
+        auto_probe: true
+        enabled: true

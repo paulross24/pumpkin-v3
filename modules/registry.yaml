@@ -75,3 +75,36 @@ modules:
       - source: network
         signals:
           - device.discovered
+
+  - name: face.recognition
+    type: capability
+    description: Run face recognition on camera feeds and emit recognition events.
+    config_schema:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        scan_interval_seconds:
+          type: integer
+        max_cameras_per_run:
+          type: integer
+        timeout_seconds:
+          type: number
+        ffmpeg_path:
+          type: string
+        provider:
+          type: object
+        cameras:
+          type: array
+      required: []
+    safety_level: high
+    prerequisites:
+      packages: []
+      services:
+        - camera
+      network_access: []
+    provides:
+      - source: vision
+        signals:
+          - person.recognized
+          - face.unknown

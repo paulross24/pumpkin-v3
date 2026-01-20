@@ -154,6 +154,12 @@
       </section>
       <section class="card">
         <div class="row" style="margin-bottom: 8px;">
+          <span class="pill" id="camera-count">0 cameras</span>
+        </div>
+        <div id="camera-list" class="meta">No camera registry yet.</div>
+      </section>
+      <section class="card">
+        <div class="row" style="margin-bottom: 8px;">
           <span class="pill" id="count">0 devices</span>
           <button id="refresh">Refresh</button>
         </div>
@@ -163,6 +169,8 @@
     <script>
       const listNode = document.getElementById("list");
       const countNode = document.getElementById("count");
+      const cameraCountNode = document.getElementById("camera-count");
+      const cameraListNode = document.getElementById("camera-list");
       const deepStatusNode = document.getElementById("deep-status");
       const rtspStatusNode = document.getElementById("rtsp-status");
 
@@ -172,15 +180,33 @@
           const data = await res.json();
           const discovery = data.network_discovery || {};
           const deepScan = data.network_deep_scan || {};
+          const cameras = Array.isArray(data.camera_registry) ? data.camera_registry : [];
           const devices = Array.isArray(discovery.devices) ? discovery.devices : [];
           const merged = mergeDeepScan(devices, deepScan.jobs || {});
           countNode.textContent = `${merged.length} devices`;
+          cameraCountNode.textContent = `${cameras.length} cameras`;
           render(merged);
+          renderCameras(cameras);
           renderDeepScan(deepScan.jobs || {});
         } catch (err) {
           listNode.innerHTML = "Failed to load network discovery.";
+          cameraListNode.textContent = "Failed to load camera registry.";
           deepStatusNode.textContent = "Failed to load deep scan status.";
         }
+      };
+
+      const renderCameras = (cameras) => {
+        if (!cameras.length) {
+          cameraListNode.textContent = "No camera registry yet.";
+          return;
+        }
+        cameraListNode.innerHTML = cameras.map((camera) => {
+          const label = camera.label || camera.id || camera.ip || "camera";
+          const source = camera.source || "unknown";
+          const enabled = camera.enabled ? "enabled" : "disabled";
+          const stream = camera.rtsp_url ? "rtsp stream set" : "rtsp missing";
+          return `<div>${label} • ${source} • ${enabled} • ${stream}</div>`;
+        }).join("");
       };
 
       const render = (devices) => {

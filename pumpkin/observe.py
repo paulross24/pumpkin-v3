@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import os
 import shutil
 import socket
@@ -124,6 +125,30 @@ def _probe_ssh(ip: str, port: int, timeout: float, max_bytes: int) -> Optional[D
     return {"type": "ssh", "port": port, "banner": banner}
 
 
+DEFAULT_RTSP_PATHS = [
+    "/",
+    "/stream1",
+    "/stream2",
+    "/live",
+    "/live/ch0",
+    "/h264",
+    "/h264/ch1/main/av_stream",
+    "/Streaming/Channels/101",
+    "/Streaming/Channels/102",
+    "/cam/realmonitor?channel=1&subtype=0",
+    "/cam/realmonitor?channel=1&subtype=1",
+    "/onvif1",
+    "/onvif2",
+    "/profile1",
+    "/profile2",
+]
+
+
+def basic_auth_header(user: str, password: str) -> str:
+    token = base64.b64encode(f"{user}:{password}".encode("utf-8")).decode("ascii")
+    return f"Basic {token}"
+
+
 def _probe_rtsp(ip: str, port: int, timeout: float, max_bytes: int) -> Optional[Dict[str, Any]]:
     payload = b"OPTIONS * RTSP/1.0\r\nCSeq: 1\r\nUser-Agent: Pumpkin\r\n\r\n"
     try:
@@ -140,14 +165,24 @@ def _probe_rtsp(ip: str, port: int, timeout: float, max_bytes: int) -> Optional[
         return None
 
 
-def _rtsp_describe(ip: str, port: int, path: str, timeout: float, max_bytes: int) -> Optional[str]:
+def _rtsp_describe(
+    ip: str,
+    port: int,
+    path: str,
+    timeout: float,
+    max_bytes: int,
+    auth_header: Optional[str] = None,
+) -> Optional[str]:
     url = f"rtsp://{ip}:{port}{path}"
-    payload = (
+    headers = (
         f"DESCRIBE {url} RTSP/1.0\r\n"
         "CSeq: 2\r\n"
         "User-Agent: Pumpkin\r\n"
-        "Accept: application/sdp\r\n\r\n"
-    ).encode("ascii")
+        "Accept: application/sdp\r\n"
+    )
+    if auth_header:
+        headers += f"Authorization: {auth_header}\r\n"
+    payload = (headers + "\r\n").encode("ascii")
     try:
         with socket.create_connection((ip, port), timeout=timeout) as sock:
             sock.settimeout(timeout)
@@ -167,26 +202,10 @@ def _rtsp_probe_paths(
     port: int,
     timeout: float,
     max_bytes: int,
+    auth_header: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    common_paths = [
-        "/",
-        "/stream1",
-        "/stream2",
-        "/live",
-        "/live/ch0",
-        "/h264",
-        "/h264/ch1/main/av_stream",
-        "/Streaming/Channels/101",
-        "/Streaming/Channels/102",
-        "/cam/realmonitor?channel=1&subtype=0",
-        "/cam/realmonitor?channel=1&subtype=1",
-        "/onvif1",
-        "/onvif2",
-        "/profile1",
-        "/profile2",
-    ]
-    for path in common_paths:
-        status = _rtsp_describe(ip, port, path, timeout, max_bytes)
+    for path in DEFAULT_RTSP_PATHS:
+        status = _rtsp_describe(ip, port, path, timeout, max_bytes, auth_header=auth_header)
         if not status:
             continue
         status_lower = status.lower()
@@ -207,6 +226,7 @@ def rtsp_probe_paths(
     paths: Iterable[str],
     timeout: float,
     max_bytes: int,
+    auth_header: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     results: List[Dict[str, Any]] = []
     for raw in paths:
@@ -215,7 +235,7 @@ def rtsp_probe_paths(
             continue
         if not path.startswith("/"):
             path = f"/{path}"
-        status = _rtsp_describe(ip, port, path, timeout, max_bytes)
+        status = _rtsp_describe(ip, port, path, timeout, max_bytes, auth_header=auth_header)
         if not status:
             results.append({"path": path, "status": "no response"})
             continue
