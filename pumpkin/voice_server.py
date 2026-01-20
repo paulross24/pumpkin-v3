@@ -15,6 +15,7 @@ from ipaddress import ip_address
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import difflib
+from pathlib import Path
 from typing import Any, Dict, Iterable, List
 from urllib.parse import parse_qs, quote, urlparse
 
@@ -40,6 +41,7 @@ from .db import init_db, utc_now_iso
 MAX_TEXT_LEN = 500
 INGEST_LOG_TEXT_LIMIT = 160
 OPENAI_TIMEOUT_SECONDS = 15
+_ENV_PATH = Path("/etc/pumpkin/pumpkin.env")
 
 _DEEP_SCAN_LOCK = threading.Lock()
 _DEEP_SCAN_RUNNING: set[str] = set()
@@ -79,6 +81,45 @@ def _send_html(handler: BaseHTTPRequestHandler, status: int, body: str) -> None:
     handler.send_header("Content-Length", str(len(data)))
     handler.end_headers()
     handler.wfile.write(data)
+
+
+def _update_env_file(updates: Dict[str, str]) -> bool:
+    if not updates:
+        return True
+    try:
+        _ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    lines: List[str] = []
+    try:
+        if _ENV_PATH.exists():
+            lines = _ENV_PATH.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        lines = []
+    existing: set[str] = set()
+    new_lines: List[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in line:
+            new_lines.append(line)
+            continue
+        key_part = stripped
+        if key_part.startswith("export "):
+            key_part = key_part[len("export ") :].lstrip()
+        key_name = key_part.split("=", 1)[0].strip()
+        if key_name in updates:
+            new_lines.append(f"{key_name}={updates[key_name]}")
+            existing.add(key_name)
+        else:
+            new_lines.append(line)
+    for key, value in updates.items():
+        if key not in existing:
+            new_lines.append(f"{key}={value}")
+    try:
+        _ENV_PATH.write_text("\n".join(new_lines).rstrip("\n") + "\n", encoding="utf-8")
+        return True
+    except Exception:
+        return False
 
 
 def _send_redirect(handler: BaseHTTPRequestHandler, location: str) -> None:
@@ -5010,12 +5051,30 @@ class VoiceHandler(BaseHTTPRequestHandler):
             _bad_request(self, "base_url must be a string")
             return
         conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+        env_updates: Dict[str, str] = {}
         if api_key is not None:
-            store.set_memory(conn, "llm.openai_api_key", api_key.strip())
+            cleaned = api_key.strip()
+            store.set_memory(conn, "llm.openai_api_key", cleaned)
+            os.environ["PUMPKIN_OPENAI_API_KEY"] = cleaned
+            env_updates["PUMPKIN_OPENAI_API_KEY"] = cleaned
         if model is not None:
-            store.set_memory(conn, "llm.openai_model", model.strip())
+            cleaned = model.strip()
+            store.set_memory(conn, "llm.openai_model", cleaned)
+            os.environ["PUMPKIN_OPENAI_MODEL"] = cleaned
+            env_updates["PUMPKIN_OPENAI_MODEL"] = cleaned
         if base_url is not None:
-            store.set_memory(conn, "llm.openai_base_url", base_url.strip())
+            cleaned = base_url.strip()
+            store.set_memory(conn, "llm.openai_base_url", cleaned)
+            os.environ["PUMPKIN_OPENAI_BASE_URL"] = cleaned
+            env_updates["PUMPKIN_OPENAI_BASE_URL"] = cleaned
+        if env_updates and not _update_env_file(env_updates):
+            append_jsonl(
+                str(settings.audit_path()),
+                {
+                    "kind": "llm.env_write_failed",
+                    "reason": "unable to write /etc/pumpkin/pumpkin.env",
+                },
+            )
         llm_config = _load_llm_config(conn)
         _send_json(
             self,
