@@ -422,6 +422,8 @@ def network_discovery(
     timeout_seconds: float,
     max_hosts: int,
     max_scan_seconds: Optional[float] = None,
+    fast_ports: Optional[Iterable[int]] = None,
+    fast_timeout_seconds: Optional[float] = None,
     active: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     start_time = time.monotonic()
@@ -438,6 +440,13 @@ def network_discovery(
     arp_entries = _read_arp_table()
     devices: List[Dict[str, Any]] = []
     ports = [int(p) for p in tcp_ports if isinstance(p, int) or str(p).isdigit()]
+    fast_ports_list = [int(p) for p in (fast_ports or []) if isinstance(p, int) or str(p).isdigit()]
+    fast_timeout = None
+    if fast_timeout_seconds is not None:
+        try:
+            fast_timeout = float(fast_timeout_seconds)
+        except (TypeError, ValueError):
+            fast_timeout = None
     active_cfg = active if isinstance(active, dict) else {}
     active_enabled = bool(active_cfg.get("enabled", False))
     scan_subnet = bool(active_cfg.get("scan_subnet", False))
@@ -484,10 +493,16 @@ def network_discovery(
         if max_scan_seconds is not None and (time.monotonic() - start_time) >= max_scan_seconds:
             break
         open_ports: List[int] = []
-        for port in ports:
+        port_list = ports
+        port_timeout = timeout_seconds
+        if entry is None and fast_ports_list:
+            port_list = fast_ports_list
+        if entry is None and fast_timeout is not None:
+            port_timeout = fast_timeout
+        for port in port_list:
             if max_scan_seconds is not None and (time.monotonic() - start_time) >= max_scan_seconds:
                 break
-            if _probe_port(ip, port, timeout_seconds):
+            if _probe_port(ip, port, port_timeout):
                 open_ports.append(port)
 
         if entry is None and not open_ports:

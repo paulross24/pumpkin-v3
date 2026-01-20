@@ -41,6 +41,7 @@ modules:
       - 81
       - 443
       - 554
+      - 8000
       - 8008
       - 8009
       - 8080
@@ -55,8 +56,17 @@ modules:
       - 37777
       - 62078
     timeout_seconds: 1.0
+    fast_ports:
+      - 22
+      - 80
+      - 443
+      - 554
+      - 8000
+      - 8554
+      - 8123
+    fast_timeout_seconds: 0.2
     max_hosts: 254
-    max_scan_seconds: 20
+    max_scan_seconds: 60
     scan_interval_seconds: 300
     active:
       enabled: true

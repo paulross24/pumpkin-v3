@@ -167,6 +167,8 @@ def _collect_module_events(conn) -> List[Dict[str, Any]]:
         subnet = module_cfg.get("subnet")
         tcp_ports = module_cfg.get("tcp_ports", [])
         timeout_seconds = float(module_cfg.get("timeout_seconds", 0.2))
+        fast_ports = module_cfg.get("fast_ports", [])
+        fast_timeout_seconds = module_cfg.get("fast_timeout_seconds")
         max_hosts = int(module_cfg.get("max_hosts", 128))
         max_scan_seconds = module_cfg.get("max_scan_seconds")
         if max_scan_seconds is not None:
@@ -183,6 +185,8 @@ def _collect_module_events(conn) -> List[Dict[str, Any]]:
                 timeout_seconds=timeout_seconds,
                 max_hosts=max_hosts,
                 max_scan_seconds=max_scan_seconds,
+                fast_ports=fast_ports if isinstance(fast_ports, list) else [],
+                fast_timeout_seconds=fast_timeout_seconds,
                 active=active if isinstance(active, dict) else {},
             )
             events.append(
