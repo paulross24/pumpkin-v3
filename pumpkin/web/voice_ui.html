@@ -183,29 +183,77 @@
         width: 170px;
         height: 170px;
       }
-      .brain {
-        transform-origin: 50% 50%;
-        animation: brainPulse 4.5s ease-in-out infinite;
-        filter: drop-shadow(0 0 10px rgba(230, 124, 46, 0.45));
+      .thought-bobble {
+        position: absolute;
+        top: -14px;
+        right: -6px;
+        width: 170px;
+        height: 92px;
+        background: rgba(255, 250, 244, 0.96);
+        border: 2px solid var(--line);
+        border-radius: 28px;
+        box-shadow: 0 12px 24px rgba(50, 33, 22, 0.15);
+        display: flex;
+        align-items: center;
+        padding: 10px 12px;
       }
-      .pulse-shell[data-level="1"] .brain {
-        animation-duration: 3.2s;
+      .thought-bobble::before {
+        content: "";
+        position: absolute;
+        bottom: -12px;
+        left: 26px;
+        width: 18px;
+        height: 18px;
+        background: rgba(255, 250, 244, 0.96);
+        border: 2px solid var(--line);
+        border-radius: 999px;
       }
-      .pulse-shell[data-level="2"] .brain {
-        animation-duration: 2.2s;
+      .thought-bobble::after {
+        content: "";
+        position: absolute;
+        bottom: -24px;
+        left: 14px;
+        width: 10px;
+        height: 10px;
+        background: rgba(255, 250, 244, 0.96);
+        border: 2px solid var(--line);
+        border-radius: 999px;
       }
-      .pulse-shell[data-level="3"] .brain {
-        animation-duration: 1.4s;
-        filter: drop-shadow(0 0 12px rgba(196, 59, 43, 0.6));
+      .reel {
+        overflow: hidden;
+        width: 100%;
+        height: 100%;
+        font-size: 11px;
+        color: var(--muted);
+        display: flex;
+        align-items: center;
       }
-      @keyframes brainPulse {
-        0%, 100% {
-          transform: scale(0.96);
-          opacity: 0.85;
+      .reel-track {
+        display: flex;
+        gap: 20px;
+        white-space: nowrap;
+        animation: reelScroll 18s linear infinite;
+      }
+      .reel-track span {
+        display: inline-block;
+        padding-right: 20px;
+      }
+      .pulse-shell[data-level="1"] .reel-track {
+        animation-duration: 14s;
+      }
+      .pulse-shell[data-level="2"] .reel-track {
+        animation-duration: 10s;
+      }
+      .pulse-shell[data-level="3"] .reel-track {
+        animation-duration: 7s;
+        color: var(--bad);
+      }
+      @keyframes reelScroll {
+        0% {
+          transform: translateX(0);
         }
-        50% {
-          transform: scale(1.06);
-          opacity: 1;
+        100% {
+          transform: translateX(-50%);
         }
       }
       @keyframes fadeUp {
@@ -252,32 +300,22 @@
       <section class="card grid-span pulse-card">
         <div class="pulse-shell" id="thought-pulse" data-level="0">
           <svg class="pumpkin-svg" viewBox="0 0 200 200" aria-hidden="true">
-            <defs>
-              <clipPath id="brain-cut">
-                <polygon points="32,70 178,36 178,110 52,142" />
-              </clipPath>
-              <clipPath id="pumpkin-cut">
-                <polygon points="24,200 176,200 176,110 32,70" />
-              </clipPath>
-            </defs>
-            <g>
-              <g clip-path="url(#pumpkin-cut)">
-                <ellipse cx="100" cy="125" rx="78" ry="58" fill="var(--pumpkin)" />
-                <path d="M100 68 Q92 110 100 178" fill="none" stroke="#c4652f" stroke-width="4" opacity="0.7" />
-                <path d="M74 74 Q68 120 76 176" fill="none" stroke="#d17833" stroke-width="3" opacity="0.7" />
-                <path d="M126 74 Q132 120 124 176" fill="none" stroke="#d17833" stroke-width="3" opacity="0.7" />
-                <path d="M52 92 Q50 126 58 168" fill="none" stroke="#e08a40" stroke-width="3" opacity="0.6" />
-                <path d="M148 92 Q150 126 142 168" fill="none" stroke="#e08a40" stroke-width="3" opacity="0.6" />
-              </g>
-            </g>
-            <g class="brain" clip-path="url(#brain-cut)">
-              <path d="M58 108 C42 86 70 66 90 78 C96 54 126 54 138 76 C160 74 172 102 156 120 C174 136 160 162 136 158 C130 178 96 178 88 158 C66 170 46 146 62 128 C44 126 46 102 58 108 Z" fill="#ff8f5a" />
-              <path d="M70 112 C86 98 116 100 132 116" stroke="#c85a2b" stroke-width="3" fill="none" />
-              <path d="M78 132 C96 120 120 126 136 142" stroke="#c85a2b" stroke-width="3" fill="none" />
-              <path d="M92 90 C104 84 118 88 126 98" stroke="#d86a34" stroke-width="2" fill="none" />
-            </g>
-            <line x1="32" y1="70" x2="178" y2="36" stroke="#e6b07f" stroke-width="4" />
+            <rect x="90" y="24" width="20" height="36" rx="6" fill="#5b4b41" />
+            <ellipse cx="100" cy="120" rx="78" ry="58" fill="var(--pumpkin)" />
+            <ellipse cx="64" cy="120" rx="44" ry="54" fill="#f08a3a" opacity="0.85" />
+            <ellipse cx="136" cy="120" rx="44" ry="54" fill="#f08a3a" opacity="0.85" />
+            <path d="M100 64 Q92 110 100 176" fill="none" stroke="#c4652f" stroke-width="4" opacity="0.7" />
+            <path d="M78 68 Q70 118 78 172" fill="none" stroke="#d17833" stroke-width="3" opacity="0.7" />
+            <path d="M122 68 Q130 118 122 172" fill="none" stroke="#d17833" stroke-width="3" opacity="0.7" />
           </svg>
+          <div class="thought-bobble">
+            <div class="reel">
+              <div class="reel-track" id="thought-reel">
+                <span>Loading thought reel…</span>
+                <span>Loading thought reel…</span>
+              </div>
+            </div>
+          </div>
         </div>
         <div>
           <h3>Thought Pulse</h3>
@@ -382,6 +420,7 @@
       const thoughtPulse = byId("thought-pulse");
       const thoughtStatus = byId("thought-status");
       const thoughtMeta = byId("thought-meta");
+      const thoughtReel = byId("thought-reel");
 
       const formatProposal = (proposal) => `${proposal.summary} (${proposal.status})`;
       const formatDevice = (device) => {
@@ -435,11 +474,50 @@
             alertsList,
             items.map((alert) => `${alert.ts || "unknown"} - ${alert.message || "alert"}`)
           );
-          return data.count ?? items.length;
+          return { count: data.count ?? items.length, items };
         } catch (err) {
           setText(alertsCount, "0");
           setList(alertsList, ["Failed to load alerts"]);
-          return 0;
+          return { count: 0, items: [] };
+        }
+      };
+
+      const buildThoughtReel = (summary, alertItems) => {
+        const reelItems = [];
+        if (alertItems.length) {
+          const alert = alertItems[0];
+          reelItems.push(`alert: ${alert.message || "new alert"}`);
+        }
+        if (summary.issues && summary.issues.length) {
+          const issue = summary.issues[0];
+          reelItems.push(`issue: ${issue.summary || issue.message || "check required"}`);
+        }
+        if (summary.proposals && summary.proposals.length) {
+          reelItems.push(`proposal: ${summary.proposals[0].summary || "pending"}`);
+        }
+        if (summary.insights && summary.insights.length) {
+          reelItems.push(`insight: ${summary.insights[0].title || "new insight"}`);
+        }
+        if (summary.router_events && summary.router_events.length) {
+          const evt = summary.router_events[0];
+          reelItems.push(`network: ${evt.message || evt.event || "activity"}`);
+        }
+        if (summary.homeassistant_last_event) {
+          const last = summary.homeassistant_last_event;
+          reelItems.push(`ha: ${last.event_type || "event"}`);
+        }
+        if (!reelItems.length) {
+          reelItems.push("idle: monitoring voice, network, cameras");
+        }
+        const line = reelItems.join(" • ");
+        if (thoughtReel) {
+          thoughtReel.innerHTML = "";
+          const spanA = document.createElement("span");
+          const spanB = document.createElement("span");
+          spanA.textContent = line;
+          spanB.textContent = line;
+          thoughtReel.appendChild(spanA);
+          thoughtReel.appendChild(spanB);
         }
       };
 
@@ -518,15 +596,16 @@
             setList(haMeta, []);
           }
 
-          const alertCountValue = await loadAlerts();
-          const pulse = pulseLevel(summary, alertCountValue);
+          const alertData = await loadAlerts();
+          buildThoughtReel(summary, alertData.items);
+          const pulse = pulseLevel(summary, alertData.count);
           if (thoughtPulse) {
             thoughtPulse.dataset.level = String(pulse.level);
           }
           setText(thoughtStatus, pulse.status);
           const pulseMeta = [
             `issues: ${(summary.issues || []).length}`,
-            `alerts: ${alertCountValue}`,
+            `alerts: ${alertData.count}`,
             `proposals: ${summary.proposal_count || 0}`,
             `insights: ${insights.length}`,
           ];
