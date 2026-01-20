@@ -79,6 +79,25 @@
         display: grid;
         gap: 8px;
       }
+      .trail {
+        margin-top: 8px;
+        font-size: 12px;
+        background: #fffdf9;
+        padding: 10px;
+        border-radius: 10px;
+        border: 1px dashed #e7c7a9;
+        display: grid;
+        gap: 8px;
+      }
+      .trail pre {
+        margin: 6px 0 0;
+        font-size: 12px;
+        white-space: pre-wrap;
+        background: #fff7ef;
+        padding: 8px;
+        border-radius: 8px;
+        border: 1px solid #f3c8a5;
+      }
       .proposal-title {
         font-weight: 700;
         font-size: 16px;
@@ -187,6 +206,24 @@
           details.style.borderRadius = "8px";
           details.textContent = proposal.details ? JSON.stringify(proposal.details, null, 2) : "No details payload.";
 
+          const trail = document.createElement("div");
+          trail.className = "trail";
+          if (Array.isArray(proposal.trail) && proposal.trail.length) {
+            const rows = proposal.trail.map((event) => {
+              const payload = event.payload ? JSON.stringify(event.payload, null, 2) : "";
+              return `
+                <div class="row">
+                  <span class="pill">${event.source || "event"}</span>
+                  <span>${event.type || "unknown"} • ${event.ts || "n/a"} • id ${event.id || "n/a"}</span>
+                  <pre>${payload || "No payload."}</pre>
+                </div>
+              `;
+            }).join("");
+            trail.innerHTML = `<div class="sub">Trail</div>${rows}`;
+          } else {
+            trail.textContent = "No linked events yet.";
+          }
+
           const actions = document.createElement("div");
           actions.className = "actions";
 
@@ -204,6 +241,7 @@
           card.appendChild(title);
           card.appendChild(meta);
           card.appendChild(details);
+          card.appendChild(trail);
           card.appendChild(actions);
           listNode.appendChild(card);
         });
@@ -211,7 +249,7 @@
 
       const load = async () => {
         try {
-          const res = await fetch("/proposals?status=pending&limit=25");
+          const res = await fetch("/proposals?status=pending&limit=25&include_events=1");
           const data = await res.json();
           const items = Array.isArray(data.proposals) ? data.proposals : [];
           countNode.textContent = `${data.count ?? items.length} pending`;

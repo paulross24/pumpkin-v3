@@ -4095,6 +4095,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
             if path == "/proposals":
                 status = params.get("status", [None])[0]
                 limit = _parse_limit(params.get("limit", [None])[0])
+                include_events = params.get("include_events", ["0"])[0] == "1"
                 conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
                 rows = store.list_proposals(conn, status=status, limit=limit)
                 proposals = []
@@ -4103,6 +4104,22 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         details = json.loads(row["details_json"])
                     except Exception:
                         details = {}
+                    trail = []
+                    if include_events:
+                        for ev in store.get_proposal_events(conn, row["id"]):
+                            try:
+                                payload = json.loads(ev["payload_json"])
+                            except Exception:
+                                payload = {}
+                            trail.append(
+                                {
+                                    "id": ev["id"],
+                                    "ts": ev["ts"],
+                                    "source": ev["source"],
+                                    "type": ev["type"],
+                                    "payload": payload,
+                                }
+                            )
                     proposals.append(
                         {
                             "id": row["id"],
@@ -4115,6 +4132,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "needs_new_capability": bool(row["needs_new_capability"]),
                             "capability_request": row["capability_request"],
                             "ai_context_excerpt": row["ai_context_excerpt"],
+                            "trail": trail,
                             "ts_created": row["ts_created"],
                         }
                     )
