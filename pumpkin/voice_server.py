@@ -981,6 +981,162 @@ def _handle_news_query(text: str, conn) -> str | None:
     return "BBC headlines: " + "; ".join(headlines) + "."
 
 
+def _extract_scene_name(text: str) -> str | None:
+    lowered = text.lower()
+    match = re.search(r"(?:activate|set|switch to|turn on|run)\s+(?:the\s+)?(.+?)\s+scene\b", lowered)
+    if match:
+        return match.group(1).strip()
+    match = re.search(r"\bscene\s+(.+)", lowered)
+    if match:
+        return match.group(1).strip()
+    match = re.search(r"(?:set|switch to|activate)\s+(.+?)\s+mode\b", lowered)
+    if match:
+        return match.group(1).strip()
+    return None
+
+
+def _handle_scene_command(text: str, conn) -> str | None:
+    scene_name = _extract_scene_name(text)
+    if not scene_name:
+        return None
+    base_url, token, error = _load_ha_connection(conn)
+    if error:
+        return error
+    entities = store.get_memory(conn, "homeassistant.entities") or {}
+    if not isinstance(entities, dict):
+        entities = {}
+    summary = store.get_memory(conn, "homeassistant.summary") or {}
+    scene_id = _select_entity_for_domain(entities, summary, "scene", text, name_hint=scene_name)
+    if not scene_id:
+        return f"I couldn't find a scene named {scene_name}."
+    result = ha_client.call_service(
+        base_url=base_url,
+        token=token,
+        domain="scene",
+        service="turn_on",
+        payload={"entity_id": scene_id},
+        timeout=settings.ha_request_timeout_seconds(),
+    )
+    if not result.get("ok"):
+        return "Home Assistant rejected that scene."
+    return f"Scene activated: {scene_name}."
+
+
+def _extract_script_name(text: str) -> str | None:
+    lowered = text.lower()
+    match = re.search(r"\b(?:run|start|execute|trigger)\s+(?:the\s+)?(.+?)\s+script\b", lowered)
+    if match:
+        return match.group(1).strip()
+    match = re.search(r"\bscript\s+(.+)", lowered)
+    if match:
+        return match.group(1).strip()
+    return None
+
+
+def _handle_script_command(text: str, conn) -> str | None:
+    script_name = _extract_script_name(text)
+    if not script_name:
+        return None
+    base_url, token, error = _load_ha_connection(conn)
+    if error:
+        return error
+    entities = store.get_memory(conn, "homeassistant.entities") or {}
+    if not isinstance(entities, dict):
+        entities = {}
+    summary = store.get_memory(conn, "homeassistant.summary") or {}
+    script_id = _select_entity_for_domain(entities, summary, "script", text, name_hint=script_name)
+    if not script_id:
+        return f"I couldn't find a script named {script_name}."
+    result = ha_client.call_service(
+        base_url=base_url,
+        token=token,
+        domain="script",
+        service="turn_on",
+        payload={"entity_id": script_id},
+        timeout=settings.ha_request_timeout_seconds(),
+    )
+    if not result.get("ok"):
+        return "Home Assistant rejected that script."
+    return f"Script started: {script_name}."
+
+
+def _extract_automation_command(text: str) -> tuple[str | None, str | None]:
+    lowered = text.lower()
+    action = None
+    if re.search(r"\b(enable|turn on|activate)\s+automation\b", lowered):
+        action = "turn_on"
+    if re.search(r"\b(disable|turn off|deactivate)\s+automation\b", lowered):
+        action = "turn_off"
+    if not action:
+        return None, None
+    match = re.search(r"automation\s+(.+)", lowered)
+    if match:
+        return action, match.group(1).strip()
+    return action, None
+
+
+def _handle_automation_command(text: str, conn) -> str | None:
+    action, name = _extract_automation_command(text)
+    if not action:
+        return None
+    base_url, token, error = _load_ha_connection(conn)
+    if error:
+        return error
+    entities = store.get_memory(conn, "homeassistant.entities") or {}
+    if not isinstance(entities, dict):
+        entities = {}
+    summary = store.get_memory(conn, "homeassistant.summary") or {}
+    automation_id = _select_entity_for_domain(entities, summary, "automation", text, name_hint=name)
+    if not automation_id:
+        return "I couldn't find that automation."
+    result = ha_client.call_service(
+        base_url=base_url,
+        token=token,
+        domain="automation",
+        service=action,
+        payload={"entity_id": automation_id},
+        timeout=settings.ha_request_timeout_seconds(),
+    )
+    if not result.get("ok"):
+        return "Home Assistant rejected that automation change."
+    return f"Automation {action.replace('_', ' ')}."
+
+
+def _extract_tts_message(text: str) -> str | None:
+    lowered = text.lower()
+    match = re.search(r"\b(?:say|announce|broadcast)\s+(.+)", lowered)
+    if match:
+        return match.group(1).strip()
+    return None
+
+
+def _handle_tts_command(text: str, conn) -> str | None:
+    message = _extract_tts_message(text)
+    if not message:
+        return None
+    base_url, token, error = _load_ha_connection(conn)
+    if error:
+        return error
+    entities = store.get_memory(conn, "homeassistant.entities") or {}
+    if not isinstance(entities, dict):
+        entities = {}
+    summary = store.get_memory(conn, "homeassistant.summary") or {}
+    player_id = _select_entity_for_domain(entities, summary, "media_player", text)
+    if not player_id:
+        return "I couldn't find any media players for that announcement."
+    result = ha_client.call_service(
+        base_url=base_url,
+        token=token,
+        domain="tts",
+        service="speak",
+        payload={"media_player_entity_id": player_id, "message": message},
+        timeout=settings.ha_request_timeout_seconds(),
+    )
+    if not result.get("ok"):
+        return "Home Assistant rejected that announcement."
+    return "Announcement sent."
+
+
 def _handle_media_command(text: str, conn, device: str | None) -> str | None:
     lowered = text.lower()
     if "music" not in lowered and "song" not in lowered and "track" not in lowered:
@@ -1085,6 +1241,18 @@ def _compute_ask_reply(
     if _home_summary_query(text):
         summary_reply = _local_house_summary_reply(conn)
         return summary_reply, "home_summary", None
+    scene_reply = _handle_scene_command(text, conn)
+    if scene_reply:
+        return scene_reply, "scene_control", None
+    automation_reply = _handle_automation_command(text, conn)
+    if automation_reply:
+        return automation_reply, "automation_control", None
+    script_reply = _handle_script_command(text, conn)
+    if script_reply:
+        return script_reply, "script_control", None
+    tts_reply = _handle_tts_command(text, conn)
+    if tts_reply:
+        return tts_reply, "tts", None
     media_reply = _handle_media_command(text, conn, device)
     if media_reply:
         return media_reply, "media_control", None
@@ -1977,8 +2145,12 @@ def _area_domain_hint(target: str) -> str | None:
         return "light"
     if "switch" in lowered:
         return "switch"
+    if any(word in lowered for word in ("plug", "socket", "outlet")):
+        return "switch"
     if "fan" in lowered:
         return "fan"
+    if any(word in lowered for word in ("blind", "blinds", "curtain", "curtains", "cover")):
+        return "cover"
     return None
 
 
@@ -1990,8 +2162,18 @@ def _wants_area_control(target: str) -> bool:
         or "light" in lowered
         or "switches" in lowered
         or "switch" in lowered
+        or "plugs" in lowered
+        or "plug" in lowered
+        or "outlets" in lowered
+        or "outlet" in lowered
         or "fans" in lowered
         or "fan" in lowered
+        or "blinds" in lowered
+        or "blind" in lowered
+        or "curtains" in lowered
+        or "curtain" in lowered
+        or "covers" in lowered
+        or "cover" in lowered
     )
 
 
