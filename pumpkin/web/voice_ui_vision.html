@@ -133,13 +133,24 @@
       .lightbox.open {
         display: flex;
       }
+      .lightbox-frame {
+        position: relative;
+      }
       .lightbox img {
-        max-width: min(90vw, 960px);
-        max-height: 85vh;
+        max-width: min(96vw, 1280px);
+        max-height: 92vh;
         border-radius: 16px;
         border: 2px solid var(--line);
         box-shadow: 0 20px 60px rgba(20, 12, 8, 0.4);
         background: #fff;
+      }
+      .lightbox-box {
+        position: absolute;
+        border: 2px solid #ffb347;
+        border-radius: 8px;
+        box-shadow: 0 0 0 2px rgba(20, 12, 8, 0.2);
+        display: none;
+        pointer-events: none;
       }
       .lightbox button {
         position: absolute;
@@ -195,7 +206,10 @@
     <div class="lightbox" id="lightbox" aria-hidden="true">
       <button id="lightbox-close" class="secondary">Close</button>
       <button id="lightbox-fullscreen" class="secondary fullscreen">Fullscreen</button>
-      <img id="lightbox-img" alt="Face snapshot" />
+      <div class="lightbox-frame">
+        <img id="lightbox-img" alt="Face snapshot" />
+        <div id="lightbox-box" class="lightbox-box"></div>
+      </div>
     </div>
     <script>
       const listNode = document.getElementById("face-list");
@@ -204,6 +218,8 @@
       const lightboxImg = document.getElementById("lightbox-img");
       const lightboxClose = document.getElementById("lightbox-close");
       const lightboxFullscreen = document.getElementById("lightbox-fullscreen");
+      const lightboxBox = document.getElementById("lightbox-box");
+      let currentLightboxBox = null;
 
       const render = (items) => {
         listNode.innerHTML = "";
@@ -279,6 +295,7 @@
           if (img && snapshotUrl) {
             img.addEventListener("click", () => {
               lightboxImg.src = snapshotUrl;
+              currentLightboxBox = item.face_box || null;
               lightbox.classList.add("open");
               lightbox.setAttribute("aria-hidden", "false");
             });
@@ -308,6 +325,7 @@
               }
               status.textContent = `Enrolled ${subject}.`;
               button.textContent = "Enrolled";
+              setTimeout(load, 400);
             } catch (err) {
               status.textContent = "Enroll failed.";
               button.textContent = "Enroll";
@@ -331,6 +349,7 @@
                   return;
                 }
                 falseButton.textContent = "Marked";
+                setTimeout(load, 400);
               } catch (err) {
                 falseButton.textContent = "Failed";
               }
@@ -363,10 +382,36 @@
           countNode.textContent = "Clear failed";
         }
       });
+      const applyLightboxBox = () => {
+        if (!currentLightboxBox || !lightboxImg.naturalWidth || !lightboxImg.naturalHeight) {
+          lightboxBox.style.display = "none";
+          return;
+        }
+        const box = currentLightboxBox;
+        const scaleX = lightboxImg.clientWidth / lightboxImg.naturalWidth;
+        const scaleY = lightboxImg.clientHeight / lightboxImg.naturalHeight;
+        const xMin = Number(box.x_min ?? 0);
+        const yMin = Number(box.y_min ?? 0);
+        const xMax = Number(box.x_max ?? 0);
+        const yMax = Number(box.y_max ?? 0);
+        const left = xMin * scaleX;
+        const top = yMin * scaleY;
+        const width = Math.max(1, (xMax - xMin) * scaleX);
+        const height = Math.max(1, (yMax - yMin) * scaleY);
+        lightboxBox.style.left = `${left}px`;
+        lightboxBox.style.top = `${top}px`;
+        lightboxBox.style.width = `${width}px`;
+        lightboxBox.style.height = `${height}px`;
+        lightboxBox.style.display = "block";
+      };
+      lightboxImg.addEventListener("load", applyLightboxBox);
+      window.addEventListener("resize", applyLightboxBox);
       lightboxClose.addEventListener("click", () => {
         lightbox.classList.remove("open");
         lightbox.setAttribute("aria-hidden", "true");
         lightboxImg.src = "";
+        currentLightboxBox = null;
+        lightboxBox.style.display = "none";
       });
       lightboxFullscreen.addEventListener("click", () => {
         const target = lightbox;
@@ -381,6 +426,8 @@
           lightbox.classList.remove("open");
           lightbox.setAttribute("aria-hidden", "true");
           lightboxImg.src = "";
+          currentLightboxBox = null;
+          lightboxBox.style.display = "none";
         }
       });
       load();

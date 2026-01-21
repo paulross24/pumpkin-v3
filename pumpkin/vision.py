@@ -117,12 +117,6 @@ def _compreface_recognize(image_bytes: bytes, provider: Dict[str, Any]) -> Optio
     if not result:
         return {"face_detected": False}
     candidate = result[0]
-    subjects = candidate.get("subjects") if isinstance(candidate, dict) else None
-    if not isinstance(subjects, list):
-        return None
-    if not subjects:
-        return {"face_detected": True, "name": None, "confidence": None}
-    subject = subjects[0]
     box = candidate.get("box") if isinstance(candidate, dict) else None
     if isinstance(box, dict):
         box = {
@@ -131,6 +125,12 @@ def _compreface_recognize(image_bytes: bytes, provider: Dict[str, Any]) -> Optio
             "x_max": box.get("x_max"),
             "y_max": box.get("y_max"),
         }
+    subjects = candidate.get("subjects") if isinstance(candidate, dict) else None
+    if not isinstance(subjects, list):
+        return None
+    if not subjects:
+        return {"face_detected": True, "name": None, "confidence": None, "box": box}
+    subject = subjects[0]
     return {
         "name": subject.get("subject"),
         "confidence": subject.get("similarity"),
