@@ -1713,6 +1713,44 @@ def _rule_based_proposals(events: List[Any], conn) -> List[Dict[str, Any]]:
     auto_seen = auto_state.get("camera_ips")
     if not isinstance(auto_seen, list):
         auto_seen = []
+    device_labels = auto_state.get("device_labels")
+    if not isinstance(device_labels, dict):
+        device_labels = {}
+
+    def _device_service_types(service_items: List[Any]) -> List[str]:
+        types = []
+        for item in service_items:
+            if isinstance(item, dict) and isinstance(item.get("type"), str):
+                types.append(item["type"].lower())
+        return types
+
+    def _classify_device(device: Dict[str, Any]) -> List[str]:
+        hints = device.get("hints") or []
+        open_ports = device.get("open_ports") or []
+        services = device.get("services") or []
+        service_types = _device_service_types(services)
+        labels: List[str] = []
+        hint_text = " ".join(h.lower() for h in hints if isinstance(h, str))
+        if "camera" in hint_text or "rtsp" in hint_text or "onvif" in hint_text:
+            labels.append("camera")
+        if any(port in {554, 8554} for port in open_ports if isinstance(port, int)) or "rtsp" in service_types:
+            if "camera" not in labels:
+                labels.append("camera")
+        if any(port in {8009, 1400} for port in open_ports if isinstance(port, int)) or "cast" in hint_text:
+            labels.append("speaker")
+        if any(port in {32400} for port in open_ports if isinstance(port, int)) or "plex" in hint_text:
+            labels.append("media")
+        if any(port in {9100, 631} for port in open_ports if isinstance(port, int)) or "printer" in hint_text:
+            labels.append("printer")
+        if any(port in {445, 139} for port in open_ports if isinstance(port, int)) or "nas" in hint_text:
+            labels.append("nas")
+        if any(port in {8123} for port in open_ports if isinstance(port, int)) or "homeassistant" in hint_text:
+            labels.append("homeassistant")
+        if "ssh" in service_types or any(port == 22 for port in open_ports if isinstance(port, int)):
+            labels.append("host")
+        if "http" in service_types or any(port in {80, 443, 8000, 8080, 8443} for port in open_ports if isinstance(port, int)):
+            labels.append("web")
+        return labels
 
     for ip, device in devices_by_ip.items():
         hints = device.get("hints") or []
@@ -1782,7 +1820,80 @@ def _rule_based_proposals(events: List[Any], conn) -> List[Dict[str, Any]]:
         )
         auto_seen.append(ip)
 
+    for ip, device in devices_by_ip.items():
+        labels = _classify_device(device)
+        if not labels:
+            continue
+        if "camera" in labels:
+            labels = [label for label in labels if label != "camera"]
+        if not labels:
+            continue
+        seen_labels = device_labels.get(ip, [])
+        if not isinstance(seen_labels, list):
+            seen_labels = []
+        for label in labels:
+            if label in seen_labels:
+                continue
+            summary = f"Review new {label} device at {ip}"
+            if store.proposal_exists(conn, summary, statuses=["pending", "approved"]):
+                seen_labels.append(label)
+                continue
+            message = f"New {label} candidate at {ip}. Review for integration."
+            proposals.append(
+                {
+                    "kind": "action.request",
+                    "summary": summary,
+                    "details": {
+                        "rationale": "Device discovery hints suggest a new capability.",
+                        "action_type": "notify.local",
+                        "action_params": {
+                            "message": message,
+                        },
+                        "implementation": "Review the device details and decide on integration.",
+                        "verification": "Confirm device is reachable and appears in the network snapshot.",
+                        "rollback_plan": "No rollback needed; review only.",
+                    },
+                    "risk": 0.2,
+                    "expected_outcome": "Device is reviewed for potential integration.",
+                    "source_event_ids": [],
+                    "needs_new_capability": False,
+                    "capability_request": None,
+                    "steps": ["Review device details", "Decide integration approach"],
+                }
+            )
+            if label not in {"web"}:
+                mark_summary = f"Mark {label} at {ip} as useful"
+                if not store.proposal_exists(conn, mark_summary, statuses=["pending", "approved"]):
+                    proposals.append(
+                        {
+                            "kind": "action.request",
+                            "summary": mark_summary,
+                            "details": {
+                                "rationale": "Tag the device so modules can integrate it.",
+                                "action_type": "network.mark_useful",
+                                "action_params": {
+                                    "ip": ip,
+                                    "label": label,
+                                    "note": "Auto-marked from discovery; confirm if correct.",
+                                },
+                                "implementation": "Add the device to the useful list.",
+                                "verification": "Confirm device appears in the useful list.",
+                                "rollback_plan": "Remove the device from the useful list.",
+                            },
+                            "risk": 0.1,
+                            "expected_outcome": "Device is available for integration workflows.",
+                            "source_event_ids": [],
+                            "needs_new_capability": False,
+                            "capability_request": None,
+                            "steps": ["Mark device useful", "Review label accuracy"],
+                        }
+                    )
+            seen_labels.append(label)
+        if seen_labels:
+            device_labels[ip] = seen_labels
+
     auto_state["camera_ips"] = auto_seen[-200:]
+    auto_state["device_labels"] = device_labels
     store.set_memory(conn, "network.discovery.auto_proposed", auto_state)
 
     return proposals
