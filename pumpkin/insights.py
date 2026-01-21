@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from . import store
@@ -36,6 +36,74 @@ def _lights_on(entities: Dict[str, Dict[str, Any]]) -> List[str]:
     return on
 
 
+def _parse_timestamp(value: Any) -> Optional[datetime]:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        cleaned = value.replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(cleaned)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    except Exception:
+        return None
+
+
+def _minutes_since(ts: Optional[datetime]) -> Optional[float]:
+    if not ts:
+        return None
+    now = datetime.now(timezone.utc)
+    delta = now - ts
+    return delta.total_seconds() / 60.0
+
+
+def _entity_device_class(payload: Dict[str, Any]) -> Optional[str]:
+    attrs = payload.get("attributes", {}) if isinstance(payload, dict) else {}
+    if isinstance(attrs, dict):
+        device_class = attrs.get("device_class")
+        if isinstance(device_class, str) and device_class.strip():
+            return device_class.strip()
+    return None
+
+
+def _entity_last_changed(payload: Dict[str, Any]) -> Optional[datetime]:
+    if not isinstance(payload, dict):
+        return None
+    return _parse_timestamp(payload.get("last_changed") or payload.get("last_updated"))
+
+
+def _open_contacts(entities: Dict[str, Dict[str, Any]]) -> List[Tuple[str, Optional[float]]]:
+    open_items: List[Tuple[str, Optional[float]]] = []
+    for entity_id, payload in entities.items():
+        if not isinstance(entity_id, str) or not entity_id.startswith("binary_sensor."):
+            continue
+        device_class = _entity_device_class(payload)
+        if device_class not in {"door", "window"}:
+            continue
+        state = payload.get("state")
+        if state not in {"on", "open"}:
+            continue
+        minutes = _minutes_since(_entity_last_changed(payload))
+        open_items.append((_friendly_name(entity_id, payload), minutes))
+    return open_items
+
+
+def _recent_motion(entities: Dict[str, Dict[str, Any]]) -> List[str]:
+    triggered: List[str] = []
+    for entity_id, payload in entities.items():
+        if not isinstance(entity_id, str) or not entity_id.startswith("binary_sensor."):
+            continue
+        device_class = _entity_device_class(payload)
+        if device_class != "motion":
+            continue
+        if payload.get("state") != "on":
+            continue
+        minutes = _minutes_since(_entity_last_changed(payload))
+        if minutes is None or minutes <= 5:
+            triggered.append(_friendly_name(entity_id, payload))
+    return triggered
+
+
 def _new_devices(
     current: Dict[str, Any], previous: Dict[str, Any]
 ) -> List[Dict[str, Any]]:
@@ -67,6 +135,8 @@ def build_insights(
     prev_network_snapshot: Optional[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
     insights: List[Dict[str, Any]] = []
+    door_open_warn_minutes = 10
+    lights_on_warn_minutes = 30
     if isinstance(system_snapshot, dict):
         load1 = (system_snapshot.get("loadavg") or {}).get("1m")
         if isinstance(load1, (int, float)) and load1 >= 2.0:
@@ -116,6 +186,70 @@ def build_insights(
                         "detail": f"Lights on: {', '.join(on_lights[:4])}.",
                     }
                 )
+            open_contacts = _open_contacts(ha_entities)
+            if open_contacts:
+                names = [name for name, _minutes in open_contacts]
+                insights.append(
+                    {
+                        "type": "insight.doors_open_empty",
+                        "severity": "warn",
+                        "title": "Doors or windows open with nobody home",
+                        "detail": f"Open: {', '.join(names[:4])}.",
+                    }
+                )
+            motion = _recent_motion(ha_entities)
+            if motion:
+                insights.append(
+                    {
+                        "type": "insight.motion_empty",
+                        "severity": "warn",
+                        "title": "Motion detected while nobody home",
+                        "detail": f"Recent motion: {', '.join(motion[:4])}.",
+                    }
+                )
+        open_contacts = _open_contacts(ha_entities)
+        if open_contacts:
+            long_open = [
+                (name, minutes)
+                for name, minutes in open_contacts
+                if minutes is not None and minutes >= door_open_warn_minutes
+            ]
+            if long_open:
+                sample = ", ".join(
+                    f"{name} ({minutes:.0f}m)"
+                    for name, minutes in long_open[:4]
+                    if minutes is not None
+                )
+                insights.append(
+                    {
+                        "type": "insight.door_open_long",
+                        "severity": "info",
+                        "title": "Door or window left open",
+                        "detail": f"Open for {door_open_warn_minutes}m+: {sample}.",
+                    }
+                )
+
+        long_lights = []
+        for entity_id, payload in ha_entities.items():
+            if not isinstance(entity_id, str) or not entity_id.startswith("light."):
+                continue
+            if payload.get("state") != "on":
+                continue
+            minutes = _minutes_since(_entity_last_changed(payload))
+            if minutes is not None and minutes >= lights_on_warn_minutes:
+                long_lights.append((_friendly_name(entity_id, payload), minutes))
+        if long_lights:
+            sample = ", ".join(
+                f"{name} ({minutes:.0f}m)" for name, minutes in long_lights[:4]
+            )
+            insights.append(
+                {
+                    "type": "insight.lights_on_long",
+                    "severity": "info",
+                    "title": "Lights left on for a while",
+                    "detail": f"On for {lights_on_warn_minutes}m+: {sample}.",
+                }
+            )
 
     new_devices = _new_devices(network_snapshot or {}, prev_network_snapshot or {})
     if new_devices:

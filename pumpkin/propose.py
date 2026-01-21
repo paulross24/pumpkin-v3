@@ -777,6 +777,36 @@ def _rule_based_proposals(events: List[Any], conn) -> List[Dict[str, Any]]:
     proposals: List[Dict[str, Any]] = []
 
     for row in events:
+        if row["type"].startswith("insight."):
+            payload = json.loads(row["payload_json"])
+            if not isinstance(payload, dict):
+                continue
+            title = str(payload.get("title") or "Insight").strip()
+            detail = str(payload.get("detail") or "").strip()
+            summary = f"Insight: {title}"
+            if store.proposal_exists(conn, summary, {"pending", "approved"}):
+                continue
+            message = detail or title
+            proposals.append(
+                {
+                    "kind": "action.request",
+                    "summary": summary,
+                    "details": {
+                        "rationale": payload.get("detail") or "System insight detected.",
+                        "action_type": "notify.local",
+                        "action_params": {
+                            "message": message,
+                        },
+                    },
+                    "risk": 0.3,
+                    "expected_outcome": "The insight is surfaced for review.",
+                    "source_event_ids": [row["id"]],
+                    "needs_new_capability": False,
+                    "capability_request": None,
+                    "steps": ["Notify about the insight"],
+                }
+            )
+            continue
         if row["type"] in {"voice.command", "manual.note"}:
             payload = json.loads(row["payload_json"])
             text = payload.get("text") or payload.get("message") or ""
