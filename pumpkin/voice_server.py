@@ -61,6 +61,7 @@ THOUGHT_EVENT_TYPES = {
     "car.alert",
     "face.alert",
     "behavior.alert",
+    "voice.mic_forwarded",
     "insight.generated",
     "insight.briefing",
 }

@@ -109,6 +109,50 @@ modules:
           - person.recognized
           - face.unknown
 
+  - name: voice.mic_rtsp
+    type: capability
+    description: Capture RTSP camera audio and forward voice commands into Pumpkin.
+    config_schema:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        camera_id:
+          type: string
+        rtsp_url:
+          type: string
+        capture_seconds:
+          type: number
+        poll_interval_seconds:
+          type: integer
+        cooldown_seconds:
+          type: integer
+        threshold_db:
+          type: number
+        sample_rate:
+          type: integer
+        channels:
+          type: integer
+        wake_words:
+          type: array
+          items:
+            type: string
+        min_chars:
+          type: integer
+        ffmpeg_path:
+          type: string
+      required: []
+    safety_level: med
+    prerequisites:
+      packages: []
+      services:
+        - camera
+      network_access: []
+    provides:
+      - source: voice
+        signals:
+          - voice.mic_forwarded
+
   - name: insights
     type: observer
     description: Generate insight events and briefing summaries from system signals.

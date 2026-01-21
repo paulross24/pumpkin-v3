@@ -4,6 +4,7 @@ enabled:
   - code.assistant
   - network.discovery
   - face.recognition
+  - voice.mic_rtsp
   - insights
   - selfheal
 modules:
@@ -133,6 +134,21 @@ modules:
         enabled: true
         seconds: 2
         threshold_db: -20
+  voice.mic_rtsp:
+    enabled: true
+    camera_id: "kitchen-cam"
+    capture_seconds: 2.5
+    poll_interval_seconds: 10
+    cooldown_seconds: 15
+    threshold_db: -28
+    sample_rate: 16000
+    channels: 1
+    wake_words:
+      - "pumpkin"
+      - "hey pumpkin"
+    min_chars: 4
+    ffmpeg_path: "ffmpeg"
+    post_async: true
   selfheal:
     enabled: true
     cooldown_seconds: 300

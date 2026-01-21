@@ -13,6 +13,7 @@ from . import policy as policy_mod
 from . import settings
 from . import observe
 from . import vision
+from . import rtsp_mic
 from . import propose
 from . import store
 from . import insights
@@ -269,6 +270,13 @@ def _collect_module_events(conn) -> List[Dict[str, Any]]:
         if _cooldown_elapsed(conn, "face.recognition", scan_interval):
             events.extend(vision.run_face_recognition(conn, module_cfg))
             _record_cooldown(conn, "face.recognition")
+
+    if "voice.mic_rtsp" in enabled:
+        module_cfg = modules_cfg.get("voice.mic_rtsp", {})
+        poll_interval = int(module_cfg.get("poll_interval_seconds", 10))
+        if _cooldown_elapsed(conn, "voice.mic_rtsp", poll_interval):
+            events.extend(rtsp_mic.run_rtsp_mic(conn, module_cfg))
+            _record_cooldown(conn, "voice.mic_rtsp")
 
     return events
 
