@@ -162,10 +162,16 @@ def fetch_areas(base_url: str, token: str, timeout: float) -> Dict[str, Any]:
             raw = resp.read().decode("utf-8")
         data = json.loads(raw)
         if not isinstance(data, list):
+            registry = fetch_area_registry_http(base_url, token, timeout)
+            if registry.get("ok"):
+                return registry
             return fetch_areas_ws(base_url, token, timeout, "unexpected_payload")
         return {"ok": True, "areas": data}
     except HTTPError as exc:
         if exc.code == 404:
+            registry = fetch_area_registry_http(base_url, token, timeout)
+            if registry.get("ok"):
+                return registry
             return fetch_areas_ws(base_url, token, timeout, "http_404")
         return {"ok": False, "error": f"http_{exc.code}"}
     except URLError as exc:
@@ -208,6 +214,9 @@ def fetch_areas_ws(base_url: str, token: str, timeout: float, fallback_reason: s
 
 def fetch_entity_registry(base_url: str, token: str, timeout: float) -> Dict[str, Any]:
     """Fetch entity registry with area mappings."""
+    http_result = fetch_entity_registry_http(base_url, token, timeout)
+    if http_result.get("ok"):
+        return http_result
     try:
         sock = _ws_connect(base_url, timeout)
         auth_msg = _ws_read_json(sock, timeout)
@@ -239,6 +248,9 @@ def fetch_entity_registry(base_url: str, token: str, timeout: float) -> Dict[str
 
 def fetch_device_registry(base_url: str, token: str, timeout: float) -> Dict[str, Any]:
     """Fetch device registry to map devices to areas."""
+    http_result = fetch_device_registry_http(base_url, token, timeout)
+    if http_result.get("ok"):
+        return http_result
     try:
         sock = _ws_connect(base_url, timeout)
         auth_msg = _ws_read_json(sock, timeout)
@@ -266,6 +278,66 @@ def fetch_device_registry(base_url: str, token: str, timeout: float) -> Dict[str
             sock.close()
         except Exception:
             pass
+
+
+def fetch_area_registry_http(base_url: str, token: str, timeout: float) -> Dict[str, Any]:
+    url = base_url.rstrip("/") + "/api/config/area_registry"
+    req = Request(url, method="GET")
+    req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("Content-Type", "application/json")
+    try:
+        with urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8")
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            return {"ok": False, "error": "unexpected_payload"}
+        return {"ok": True, "areas": data}
+    except HTTPError as exc:
+        return {"ok": False, "error": f"http_{exc.code}"}
+    except URLError:
+        return {"ok": False, "error": "url_error"}
+    except Exception:
+        return {"ok": False, "error": "unknown_error"}
+
+
+def fetch_entity_registry_http(base_url: str, token: str, timeout: float) -> Dict[str, Any]:
+    url = base_url.rstrip("/") + "/api/config/entity_registry"
+    req = Request(url, method="GET")
+    req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("Content-Type", "application/json")
+    try:
+        with urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8")
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            return {"ok": False, "error": "unexpected_payload"}
+        return {"ok": True, "entities": data}
+    except HTTPError as exc:
+        return {"ok": False, "error": f"http_{exc.code}"}
+    except URLError:
+        return {"ok": False, "error": "url_error"}
+    except Exception:
+        return {"ok": False, "error": "unknown_error"}
+
+
+def fetch_device_registry_http(base_url: str, token: str, timeout: float) -> Dict[str, Any]:
+    url = base_url.rstrip("/") + "/api/config/device_registry"
+    req = Request(url, method="GET")
+    req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("Content-Type", "application/json")
+    try:
+        with urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8")
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            return {"ok": False, "error": "unexpected_payload"}
+        return {"ok": True, "devices": data}
+    except HTTPError as exc:
+        return {"ok": False, "error": f"http_{exc.code}"}
+    except URLError:
+        return {"ok": False, "error": "url_error"}
+    except Exception:
+        return {"ok": False, "error": "unknown_error"}
 
 
 def _ws_connect(base_url: str, timeout: float) -> socket.socket:
