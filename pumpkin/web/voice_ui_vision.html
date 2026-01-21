@@ -202,6 +202,14 @@
       </section>
       <section class="card">
         <div class="row">
+          <span class="sub">Recent recognitions</span>
+          <button id="refresh-recognized" class="secondary">Refresh recognitions</button>
+        </div>
+        <div class="meta" id="recognized-count">0 recognitions</div>
+        <div class="faces" id="recognized-list" style="margin-top: 12px;">Loading...</div>
+      </section>
+      <section class="card">
+        <div class="row">
           <span class="sub" id="count">0 unknown faces</span>
           <button id="refresh" class="secondary">Refresh</button>
           <button id="clear-unknown" class="secondary">Clear unknowns</button>
@@ -223,6 +231,8 @@
       const listNode = document.getElementById("face-list");
       const alertListNode = document.getElementById("alert-list");
       const alertCountNode = document.getElementById("alert-count");
+      const recognizedListNode = document.getElementById("recognized-list");
+      const recognizedCountNode = document.getElementById("recognized-count");
       const countNode = document.getElementById("count");
       const lightbox = document.getElementById("lightbox");
       const lightboxImg = document.getElementById("lightbox-img");
@@ -300,6 +310,80 @@
             });
           }
           alertListNode.appendChild(card);
+        });
+      };
+
+      const renderRecognized = (items) => {
+        recognizedListNode.innerHTML = "";
+        if (!items.length) {
+          recognizedListNode.textContent = "No recognitions logged yet.";
+          return;
+        }
+        items.forEach((item) => {
+          const card = document.createElement("div");
+          card.className = "face-card";
+          const label = item.label || item.camera_id || "camera";
+          const snapshotUrl = item.snapshot_url || "";
+          const time = item.ts || "unknown time";
+          const name = item.name || item.ha_person_name || "recognized";
+          const confidence = item.confidence != null ? Number(item.confidence).toFixed(2) : "n/a";
+          const faceBox = item.face_box ? JSON.stringify(item.face_box) : "";
+          card.innerHTML = `
+            <div class="face-row">
+              <div>
+                ${snapshotUrl ? `<div class="thumb" data-box='${faceBox}'>
+                  <img src="${snapshotUrl}" alt="Recognized face" data-snapshot="${snapshotUrl}" />
+                  <div class="face-box"></div>
+                </div>` : "<div class='meta'>No snapshot</div>"}
+              </div>
+              <div>
+                <div><strong>${name}</strong></div>
+                <div class="meta">${label}</div>
+                <div class="meta">${time}</div>
+                <div class="meta">confidence: ${confidence}</div>
+              </div>
+            </div>
+          `;
+          const img = card.querySelector("img");
+          const thumb = card.querySelector(".thumb");
+          const boxNode = card.querySelector(".face-box");
+          if (thumb && boxNode && item.face_box) {
+            const box = item.face_box;
+            const applyBox = () => {
+              const imgEl = thumb.querySelector("img");
+              if (!imgEl || !imgEl.naturalWidth || !imgEl.naturalHeight) return;
+              const scaleX = imgEl.clientWidth / imgEl.naturalWidth;
+              const scaleY = imgEl.clientHeight / imgEl.naturalHeight;
+              const xMin = Number(box.x_min ?? 0);
+              const yMin = Number(box.y_min ?? 0);
+              const xMax = Number(box.x_max ?? 0);
+              const yMax = Number(box.y_max ?? 0);
+              const left = xMin * scaleX;
+              const top = yMin * scaleY;
+              const width = Math.max(1, (xMax - xMin) * scaleX);
+              const height = Math.max(1, (yMax - yMin) * scaleY);
+              boxNode.style.left = `${left}px`;
+              boxNode.style.top = `${top}px`;
+              boxNode.style.width = `${width}px`;
+              boxNode.style.height = `${height}px`;
+              boxNode.style.display = "block";
+            };
+            if (img) {
+              img.addEventListener("load", applyBox);
+              if (img.complete) {
+                applyBox();
+              }
+            }
+          }
+          if (img && snapshotUrl) {
+            img.addEventListener("click", () => {
+              lightboxImg.src = snapshotUrl;
+              currentLightboxBox = item.face_box || null;
+              lightbox.classList.add("open");
+              lightbox.setAttribute("aria-hidden", "false");
+            });
+          }
+          recognizedListNode.appendChild(card);
         });
       };
 
@@ -465,8 +549,21 @@
         }
       };
 
+      const loadRecognized = async () => {
+        try {
+          const res = await fetch("/vision/recognized?limit=10");
+          const data = await res.json();
+          const items = Array.isArray(data.items) ? data.items : [];
+          recognizedCountNode.textContent = `${data.count ?? items.length} recognitions`;
+          renderRecognized(items);
+        } catch (err) {
+          recognizedListNode.textContent = "Failed to load recognitions.";
+        }
+      };
+
       document.getElementById("refresh").addEventListener("click", load);
       document.getElementById("refresh-alerts").addEventListener("click", loadAlerts);
+      document.getElementById("refresh-recognized").addEventListener("click", loadRecognized);
       document.getElementById("clear-unknown").addEventListener("click", async () => {
         const ok = confirm("Clear all unknown face entries?");
         if (!ok) return;
@@ -526,6 +623,7 @@
         }
       });
       loadAlerts();
+      loadRecognized();
       load();
     </script>
   </body>
