@@ -121,3 +121,6 @@ modules:
     door_open_warn_minutes: 10
     lights_on_warn_minutes: 30
     motion_recent_minutes: 5
+  voice:
+    confirmations_enabled: false
+    confirm_llm_low_confidence: false

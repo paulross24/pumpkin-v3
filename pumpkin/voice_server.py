@@ -1164,7 +1164,7 @@ def _compute_ask_reply(
             normalized = _normalize_router_request(router)
             response = router.get("response")
             if route == "ha_control" and isinstance(normalized, str) and normalized.strip():
-                if 0.55 <= confidence < 0.7 and device:
+                if 0.55 <= confidence < 0.7 and device and _voice_confirm_llm_low_confidence():
                     _store_pending_action(
                         conn,
                         device,
@@ -2559,6 +2559,8 @@ def _handle_target_followup(text: str, device: str | None, conn) -> str | None:
 
 
 def _should_confirm_bulk(action: str, target: str, entity_ids: List[str]) -> bool:
+    if not _voice_confirmations_enabled():
+        return False
     if action not in {"turn_on", "turn_off", "toggle"}:
         return False
     if len(entity_ids) >= 3:
@@ -4213,6 +4215,30 @@ def _load_network_module_cfg() -> Dict[str, Any]:
         return {}
     module_cfg = config.get("modules", {}).get("network.discovery", {})
     return module_cfg if isinstance(module_cfg, dict) else {}
+
+
+def _load_voice_module_cfg() -> Dict[str, Any]:
+    config_path = settings.modules_config_path()
+    if not config_path.exists():
+        return {}
+    try:
+        config = module_config.load_config(str(config_path))
+    except Exception:
+        return {}
+    module_cfg = config.get("modules", {}).get("voice", {})
+    return module_cfg if isinstance(module_cfg, dict) else {}
+
+
+def _voice_confirmations_enabled() -> bool:
+    cfg = _load_voice_module_cfg()
+    value = cfg.get("confirmations_enabled", True)
+    return bool(value)
+
+
+def _voice_confirm_llm_low_confidence() -> bool:
+    cfg = _load_voice_module_cfg()
+    value = cfg.get("confirm_llm_low_confidence", True)
+    return bool(value)
 
 
 def _get_deep_scan_state(conn) -> Dict[str, Any]:
