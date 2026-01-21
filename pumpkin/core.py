@@ -828,13 +828,17 @@ def run_once() -> Dict[str, Any]:
         prev_network_snapshot=prev_network if isinstance(prev_network, dict) else {},
     )
     insights.record_insights(conn, insight_items)
+    new_events = _load_events_since_last(conn)
+    event_insights = insights.build_event_insights(new_events)
+    insights.record_insights(conn, event_insights)
+    all_insights = list(insight_items) + list(event_insights)
     brief_times = insights.briefing_times()
     for idx, briefing_time in enumerate(brief_times):
         insights.maybe_daily_briefing(
             conn,
             ha_summary=ha_summary if isinstance(ha_summary, dict) else {},
             system_snapshot=system_snapshot,
-            insights=insight_items,
+            insights=all_insights,
             in_quiet_hours=_in_quiet_hours(conn),
             briefing_time=briefing_time,
             briefing_key=f"daily-{idx}",
@@ -843,11 +847,9 @@ def run_once() -> Dict[str, Any]:
         conn,
         ha_summary=ha_summary if isinstance(ha_summary, dict) else {},
         system_snapshot=system_snapshot,
-        insights=insight_items,
+        insights=all_insights,
         in_quiet_hours=_in_quiet_hours(conn),
     )
-
-    new_events = _load_events_since_last(conn)
     proposals = propose.build_proposals(new_events, conn)
     if _should_reflect(conn):
         improvement = propose.build_improvement_proposals(conn)

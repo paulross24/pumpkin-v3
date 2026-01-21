@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from . import act
@@ -117,6 +118,55 @@ def _load_insights_cfg() -> Dict[str, Any]:
         return {}
     module_cfg = config.get("modules", {}).get("insights", {})
     return module_cfg if isinstance(module_cfg, dict) else {}
+
+
+def _auto_notify_types(cfg: Dict[str, Any]) -> List[str]:
+    types = cfg.get("auto_notify_types")
+    if isinstance(types, list):
+        cleaned = [str(item).strip() for item in types if str(item).strip()]
+        if cleaned:
+            return cleaned
+    return [
+        "insight.new_device",
+        "insight.inventory_change",
+        "insight.face_alert",
+        "insight.camera_issue",
+    ]
+
+
+def _auto_notify_min_minutes(cfg: Dict[str, Any]) -> int:
+    try:
+        return max(5, int(cfg.get("auto_notify_min_minutes", 30)))
+    except Exception:
+        return 30
+
+
+def _maybe_auto_notify(conn, insight: Dict[str, Any], cfg: Dict[str, Any]) -> None:
+    if not isinstance(insight, dict):
+        return
+    insight_type = str(insight.get("type") or "")
+    if not insight_type:
+        return
+    if insight_type not in _auto_notify_types(cfg):
+        return
+    min_minutes = _auto_notify_min_minutes(cfg)
+    last_ts = store.get_memory(conn, f"insights.last_auto_notify.{insight_type}")
+    if isinstance(last_ts, str):
+        parsed = _parse_timestamp(last_ts)
+        if parsed:
+            delta = _minutes_since(parsed)
+            if delta is not None and delta < min_minutes:
+                return
+    title = insight.get("title") or insight_type.replace("insight.", "").replace("_", " ")
+    detail = insight.get("detail")
+    message = f"{title}."
+    if isinstance(detail, str) and detail.strip():
+        message = f"{title}: {detail}"
+    try:
+        act.notify_local(message, str(settings.audit_path()))
+        store.set_memory(conn, f"insights.last_auto_notify.{insight_type}", datetime.now(timezone.utc).isoformat())
+    except Exception:
+        pass
 
 
 def _new_devices(
@@ -299,6 +349,7 @@ def record_insights(conn, insights: Iterable[Dict[str, Any]]) -> None:
     if not items:
         return
     now = datetime.now().isoformat()
+    cfg = _load_insights_cfg()
     payloads = []
     for item in items:
         event_payload = dict(item)
@@ -311,6 +362,7 @@ def record_insights(conn, insights: Iterable[Dict[str, Any]]) -> None:
             payload=event_payload,
             severity=item.get("severity", "info"),
         )
+        _maybe_auto_notify(conn, event_payload, cfg)
     current = store.get_memory(conn, "insights.latest")
     if not isinstance(current, list):
         current = []
@@ -453,3 +505,78 @@ def maybe_event_briefing(
         act.notify_local(f"Alert briefing: {summary}", str(settings.audit_path()))
     except Exception:
         pass
+
+
+def build_event_insights(events: Iterable[Any]) -> List[Dict[str, Any]]:
+    insights: List[Dict[str, Any]] = []
+    for row in events:
+        try:
+            event_type = row["type"]
+            payload_raw = row["payload_json"]
+        except Exception:
+            continue
+        if not isinstance(event_type, str):
+            continue
+        if event_type.startswith("insight."):
+            continue
+        payload = None
+        if isinstance(payload_raw, str):
+            try:
+                payload = json.loads(payload_raw)
+            except Exception:
+                payload = {}
+        elif isinstance(payload_raw, dict):
+            payload = payload_raw
+        else:
+            payload = {}
+        if event_type == "face.alert":
+            label = payload.get("label") if isinstance(payload, dict) else None
+            title = "Unknown face detected"
+            detail = f"Camera: {label}" if label else "Unknown face detected"
+            insights.append(
+                {
+                    "type": "insight.face_alert",
+                    "severity": "warn",
+                    "title": title,
+                    "detail": detail,
+                }
+            )
+        elif event_type in {"camera.capture_failed", "camera.stream_missing"}:
+            camera_id = payload.get("camera_id") if isinstance(payload, dict) else None
+            title = "Camera capture issue"
+            detail = f"Camera {camera_id} reported {event_type.replace('.', ' ')}." if camera_id else "Camera capture issue detected."
+            insights.append(
+                {
+                    "type": "insight.camera_issue",
+                    "severity": "warn",
+                    "title": title,
+                    "detail": detail,
+                }
+            )
+        elif event_type == "inventory.changed":
+            summary = payload.get("summary") if isinstance(payload, dict) else {}
+            if isinstance(summary, dict):
+                areas = summary.get("ha_area_count")
+                devices = summary.get("network_device_count")
+                modules = summary.get("enabled_modules")
+                detail_parts = []
+                if isinstance(areas, int):
+                    detail_parts.append(f"areas {areas}")
+                if isinstance(devices, int):
+                    detail_parts.append(f"devices {devices}")
+                if isinstance(modules, list):
+                    detail_parts.append(f"modules {len(modules)}")
+                detail = "Inventory updated"
+                if detail_parts:
+                    detail = "Inventory updated: " + ", ".join(detail_parts) + "."
+            else:
+                detail = "Inventory updated."
+            insights.append(
+                {
+                    "type": "insight.inventory_change",
+                    "severity": "info",
+                    "title": "Inventory changed",
+                    "detail": detail,
+                }
+            )
+    return insights

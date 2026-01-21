@@ -4,6 +4,8 @@ enabled:
   - code.assistant
   - network.discovery
   - face.recognition
+  - insights
+  - selfheal
 modules:
   homeassistant.observer:
     base_url: "http://192.168.1.140:8123"
@@ -125,6 +127,12 @@ modules:
       - "08:00"
       - "20:00"
     event_briefing_min_minutes: 30
+    auto_notify_min_minutes: 30
+    auto_notify_types:
+      - "insight.new_device"
+      - "insight.inventory_change"
+      - "insight.face_alert"
+      - "insight.camera_issue"
   voice:
     confirmations_enabled: false
     confirm_llm_low_confidence: false
