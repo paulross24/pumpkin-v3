@@ -124,7 +124,7 @@
         </div>
         <div class="section-title">How scoring works</div>
         <ul class="list">
-          <li>Ability: modules + HA areas + network devices</li>
+          <li>Ability: modules + HA areas + domains + network devices</li>
           <li>Natural language: LLM enabled + recent voice routes</li>
           <li>Proactiveness: insights + briefings + executed actions (last 24h)</li>
         </ul>
@@ -186,10 +186,14 @@
           const moduleCount = (inventory.enabled_modules || []).length;
           const areaCount = inventory.ha_area_count ?? 0;
           const deviceCount = inventory.network_device_count ?? 0;
+          const domainCount = inventory.ha_domains ? Object.keys(inventory.ha_domains).length : 0;
           const llmEnabled = Boolean(config.llm && config.llm.enabled);
 
           const abilityScore = clamp(
-            (moduleCount / 6) * 4 + (areaCount / 10) * 3 + (deviceCount / 20) * 3,
+            (moduleCount / 6) * 4
+              + (areaCount / 10) * 2
+              + (deviceCount / 20) * 2
+              + (domainCount / 15) * 2,
             0,
             10
           );
@@ -205,7 +209,7 @@
 
           pumpkinScore.textContent = overallScore;
           setList(pumpkinDetails, [
-            `ability: ${abilityScore.toFixed(1)} (modules ${moduleCount}, areas ${areaCount}, devices ${deviceCount})`,
+            `ability: ${abilityScore.toFixed(1)} (modules ${moduleCount}, areas ${areaCount}, domains ${domainCount}, devices ${deviceCount})`,
             `natural language: ${languageScore.toFixed(1)} (llm ${llmEnabled ? "on" : "off"}, voice routes ${voiceRoutes})`,
             `proactive: ${proactiveScore.toFixed(1)} (insights ${proactivity.insights_24h || 0}, briefings ${proactivity.briefings_24h || 0}, actions ${proactivity.actions_24h || 0})`,
           ]);
