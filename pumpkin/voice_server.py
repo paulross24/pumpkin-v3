@@ -5013,6 +5013,52 @@ class VoiceHandler(BaseHTTPRequestHandler):
                     "last_executed_ts": store.get_memory(conn, "actions.last_executed_ts"),
                     "recent_actions": actions_recent[-5:],
                 }
+                now_ts = datetime.now(timezone.utc)
+                since_ts = (now_ts - timedelta(hours=24)).isoformat()
+                try:
+                    insights_24h = int(
+                        conn.execute(
+                            "SELECT count(*) FROM events WHERE type LIKE 'insight.%' AND ts >= ?",
+                            (since_ts,),
+                        ).fetchone()[0]
+                    )
+                except Exception:
+                    insights_24h = 0
+                try:
+                    briefings_24h = int(
+                        conn.execute(
+                            "SELECT count(*) FROM events WHERE type = 'insight.briefing' AND ts >= ?",
+                            (since_ts,),
+                        ).fetchone()[0]
+                    )
+                except Exception:
+                    briefings_24h = 0
+                try:
+                    proposals_24h = int(
+                        conn.execute(
+                            "SELECT count(*) FROM proposals WHERE ts_created >= ?",
+                            (since_ts,),
+                        ).fetchone()[0]
+                    )
+                except Exception:
+                    proposals_24h = 0
+                try:
+                    actions_24h = int(
+                        conn.execute(
+                            "SELECT count(*) FROM actions WHERE ts_started >= ?",
+                            (since_ts,),
+                        ).fetchone()[0]
+                    )
+                except Exception:
+                    actions_24h = 0
+                proactivity = {
+                    "window_hours": 24,
+                    "since": since_ts,
+                    "insights_24h": insights_24h,
+                    "briefings_24h": briefings_24h,
+                    "proposals_24h": proposals_24h,
+                    "actions_24h": actions_24h,
+                }
                 briefing = store.get_memory(conn, "insights.last_briefing")
                 if not isinstance(briefing, dict):
                     briefing = None
@@ -5056,6 +5102,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "opportunities": opportunities[:5],
                         "issues": issues,
                         "autonomy": autonomy,
+                        "proactivity": proactivity,
                         "insights": insights_latest[-5:],
                         "briefing": briefing,
                         "router_events": router_events,
