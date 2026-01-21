@@ -60,6 +60,7 @@ THOUGHT_EVENT_TYPES = {
     "network.discovery.deep_scan",
     "car.alert",
     "face.alert",
+    "behavior.alert",
     "insight.generated",
     "insight.briefing",
 }
@@ -348,6 +349,8 @@ def _format_thought_message(event_type: str, payload: Dict[str, Any]) -> str:
         return f"car alert: {_truncate_text(str(message or 'check vehicle'), 80)}"
     if event_type == "face.alert":
         return f"vision alert: {_truncate_text(str(message or 'unknown face'), 80)}"
+    if event_type == "behavior.alert":
+        return f"vision behavior: {_truncate_text(str(message or 'dog alert'), 80)}"
     if event_type.startswith("insight."):
         return f"insight: {_truncate_text(str(title or summary or event_type), 80)}"
     return _truncate_text(str(message or summary or event_type), 80)
@@ -4286,8 +4289,8 @@ def _maybe_emit_car_alert(conn) -> None:
 
 def _list_alerts(conn, limit: int = 50) -> list[Dict[str, Any]]:
     rows = conn.execute(
-        "SELECT * FROM events WHERE type IN (?, ?) ORDER BY id DESC LIMIT ?",
-        ("car.alert", "face.alert", int(limit)),
+        "SELECT * FROM events WHERE type IN (?, ?, ?) ORDER BY id DESC LIMIT ?",
+        ("car.alert", "face.alert", "behavior.alert", int(limit)),
     ).fetchall()
     alerts: list[Dict[str, Any]] = []
     for row in rows:
@@ -4371,8 +4374,8 @@ def _list_unknown_faces(conn, limit: int = 50) -> list[Dict[str, Any]]:
 
 def _list_face_alerts(conn, limit: int = 25) -> list[Dict[str, Any]]:
     rows = conn.execute(
-        "SELECT * FROM events WHERE type = ? ORDER BY id DESC LIMIT ?",
-        ("face.alert", int(limit)),
+        "SELECT * FROM events WHERE type IN (?, ?) ORDER BY id DESC LIMIT ?",
+        ("face.alert", "behavior.alert", int(limit)),
     ).fetchall()
     results: list[Dict[str, Any]] = []
     for row in rows:
@@ -4395,6 +4398,8 @@ def _list_face_alerts(conn, limit: int = 25) -> list[Dict[str, Any]]:
                 "camera_id": payload.get("camera_id") if isinstance(payload, dict) else None,
                 "label": payload.get("label") if isinstance(payload, dict) else None,
                 "message": payload.get("message") if isinstance(payload, dict) else None,
+                "reasons": payload.get("reasons") if isinstance(payload, dict) else None,
+                "description": payload.get("description") if isinstance(payload, dict) else None,
                 "snapshot_path": snapshot_path,
                 "snapshot_url": snapshot_url,
                 "snapshot_hash": payload.get("snapshot_hash") if isinstance(payload, dict) else None,

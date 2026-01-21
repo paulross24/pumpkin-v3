@@ -277,7 +277,7 @@
       const renderAlerts = (items) => {
         alertListNode.innerHTML = "";
         if (!items.length) {
-          alertListNode.textContent = "No face alerts yet.";
+          alertListNode.textContent = "No vision alerts yet.";
           return;
         }
         items.forEach((item) => {
@@ -287,6 +287,8 @@
           const snapshotUrl = item.snapshot_url || "";
           const time = item.ts || "unknown time";
           const message = item.message || "Unknown face detected";
+          const reasons = Array.isArray(item.reasons) ? item.reasons : [];
+          const description = item.description || "";
           const faceBox = item.face_box ? JSON.stringify(item.face_box) : "";
           card.innerHTML = `
             <div class="face-row">
@@ -300,6 +302,8 @@
                 <div><strong>${label}</strong></div>
                 <div class="meta">${time}</div>
                 <div class="meta">${message}</div>
+                ${reasons.length ? `<div class="meta">Reasons: ${reasons.join(", ")}</div>` : ""}
+                ${description ? `<div class="meta">${description}</div>` : ""}
               </div>
             </div>
           `;

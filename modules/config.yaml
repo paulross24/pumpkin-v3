@@ -114,6 +114,25 @@ modules:
           pass: "PUMPKIN_KITCHEN_CAM_PASS"
         auto_probe: true
         enabled: true
+    behavior:
+      enabled: true
+      camera_ids:
+        - kitchen-cam
+      alert_cooldown_minutes: 30
+      dog_names:
+        - Roary
+        - Ozzy
+      forbidden_objects:
+        - spray bottle
+        - spray cleaner
+        - bottle
+      countertop_watch: true
+      visual:
+        enabled: true
+      bark_audio:
+        enabled: true
+        seconds: 2
+        threshold_db: -20
   selfheal:
     enabled: true
     cooldown_seconds: 300

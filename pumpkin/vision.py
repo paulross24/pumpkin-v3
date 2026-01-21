@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
+import re
 import subprocess
 import uuid
 from datetime import datetime, timezone
@@ -77,7 +79,7 @@ def _capture_rtsp(url: str, timeout_seconds: float, ffmpeg_path: str) -> Optiona
         ffmpeg_path,
         "-hide_banner",
         "-loglevel",
-        "error",
+        "info",
         "-rtsp_transport",
         "tcp",
         "-i",
@@ -103,6 +105,50 @@ def _capture_rtsp(url: str, timeout_seconds: float, ffmpeg_path: str) -> Optiona
     if result.returncode != 0 or not result.stdout:
         return None
     return result.stdout
+
+
+def _capture_audio_level_db(url: str, seconds: float, ffmpeg_path: str) -> Optional[float]:
+    cmd = [
+        ffmpeg_path,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-rtsp_transport",
+        "tcp",
+        "-t",
+        str(seconds),
+        "-i",
+        url,
+        "-vn",
+        "-af",
+        "astats=metadata=1:reset=1",
+        "-f",
+        "null",
+        "-",
+    ]
+    try:
+        result = subprocess.run(
+            cmd,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=seconds + 5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    stderr = result.stderr.decode("utf-8", errors="ignore")
+    matches = re.findall(r"RMS level dB:\\s*([-\\d\\.]+)", stderr)
+    if not matches:
+        matches = re.findall(r"Peak level dB:\\s*([-\\d\\.]+)", stderr)
+    levels = []
+    for item in matches:
+        try:
+            levels.append(float(item))
+        except ValueError:
+            continue
+    return max(levels) if levels else None
 
 
 def _save_snapshot(camera_id: str, payload: bytes) -> Optional[Path]:
@@ -207,6 +253,95 @@ def _compreface_enroll(image_bytes: bytes, subject: str, provider: Dict[str, Any
     return {"ok": True, "response": data}
 
 
+def _load_llm_config(conn) -> Dict[str, Any]:
+    api_key = store.get_memory(conn, "llm.openai_api_key") or os.getenv("PUMPKIN_OPENAI_API_KEY")
+    model = store.get_memory(conn, "llm.openai_model") or os.getenv("PUMPKIN_OPENAI_MODEL", "gpt-4o-mini")
+    base_url = store.get_memory(conn, "llm.openai_base_url") or os.getenv(
+        "PUMPKIN_OPENAI_BASE_URL", "https://api.openai.com/v1/chat/completions"
+    )
+    return {"api_key": api_key, "model": model, "base_url": base_url}
+
+
+def _call_openai_vision_json(prompt: str, image_bytes: bytes, cfg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    api_key = cfg.get("api_key")
+    if not api_key:
+        return None
+    model = cfg.get("model") or "gpt-4o-mini"
+    base_url = cfg.get("base_url") or "https://api.openai.com/v1/chat/completions"
+    image_b64 = base64.b64encode(image_bytes).decode("ascii")
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": "You analyze home camera images for dog behavior. Respond with strict JSON only.",
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"},
+                    },
+                ],
+            },
+        ],
+        "temperature": 0.2,
+        "max_tokens": 220,
+    }
+    req = request.Request(
+        base_url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+    try:
+        with request.urlopen(req, timeout=20) as resp:
+            raw = resp.read()
+    except Exception:
+        return None
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except json.JSONDecodeError:
+        return None
+    try:
+        content = data["choices"][0]["message"]["content"]
+    except Exception:
+        return None
+    content = content.strip()
+    if not content:
+        return None
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        match = re.search(r"\\{.*\\}", content, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group(0))
+            except json.JSONDecodeError:
+                return None
+    return None
+
+
+def _behavior_prompt(dog_names: List[str], forbidden_objects: List[str], countertop_watch: bool) -> str:
+    dog_list = ", ".join(dog_names) if dog_names else "unknown"
+    object_list = ", ".join(forbidden_objects) if forbidden_objects else "none"
+    countertop_text = "yes" if countertop_watch else "no"
+    return (
+        "Inspect the image for dog misbehavior. "
+        f"Known dog names: {dog_list}. "
+        f"Forbidden objects: {object_list}. "
+        f"Countertop watching enabled: {countertop_text}. "
+        "Return JSON with keys: alert (bool), reasons (list), description (string), dog_name (string or null). "
+        "Reasons can include: chewing, wrong_object, counter_surfing, destructive_play. "
+        "If unsure, set alert false."
+    )
+
+
 def _recognize_face(image_bytes: bytes, provider: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not provider:
         return None
@@ -232,11 +367,16 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
     if not isinstance(false_positives, list):
         false_positives = []
     false_positive_set = {str(item) for item in false_positives}
+    behavior_state = store.get_memory(conn, "vision.behavior.last_alerts") or {}
+    if not isinstance(behavior_state, dict):
+        behavior_state = {}
 
     max_cameras = int(module_cfg.get("max_cameras_per_run", 1))
     timeout_seconds = float(module_cfg.get("timeout_seconds", 8))
     ffmpeg_path = str(module_cfg.get("ffmpeg_path", "ffmpeg"))
     provider = module_cfg.get("provider", {})
+    behavior_cfg = module_cfg.get("behavior", {}) if isinstance(module_cfg.get("behavior"), dict) else {}
+    behavior_enabled = bool(behavior_cfg.get("enabled", False))
     min_confidence = float(provider.get("min_confidence", 0.7)) if isinstance(provider, dict) else 0.7
     api_key_env = provider.get("api_key_env") if isinstance(provider, dict) else None
     provider_configured = bool(
@@ -300,6 +440,27 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
     if not isinstance(subject_map, dict):
         subject_map = {}
     ha_people = _load_ha_people(conn)
+    llm_cfg = _load_llm_config(conn) if behavior_enabled else {}
+    alert_cooldown = int(behavior_cfg.get("alert_cooldown_minutes", 30))
+    behavior_camera_ids = behavior_cfg.get("camera_ids") or []
+    if not isinstance(behavior_camera_ids, list):
+        behavior_camera_ids = []
+    behavior_camera_ids = [str(item) for item in behavior_camera_ids if item]
+    dog_names = behavior_cfg.get("dog_names") or []
+    if not isinstance(dog_names, list):
+        dog_names = []
+    dog_names = [str(item) for item in dog_names if item]
+    forbidden_objects = behavior_cfg.get("forbidden_objects") or []
+    if not isinstance(forbidden_objects, list):
+        forbidden_objects = []
+    forbidden_objects = [str(item) for item in forbidden_objects if item]
+    countertop_watch = bool(behavior_cfg.get("countertop_watch", False))
+    visual_cfg = behavior_cfg.get("visual") or {}
+    if not isinstance(visual_cfg, dict):
+        visual_cfg = {}
+    audio_cfg = behavior_cfg.get("bark_audio") or {}
+    if not isinstance(audio_cfg, dict):
+        audio_cfg = {}
     for cam in cameras:
         if processed >= max_cameras:
             break
@@ -461,11 +622,78 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
                 )
             else:
                 stats["no_faces"] += 1
+        if behavior_enabled:
+            allowed = True
+            if behavior_camera_ids and str(camera_id) not in behavior_camera_ids:
+                allowed = False
+            if allowed:
+                last_ts = behavior_state.get(str(camera_id))
+                if isinstance(last_ts, str):
+                    try:
+                        last_dt = datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
+                        delta = datetime.now(timezone.utc) - last_dt
+                        if delta.total_seconds() < alert_cooldown * 60:
+                            allowed = False
+                    except ValueError:
+                        pass
+            if allowed:
+                reasons: List[str] = []
+                description = None
+                dog_name = None
+                if audio_cfg.get("enabled", False):
+                    audio_seconds = float(audio_cfg.get("seconds", 2))
+                    threshold_db = float(audio_cfg.get("threshold_db", -20.0))
+                    level_db = _capture_audio_level_db(rtsp_url, audio_seconds, ffmpeg_path)
+                    if level_db is not None and level_db >= threshold_db:
+                        reasons.append(f"barking (audio {level_db:.1f} dB)")
+                if visual_cfg.get("enabled", False) and llm_cfg.get("api_key"):
+                    prompt = _behavior_prompt(dog_names, forbidden_objects, countertop_watch)
+                    analysis = _call_openai_vision_json(prompt, frame, llm_cfg)
+                    if isinstance(analysis, dict) and analysis.get("alert") is True:
+                        analysis_reasons = analysis.get("reasons")
+                        if isinstance(analysis_reasons, list):
+                            for item in analysis_reasons:
+                                if item:
+                                    reasons.append(str(item))
+                        description = analysis.get("description") if analysis.get("description") else description
+                        dog_name = analysis.get("dog_name") if analysis.get("dog_name") else dog_name
+                if reasons:
+                    message = "Dog behavior alert"
+                    if cam.get("label"):
+                        message = f"Dog behavior alert at {cam.get('label')}"
+                    if dog_name:
+                        message += f" ({dog_name})"
+                    message += f": {', '.join(reasons)}"
+                    events.append(
+                        {
+                            "source": "vision",
+                            "type": "behavior.alert",
+                            "payload": {
+                                "message": message,
+                                "camera_id": camera_id,
+                                "label": cam.get("label"),
+                                "snapshot_path": str(snapshot_path) if snapshot_path else None,
+                                "snapshot_hash": snapshot_hash,
+                                "reasons": reasons,
+                                "description": description,
+                                "dog_name": dog_name,
+                                "report_url": "/ui/vision",
+                            },
+                            "severity": "warn",
+                        }
+                    )
+                    behavior_state[str(camera_id)] = _now_iso()
+                    try:
+                        act.notify_local(message, str(settings.audit_path()))
+                    except Exception:
+                        pass
         stats["cameras_processed"] = processed + 1
         processed += 1
 
     if subject_map:
         store.set_memory(conn, "vision.subject_person_map", subject_map)
+    if behavior_enabled:
+        store.set_memory(conn, "vision.behavior.last_alerts", behavior_state)
     store.set_memory(conn, "vision.stats", stats)
     if events:
         store.set_memory(conn, "vision.last", {"ts": _now_iso(), "events": events[-10:]})
