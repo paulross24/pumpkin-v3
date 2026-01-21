@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from . import module_config
+from . import settings
 from . import store
 
 
@@ -88,7 +90,7 @@ def _open_contacts(entities: Dict[str, Dict[str, Any]]) -> List[Tuple[str, Optio
     return open_items
 
 
-def _recent_motion(entities: Dict[str, Dict[str, Any]]) -> List[str]:
+def _recent_motion(entities: Dict[str, Dict[str, Any]], window_minutes: int = 5) -> List[str]:
     triggered: List[str] = []
     for entity_id, payload in entities.items():
         if not isinstance(entity_id, str) or not entity_id.startswith("binary_sensor."):
@@ -99,9 +101,21 @@ def _recent_motion(entities: Dict[str, Dict[str, Any]]) -> List[str]:
         if payload.get("state") != "on":
             continue
         minutes = _minutes_since(_entity_last_changed(payload))
-        if minutes is None or minutes <= 5:
+        if minutes is None or minutes <= window_minutes:
             triggered.append(_friendly_name(entity_id, payload))
     return triggered
+
+
+def _load_insights_cfg() -> Dict[str, Any]:
+    config_path = settings.modules_config_path()
+    if not config_path.exists():
+        return {}
+    try:
+        config = module_config.load_config(str(config_path))
+    except Exception:
+        return {}
+    module_cfg = config.get("modules", {}).get("insights", {})
+    return module_cfg if isinstance(module_cfg, dict) else {}
 
 
 def _new_devices(
@@ -135,8 +149,19 @@ def build_insights(
     prev_network_snapshot: Optional[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
     insights: List[Dict[str, Any]] = []
-    door_open_warn_minutes = 10
-    lights_on_warn_minutes = 30
+    cfg = _load_insights_cfg()
+    try:
+        door_open_warn_minutes = max(1, int(cfg.get("door_open_warn_minutes", 10)))
+    except Exception:
+        door_open_warn_minutes = 10
+    try:
+        lights_on_warn_minutes = max(5, int(cfg.get("lights_on_warn_minutes", 30)))
+    except Exception:
+        lights_on_warn_minutes = 30
+    try:
+        motion_recent_minutes = max(1, int(cfg.get("motion_recent_minutes", 5)))
+    except Exception:
+        motion_recent_minutes = 5
     if isinstance(system_snapshot, dict):
         load1 = (system_snapshot.get("loadavg") or {}).get("1m")
         if isinstance(load1, (int, float)) and load1 >= 2.0:
@@ -197,7 +222,7 @@ def build_insights(
                         "detail": f"Open: {', '.join(names[:4])}.",
                     }
                 )
-            motion = _recent_motion(ha_entities)
+            motion = _recent_motion(ha_entities, window_minutes=motion_recent_minutes)
             if motion:
                 insights.append(
                     {

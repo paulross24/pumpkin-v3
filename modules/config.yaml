@@ -117,3 +117,7 @@ modules:
     restart_voice: true
     reset_ha_cooldown: true
     rescan_network: true
+  insights:
+    door_open_warn_minutes: 10
+    lights_on_warn_minutes: 30
+    motion_recent_minutes: 5
