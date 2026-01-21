@@ -4883,6 +4883,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
             if path == "/ui/vision":
                 _send_html(self, 200, _load_voice_ui_asset("voice_ui_vision.html"))
                 return
+            if path == "/ui/dogwatch":
+                _send_html(self, 200, _load_voice_ui_asset("voice_ui_dogwatch.html"))
+                return
             if path == "/ui/inventory":
                 _send_html(self, 200, _load_voice_ui_asset("voice_ui_inventory.html"))
                 return

@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pumpkin Dog Watch</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #fff4e6;
+        --card: #fff;
+        --ink: #2f1d12;
+        --muted: #6b5b52;
+        --accent: #f08a3a;
+        --border: #efdfd2;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: "Georgia", "Times New Roman", serif;
+        background: radial-gradient(circle at top, #fff1db 0%, var(--bg) 45%, #ffe3c2 100%);
+        color: var(--ink);
+        min-height: 100vh;
+      }
+      header {
+        padding: 24px 28px 10px;
+      }
+      h1 {
+        margin: 0 0 6px;
+        font-size: 28px;
+      }
+      .sub {
+        color: var(--muted);
+        font-size: 14px;
+      }
+      .actions {
+        display: flex;
+        gap: 12px;
+        margin-top: 12px;
+      }
+      button {
+        border: 1px solid var(--border);
+        padding: 8px 12px;
+        border-radius: 999px;
+        background: var(--card);
+        cursor: pointer;
+        font-family: inherit;
+      }
+      main {
+        padding: 8px 24px 40px;
+        display: grid;
+        gap: 16px;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        padding: 18px;
+        box-shadow: 0 10px 20px rgba(99, 63, 40, 0.12);
+      }
+      .card h2 {
+        margin: 0 0 8px;
+        font-size: 18px;
+      }
+      .alert {
+        display: grid;
+        gap: 12px;
+        border-bottom: 1px dashed var(--border);
+        padding-bottom: 12px;
+        margin-bottom: 12px;
+      }
+      .alert:last-child {
+        border-bottom: none;
+        margin-bottom: 0;
+        padding-bottom: 0;
+      }
+      .meta {
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .thumb img {
+        width: 100%;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        cursor: pointer;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: rgba(240, 138, 58, 0.15);
+        color: #7a3a12;
+        font-size: 12px;
+        margin-right: 8px;
+      }
+      .lightbox {
+        position: fixed;
+        inset: 0;
+        background: rgba(15, 10, 6, 0.85);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        z-index: 50;
+      }
+      .lightbox.open {
+        display: flex;
+      }
+      .lightbox img {
+        max-width: min(92vw, 900px);
+        max-height: 85vh;
+        border-radius: 16px;
+        border: 2px solid rgba(255, 255, 255, 0.5);
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Dog Watch</h1>
+      <div class="sub">Kitchen camera behavior alerts for Roary + Ozzy.</div>
+      <div class="actions">
+        <button id="refresh">Refresh alerts</button>
+        <span class="pill" id="status">Loading…</span>
+      </div>
+    </header>
+    <main>
+      <section class="card" style="grid-column: 1 / -1">
+        <h2>Recent alerts</h2>
+        <div id="alerts"></div>
+      </section>
+    </main>
+    <div class="lightbox" id="lightbox" aria-hidden="true">
+      <img id="lightbox-img" alt="Dog watch snapshot" />
+    </div>
+    <script>
+      const alertsNode = document.getElementById("alerts");
+      const statusNode = document.getElementById("status");
+      const lightbox = document.getElementById("lightbox");
+      const lightboxImg = document.getElementById("lightbox-img");
+
+      const renderAlerts = (items) => {
+        alertsNode.innerHTML = "";
+        if (!items.length) {
+          alertsNode.textContent = "No dog behavior alerts yet.";
+          return;
+        }
+        items.forEach((item) => {
+          const card = document.createElement("div");
+          card.className = "alert";
+          const reasons = Array.isArray(item.reasons) ? item.reasons : [];
+          const snapshotUrl = item.snapshot_url || "";
+          card.innerHTML = `
+            <div>
+              <div><strong>${item.message || "Dog behavior alert"}</strong></div>
+              <div class="meta">${item.ts || "unknown time"}</div>
+              ${reasons.length ? `<div class="meta">Reasons: ${reasons.join(", ")}</div>` : ""}
+              ${item.description ? `<div class="meta">${item.description}</div>` : ""}
+            </div>
+            ${snapshotUrl ? `<div class="thumb"><img src="${snapshotUrl}" alt="Dog snapshot" /></div>` : ""}
+          `;
+          const img = card.querySelector("img");
+          if (img && snapshotUrl) {
+            img.addEventListener("click", () => {
+              lightboxImg.src = snapshotUrl;
+              lightbox.classList.add("open");
+              lightbox.setAttribute("aria-hidden", "false");
+            });
+          }
+          alertsNode.appendChild(card);
+        });
+      };
+
+      const load = async () => {
+        statusNode.textContent = "Loading…";
+        try {
+          const res = await fetch("/vision/alerts/recent?limit=30");
+          const data = await res.json();
+          const items = Array.isArray(data.items) ? data.items : [];
+          const filtered = items.filter(
+            (item) => item.type === "behavior.alert" && item.camera_id === "kitchen-cam"
+          );
+          renderAlerts(filtered);
+          statusNode.textContent = `${filtered.length} alerts`;
+        } catch (err) {
+          statusNode.textContent = "Load failed";
+          alertsNode.textContent = "Failed to load alerts.";
+        }
+      };
+
+      document.getElementById("refresh").addEventListener("click", load);
+      lightbox.addEventListener("click", () => {
+        lightbox.classList.remove("open");
+        lightbox.setAttribute("aria-hidden", "true");
+      });
+
+      load();
+    </script>
+  </body>
+</html>
