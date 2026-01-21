@@ -4995,6 +4995,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
                     cam_view = dict(cam)
                     cam_view["alert_unknown_faces"] = alert_enabled
                     camera_registry_view.append(cam_view)
+                vision_stats = store.get_memory(conn, "vision.stats")
+                if not isinstance(vision_stats, dict):
+                    vision_stats = None
                 car_telemetry = _car_telemetry_summary(conn)
                 inventory = inventory_mod.snapshot(conn)
                 opportunities = inventory_mod.opportunities(inventory)
@@ -5047,6 +5050,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "network_discovery": network_discovery,
                         "network_deep_scan": deep_scan_state,
                         "camera_registry": camera_registry_view,
+                        "vision_stats": vision_stats,
                         "car_telemetry": car_telemetry,
                         "inventory": inventory_mod.summary(inventory),
                         "opportunities": opportunities[:5],
@@ -5058,6 +5062,17 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "proposals": proposal_items,
                         "proposal_count": len(proposal_items),
                     },
+                )
+                return
+            if path == "/vision/stats":
+                conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+                stats = store.get_memory(conn, "vision.stats")
+                if not isinstance(stats, dict):
+                    stats = {}
+                _send_json(
+                    self,
+                    200,
+                    {"status": "ok", "stats": stats},
                 )
                 return
             if path == "/thoughts":
@@ -5141,6 +5156,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "/vision/unknown": {"get": {"summary": "List unknown face events"}},
                             "/vision/alerts/recent": {"get": {"summary": "List recent face alerts"}},
                             "/vision/recognized": {"get": {"summary": "List recognized face events"}},
+                            "/vision/stats": {"get": {"summary": "Vision pipeline stats"}},
                             "/vision/snapshot": {"get": {"summary": "Fetch a captured snapshot"}},
                             "/vision/false_positives": {"get": {"summary": "List false positive hashes"}},
                             "/notifications/test": {"post": {"summary": "Create a test alert"}},

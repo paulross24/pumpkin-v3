@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from . import act
 from . import module_config
 from . import settings
 from . import store
@@ -321,10 +322,11 @@ def _should_brief(
     conn,
     in_quiet_hours: bool,
     briefing_time: str,
+    memory_key: str,
 ) -> bool:
     if in_quiet_hours:
         return False
-    last_date = store.get_memory(conn, "insights.last_briefing_date")
+    last_date = store.get_memory(conn, memory_key)
     today = datetime.now().date().isoformat()
     if last_date == today:
         return False
@@ -365,21 +367,89 @@ def maybe_daily_briefing(
     insights: List[Dict[str, Any]],
     in_quiet_hours: bool,
     briefing_time: str = "08:00",
+    briefing_key: str = "daily",
 ) -> None:
-    if not _should_brief(conn, in_quiet_hours, briefing_time):
+    memory_key = f"insights.last_briefing_date.{briefing_key}"
+    if not _should_brief(conn, in_quiet_hours, briefing_time, memory_key):
         return
     summary = build_briefing(ha_summary, system_snapshot, insights)
     ts = datetime.now().isoformat()
-    store.set_memory(conn, "insights.last_briefing_date", datetime.now().date().isoformat())
+    store.set_memory(conn, memory_key, datetime.now().date().isoformat())
     store.set_memory(
         conn,
         "insights.last_briefing",
-        {"ts": ts, "summary": summary, "count": len(insights)},
+        {"ts": ts, "summary": summary, "count": len(insights), "type": briefing_key},
     )
     store.insert_event(
         conn,
         source="insight",
         event_type="insight.briefing",
-        payload={"ts": ts, "summary": summary, "count": len(insights)},
+        payload={"ts": ts, "summary": summary, "count": len(insights), "type": briefing_key},
         severity="info",
     )
+    try:
+        act.notify_local(f"Briefing: {summary}", str(settings.audit_path()))
+    except Exception:
+        pass
+
+
+def briefing_times() -> List[str]:
+    cfg = _load_insights_cfg()
+    times = cfg.get("briefing_times")
+    if isinstance(times, list):
+        cleaned = [str(item).strip() for item in times if str(item).strip()]
+        if cleaned:
+            return cleaned
+    return ["08:00", "20:00"]
+
+
+def maybe_event_briefing(
+    conn,
+    ha_summary: Dict[str, Any],
+    system_snapshot: Optional[Dict[str, Any]],
+    insights: List[Dict[str, Any]],
+    in_quiet_hours: bool,
+) -> None:
+    if in_quiet_hours:
+        return
+    cfg = _load_insights_cfg()
+    try:
+        min_minutes = max(5, int(cfg.get("event_briefing_min_minutes", 30)))
+    except Exception:
+        min_minutes = 30
+    last_ts = store.get_memory(conn, "insights.last_event_briefing_ts")
+    if isinstance(last_ts, str):
+        try:
+            parsed = datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
+        except Exception:
+            parsed = None
+        if parsed:
+            now = datetime.now(timezone.utc)
+            delta = (now - parsed).total_seconds() / 60.0
+            if delta < min_minutes:
+                return
+    warn_insights = [
+        item for item in insights
+        if isinstance(item, dict) and item.get("severity") in {"warn", "error"}
+    ]
+    if not warn_insights:
+        return
+    summary = build_briefing(ha_summary, system_snapshot, warn_insights)
+    ts = datetime.now(timezone.utc).isoformat()
+    store.set_memory(conn, "insights.last_event_briefing_ts", ts)
+    store.set_memory(
+        conn,
+        "insights.last_briefing",
+        {"ts": ts, "summary": summary, "count": len(warn_insights), "type": "event"},
+    )
+    store.insert_event(
+        conn,
+        source="insight",
+        event_type="insight.briefing",
+        payload={"ts": ts, "summary": summary, "count": len(warn_insights), "type": "event"},
+        severity="warn",
+    )
+    try:
+        act.notify_local(f"Alert briefing: {summary}", str(settings.audit_path()))
+    except Exception:
+        pass

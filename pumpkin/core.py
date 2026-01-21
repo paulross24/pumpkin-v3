@@ -828,7 +828,18 @@ def run_once() -> Dict[str, Any]:
         prev_network_snapshot=prev_network if isinstance(prev_network, dict) else {},
     )
     insights.record_insights(conn, insight_items)
-    insights.maybe_daily_briefing(
+    brief_times = insights.briefing_times()
+    for idx, briefing_time in enumerate(brief_times):
+        insights.maybe_daily_briefing(
+            conn,
+            ha_summary=ha_summary if isinstance(ha_summary, dict) else {},
+            system_snapshot=system_snapshot,
+            insights=insight_items,
+            in_quiet_hours=_in_quiet_hours(conn),
+            briefing_time=briefing_time,
+            briefing_key=f"daily-{idx}",
+        )
+    insights.maybe_event_briefing(
         conn,
         ha_summary=ha_summary if isinstance(ha_summary, dict) else {},
         system_snapshot=system_snapshot,

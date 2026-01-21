@@ -167,6 +167,27 @@
         color: var(--muted);
         font-size: 0.9rem;
       }
+      .stat-grid {
+        display: grid;
+        gap: 8px 16px;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        margin-top: 12px;
+      }
+      .stat-item {
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: #fff;
+        border: 1px solid var(--line);
+        display: grid;
+        gap: 4px;
+      }
+      .stat-item span {
+        color: var(--muted);
+        font-size: 0.8rem;
+      }
+      .stat-item strong {
+        font-size: 0.95rem;
+      }
       @media (max-width: 720px) {
         .face-row {
           grid-template-columns: 1fr;
@@ -192,6 +213,15 @@
       <div class="sub">Review unknown faces and enroll them into CompreFace.</div>
     </header>
     <main>
+      <section class="card">
+        <div class="row">
+          <span class="sub">Vision stats</span>
+          <button id="refresh-stats" class="secondary">Refresh stats</button>
+        </div>
+        <div class="meta" id="stats-status">Loading...</div>
+        <div class="stat-grid" id="stats-grid"></div>
+        <div class="faces" id="stats-snapshots" style="margin-top: 12px;"></div>
+      </section>
       <section class="card">
         <div class="row">
           <span class="sub">Recent alerts</span>
@@ -234,6 +264,9 @@
       const recognizedListNode = document.getElementById("recognized-list");
       const recognizedCountNode = document.getElementById("recognized-count");
       const countNode = document.getElementById("count");
+      const statsStatusNode = document.getElementById("stats-status");
+      const statsGridNode = document.getElementById("stats-grid");
+      const statsSnapshotsNode = document.getElementById("stats-snapshots");
       const lightbox = document.getElementById("lightbox");
       const lightboxImg = document.getElementById("lightbox-img");
       const lightboxClose = document.getElementById("lightbox-close");
@@ -537,6 +570,81 @@
         }
       };
 
+      const renderStats = (stats) => {
+        statsGridNode.innerHTML = "";
+        statsSnapshotsNode.innerHTML = "";
+        if (!stats || Object.keys(stats).length === 0) {
+          statsStatusNode.textContent = "No stats yet.";
+          return;
+        }
+        const ts = stats.ts ? new Date(stats.ts).toLocaleString() : "n/a";
+        const items = [
+          { label: "Last run", value: ts },
+          { label: "Cameras", value: `${stats.cameras_processed ?? 0}/${stats.cameras_total ?? 0}` },
+          { label: "Captures ok/failed", value: `${stats.captures_ok ?? 0}/${stats.captures_failed ?? 0}` },
+          { label: "Faces detected", value: stats.faces_detected ?? 0 },
+          { label: "Recognized", value: stats.recognized ?? 0 },
+          { label: "Unknown", value: stats.unknown ?? 0 },
+          { label: "No faces", value: stats.no_faces ?? 0 },
+          { label: "Provider configured", value: stats.provider_configured ? "yes" : "no" },
+        ];
+        if (stats.last_error) {
+          items.push({
+            label: "Last error",
+            value: `${stats.last_error.camera_id || "camera"} • ${stats.last_error.error || "error"}`,
+          });
+        }
+        items.forEach((item) => {
+          const node = document.createElement("div");
+          node.className = "stat-item";
+          node.innerHTML = `<span>${item.label}</span><strong>${item.value}</strong>`;
+          statsGridNode.appendChild(node);
+        });
+        const snaps = Array.isArray(stats.snapshots) ? stats.snapshots : [];
+        if (snaps.length) {
+          statsStatusNode.textContent = `Latest snapshots (${snaps.length})`;
+          snaps.forEach((snap) => {
+            const card = document.createElement("div");
+            card.className = "face-card";
+            const label = snap.label || snap.camera_id || "camera";
+            const snapshotUrl = snap.snapshot_path
+              ? `/vision/snapshot?path=${encodeURIComponent(snap.snapshot_path)}`
+              : "";
+            card.innerHTML = `
+              <div class="row">
+                <strong>${label}</strong>
+                <span class="meta">${snap.camera_id || ""}</span>
+              </div>
+              <div class="thumb">
+                <img src="${snapshotUrl}" alt="${label} snapshot" />
+              </div>
+            `;
+            const img = card.querySelector("img");
+            if (img && snapshotUrl) {
+              img.addEventListener("click", () => {
+                lightboxImg.src = snapshotUrl;
+                currentLightboxBox = null;
+                lightbox.classList.add("open");
+                lightbox.setAttribute("aria-hidden", "false");
+              });
+            }
+            statsSnapshotsNode.appendChild(card);
+          });
+        } else {
+          statsStatusNode.textContent = "No snapshots yet.";
+        }
+      };
+
+      const loadStats = async () => {
+        try {
+          const res = await fetch("/vision/stats");
+          const data = await res.json();
+          renderStats(data.stats || {});
+        } catch (err) {
+          statsStatusNode.textContent = "Failed to load stats.";
+        }
+      };
+
       const loadAlerts = async () => {
         try {
           const res = await fetch("/vision/alerts/recent?limit=10");
@@ -564,6 +672,7 @@
       document.getElementById("refresh").addEventListener("click", load);
       document.getElementById("refresh-alerts").addEventListener("click", loadAlerts);
       document.getElementById("refresh-recognized").addEventListener("click", loadRecognized);
+      document.getElementById("refresh-stats").addEventListener("click", loadStats);
       document.getElementById("clear-unknown").addEventListener("click", async () => {
         const ok = confirm("Clear all unknown face entries?");
         if (!ok) return;
@@ -622,6 +731,7 @@
           lightboxBox.style.display = "none";
         }
       });
+      loadStats();
       loadAlerts();
       loadRecognized();
       load();

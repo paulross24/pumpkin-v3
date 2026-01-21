@@ -238,6 +238,28 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
     ffmpeg_path = str(module_cfg.get("ffmpeg_path", "ffmpeg"))
     provider = module_cfg.get("provider", {})
     min_confidence = float(provider.get("min_confidence", 0.7)) if isinstance(provider, dict) else 0.7
+    api_key_env = provider.get("api_key_env") if isinstance(provider, dict) else None
+    provider_configured = bool(
+        isinstance(provider, dict)
+        and provider.get("type") == "compreface"
+        and provider.get("endpoint")
+        and api_key_env
+        and os.getenv(str(api_key_env))
+    )
+    stats = {
+        "ts": _now_iso(),
+        "provider_configured": provider_configured,
+        "cameras_total": len(cameras),
+        "cameras_processed": 0,
+        "captures_ok": 0,
+        "captures_failed": 0,
+        "faces_detected": 0,
+        "recognized": 0,
+        "unknown": 0,
+        "no_faces": 0,
+        "last_error": None,
+        "snapshots": [],
+    }
 
     def _emit_unknown_alert(
         camera_id: str,
@@ -263,7 +285,7 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
                     "snapshot_path": str(snapshot_path) if snapshot_path else None,
                     "snapshot_hash": snapshot_hash,
                     "face_box": face_box,
-                    "report_url": "/ui/network",
+                    "report_url": "/ui/vision",
                 },
                 "severity": "warn",
             }
@@ -286,6 +308,7 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
         camera_id = cam.get("id") or cam.get("ip") or "camera"
         rtsp_url = cameras_mod.build_rtsp_url(cam)
         if not rtsp_url:
+            stats["cameras_processed"] = processed + 1
             events.append(
                 {
                     "source": "vision",
@@ -297,6 +320,9 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
             continue
         frame = _capture_rtsp(rtsp_url, timeout_seconds, ffmpeg_path)
         if not frame:
+            stats["captures_failed"] += 1
+            stats["last_error"] = {"camera_id": camera_id, "error": "capture_failed"}
+            stats["cameras_processed"] = processed + 1
             events.append(
                 {
                     "source": "vision",
@@ -306,10 +332,22 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
                 }
             )
             continue
+        stats["captures_ok"] += 1
         snapshot_path = _save_snapshot(str(camera_id), frame)
         snapshot_hash = hashlib.sha256(frame).hexdigest() if frame else None
+        if snapshot_path:
+            stats["snapshots"].append(
+                {
+                    "camera_id": camera_id,
+                    "label": cam.get("label"),
+                    "snapshot_path": str(snapshot_path),
+                    "snapshot_hash": snapshot_hash,
+                }
+            )
+            stats["snapshots"] = stats["snapshots"][-5:]
         recognition = _recognize_face(frame, provider if isinstance(provider, dict) else {})
         face_box = recognition.get("box") if isinstance(recognition, dict) else None
+        face_detected = bool(recognition.get("face_detected")) if isinstance(recognition, dict) else False
         if snapshot_hash and snapshot_hash in false_positive_set:
             events.append(
                 {
@@ -325,6 +363,11 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
                     "severity": "info",
                 }
             )
+            if face_detected:
+                stats["faces_detected"] += 1
+                stats["unknown"] += 1
+            else:
+                stats["no_faces"] += 1
             processed += 1
             continue
         if recognition and recognition.get("name") and recognition.get("confidence") is not None:
@@ -358,8 +401,9 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
                         "severity": "info",
                     }
                 )
+                stats["faces_detected"] += 1
+                stats["recognized"] += 1
             else:
-                face_detected = bool(recognition.get("face_detected")) if isinstance(recognition, dict) else False
                 if face_detected:
                     unknown_payload = {
                         "camera_id": camera_id,
@@ -373,9 +417,11 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
                             "source": "vision",
                             "type": "face.unknown",
                             "payload": unknown_payload,
-                            "severity": "info",
-                        }
-                    )
+                        "severity": "info",
+                    }
+                )
+                    stats["faces_detected"] += 1
+                    stats["unknown"] += 1
                     _emit_unknown_alert(
                         camera_id,
                         cam.get("label"),
@@ -384,8 +430,9 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
                         snapshot_hash,
                         face_box,
                     )
+                else:
+                    stats["no_faces"] += 1
         else:
-            face_detected = bool(recognition.get("face_detected")) if isinstance(recognition, dict) else False
             if face_detected:
                 unknown_payload = {
                     "camera_id": camera_id,
@@ -399,9 +446,11 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
                         "source": "vision",
                         "type": "face.unknown",
                         "payload": unknown_payload,
-                        "severity": "info",
-                    }
-                )
+                    "severity": "info",
+                }
+            )
+                stats["faces_detected"] += 1
+                stats["unknown"] += 1
                 _emit_unknown_alert(
                     camera_id,
                     cam.get("label"),
@@ -410,10 +459,14 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
                     snapshot_hash,
                     face_box,
                 )
+            else:
+                stats["no_faces"] += 1
+        stats["cameras_processed"] = processed + 1
         processed += 1
 
     if subject_map:
         store.set_memory(conn, "vision.subject_person_map", subject_map)
+    store.set_memory(conn, "vision.stats", stats)
     if events:
         store.set_memory(conn, "vision.last", {"ts": _now_iso(), "events": events[-10:]})
     return events

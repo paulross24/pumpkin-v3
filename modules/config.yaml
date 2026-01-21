@@ -88,7 +88,7 @@ modules:
       type: "compreface"
       endpoint: "http://127.0.0.1:8000/api/v1/recognition/recognize"
       api_key_env: "PUMPKIN_FACE_API_KEY"
-      min_confidence: 0.55
+      min_confidence: 0.45
       timeout_seconds: 6
     cameras:
       - id: ring-doorbell
@@ -121,6 +121,10 @@ modules:
     door_open_warn_minutes: 10
     lights_on_warn_minutes: 30
     motion_recent_minutes: 5
+    briefing_times:
+      - "08:00"
+      - "20:00"
+    event_briefing_min_minutes: 30
   voice:
     confirmations_enabled: false
     confirm_llm_low_confidence: false
