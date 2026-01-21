@@ -1751,13 +1751,49 @@ def _home_summary_query(text: str) -> bool:
     )
 
 
-def _parse_control_command(text: str) -> Dict[str, Any] | None:
+def _normalize_control_text(text: str) -> str:
     lowered = text.lower().strip()
+    lowered = re.sub(r"[!?.,]", " ", lowered)
+    fillers = [
+        "please",
+        "can you",
+        "could you",
+        "would you",
+        "do you mind",
+        "hey pumpkin",
+        "ok pumpkin",
+        "pumpkin",
+    ]
+    for phrase in fillers:
+        lowered = lowered.replace(phrase, " ")
+    lowered = re.sub(r"\ball of the\b", "all", lowered)
+    lowered = re.sub(r"\bturn\s+off\b", "turn off", lowered)
+    lowered = re.sub(r"\bturn\s+on\b", "turn on", lowered)
+    lowered = re.sub(r"\bswitch\s+off\b", "turn off", lowered)
+    lowered = re.sub(r"\bswitch\s+on\b", "turn on", lowered)
+    lowered = re.sub(r"\bpower\s+off\b", "turn off", lowered)
+    lowered = re.sub(r"\bpower\s+on\b", "turn on", lowered)
+    lowered = re.sub(r"\bshut\s+off\b", "turn off", lowered)
+    lowered = re.sub(r"\bshut\s+down\b", "turn off", lowered)
+    lowered = re.sub(r"\bactivate\b", "turn on", lowered)
+    lowered = re.sub(r"\bdeactivate\b", "turn off", lowered)
+    lowered = re.sub(r"\benable\b", "turn on", lowered)
+    lowered = re.sub(r"\bdisable\b", "turn off", lowered)
+    lowered = re.sub(r"\blights?\s+(in|at|on)\s+([a-z0-9 _-]+)", r"\2 lights", lowered)
+    lowered = re.sub(r"\s+", " ", lowered).strip()
+    return lowered
+
+
+def _parse_control_command(text: str) -> Dict[str, Any] | None:
+    lowered = _normalize_control_text(text)
     match = re.search(r"\bturn\s+(on|off)\s+(.+)", lowered)
     if match:
         return {"action": f"turn_{match.group(1)}", "target": match.group(2).strip()}
     match = re.search(r"\bturn\s+(.+)\s+(on|off)\b", lowered)
     if match:
+        return {"action": f"turn_{match.group(2)}", "target": match.group(1).strip()}
+    match = re.search(r"\b(.+)\s+(on|off)\b", lowered)
+    if match and any(word in match.group(1) for word in ("light", "lights", "switch", "fan")):
         return {"action": f"turn_{match.group(2)}", "target": match.group(1).strip()}
     match = re.search(r"\bswitch\s+(on|off)\s+(.+)", lowered)
     if match:
@@ -1774,6 +1810,9 @@ def _parse_control_command(text: str) -> Dict[str, Any] | None:
     match = re.search(r"\b(lock|unlock)\s+(.+)", lowered)
     if match:
         return {"action": match.group(1), "target": match.group(2).strip()}
+    match = re.search(r"\b(start|stop)\s+(.+)", lowered)
+    if match:
+        return {"action": "turn_on" if match.group(1) == "start" else "turn_off", "target": match.group(2).strip()}
     match = re.search(
         r"\bset\s+(.+)\s+to\s+(\d{1,2})(?:\s*degrees|\s*c)?\b", lowered
     )
@@ -1833,11 +1872,12 @@ def _bulk_action_prompt(
 def _find_entity_candidates(
     entities: Dict[str, Dict[str, Any]], target: str, domain_hint: str | None = None
 ) -> List[str]:
-    needle = target.lower().strip()
+    needle = _normalize_control_text(target)
     needles = [needle]
-    for prefix in ("the ", "a ", "an "):
+    for prefix in ("the ", "a ", "an ", "my ", "our ", "your "):
         if needle.startswith(prefix):
             needles.append(needle[len(prefix) :])
+    stopwords = {"please", "lights", "light", "switch", "switches", "fan", "fans"}
     matches: List[str] = []
     for entity_id, payload in entities.items():
         if not isinstance(entity_id, str):
@@ -1850,6 +1890,9 @@ def _find_entity_candidates(
         if isinstance(attributes, dict):
             name = str(attributes.get("friendly_name") or "").lower()
         for candidate in needles:
+            cleaned = " ".join(word for word in candidate.split() if word not in stopwords)
+            if cleaned:
+                candidate = cleaned
             if candidate == entity_id.lower() or candidate == tail:
                 matches.append(entity_id)
                 break
@@ -1860,12 +1903,16 @@ def _find_entity_candidates(
 
 
 def _match_entity(entities: Dict[str, Dict[str, Any]], target: str) -> str | None:
-    needle = target.lower().strip()
+    needle = _normalize_control_text(target)
     needles = [needle]
-    for prefix in ("the ", "a ", "an "):
+    for prefix in ("the ", "a ", "an ", "my ", "our ", "your "):
         if needle.startswith(prefix):
             needles.append(needle[len(prefix) :])
+    stopwords = {"please", "lights", "light", "switch", "switches", "fan", "fans"}
     for candidate in needles:
+        cleaned = " ".join(word for word in candidate.split() if word not in stopwords)
+        if cleaned:
+            candidate = cleaned
         for entity_id, payload in entities.items():
             if not isinstance(entity_id, str):
                 continue
@@ -1937,7 +1984,15 @@ def _area_domain_hint(target: str) -> str | None:
 
 def _wants_area_control(target: str) -> bool:
     lowered = target.lower()
-    return "all" in lowered or "lights" in lowered or "switches" in lowered or "fans" in lowered
+    return (
+        "all" in lowered
+        or "lights" in lowered
+        or "light" in lowered
+        or "switches" in lowered
+        or "switch" in lowered
+        or "fans" in lowered
+        or "fan" in lowered
+    )
 
 
 def _extract_area_hint(target: str) -> str:
