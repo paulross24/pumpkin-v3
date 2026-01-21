@@ -81,7 +81,7 @@ modules:
   face.recognition:
     enabled: true
     scan_interval_seconds: 300
-    max_cameras_per_run: 1
+    max_cameras_per_run: 2
     timeout_seconds: 10
     ffmpeg_path: "ffmpeg"
     provider:
