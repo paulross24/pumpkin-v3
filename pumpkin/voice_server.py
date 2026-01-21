@@ -4130,6 +4130,41 @@ def _list_unknown_faces(conn, limit: int = 50) -> list[Dict[str, Any]]:
     return results
 
 
+def _list_face_alerts(conn, limit: int = 25) -> list[Dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM events WHERE type = ? ORDER BY id DESC LIMIT ?",
+        ("face.alert", int(limit)),
+    ).fetchall()
+    results: list[Dict[str, Any]] = []
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"])
+        except Exception:
+            payload = {}
+        snapshot_path = payload.get("snapshot_path") if isinstance(payload, dict) else None
+        snapshot_url = None
+        safe_path = None
+        if isinstance(snapshot_path, str):
+            safe_path = _safe_snapshot_path(snapshot_path)
+        if safe_path:
+            snapshot_url = f"/vision/snapshot?path={quote(str(safe_path))}"
+        results.append(
+            {
+                "id": row["id"],
+                "ts": row["ts"],
+                "severity": row["severity"],
+                "camera_id": payload.get("camera_id") if isinstance(payload, dict) else None,
+                "label": payload.get("label") if isinstance(payload, dict) else None,
+                "message": payload.get("message") if isinstance(payload, dict) else None,
+                "snapshot_path": snapshot_path,
+                "snapshot_url": snapshot_url,
+                "snapshot_hash": payload.get("snapshot_hash") if isinstance(payload, dict) else None,
+                "face_box": payload.get("face_box") if isinstance(payload, dict) else None,
+            }
+        )
+    return results
+
+
 def _load_network_module_cfg() -> Dict[str, Any]:
     config_path = settings.modules_config_path()
     if not config_path.exists():
@@ -4575,6 +4610,12 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 unknown = _list_unknown_faces(conn, limit=limit)
                 _send_json(self, 200, {"count": len(unknown), "items": unknown})
                 return
+            if path == "/vision/alerts/recent":
+                limit = _parse_limit(params.get("limit", [None])[0], default=10)
+                conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+                alerts = _list_face_alerts(conn, limit=limit)
+                _send_json(self, 200, {"count": len(alerts), "items": alerts})
+                return
             if path == "/vision/false_positives":
                 conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
                 disabled = store.get_memory(conn, "vision.false_positives") or []
@@ -4973,6 +5014,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "/thoughts": {"get": {"summary": "Recent thought stream"}},
                             "/vision/alerts": {"get": {"summary": "Unknown face alert settings"}},
                             "/vision/unknown": {"get": {"summary": "List unknown face events"}},
+                            "/vision/alerts/recent": {"get": {"summary": "List recent face alerts"}},
                             "/vision/snapshot": {"get": {"summary": "Fetch a captured snapshot"}},
                             "/vision/false_positives": {"get": {"summary": "List false positive hashes"}},
                             "/notifications/test": {"post": {"summary": "Create a test alert"}},

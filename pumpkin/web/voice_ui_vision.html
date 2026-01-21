@@ -194,6 +194,14 @@
     <main>
       <section class="card">
         <div class="row">
+          <span class="sub">Recent alerts</span>
+          <button id="refresh-alerts" class="secondary">Refresh alerts</button>
+        </div>
+        <div class="meta" id="alert-count">0 alerts</div>
+        <div class="faces" id="alert-list" style="margin-top: 12px;">Loading...</div>
+      </section>
+      <section class="card">
+        <div class="row">
           <span class="sub" id="count">0 unknown faces</span>
           <button id="refresh" class="secondary">Refresh</button>
           <button id="clear-unknown" class="secondary">Clear unknowns</button>
@@ -213,6 +221,8 @@
     </div>
     <script>
       const listNode = document.getElementById("face-list");
+      const alertListNode = document.getElementById("alert-list");
+      const alertCountNode = document.getElementById("alert-count");
       const countNode = document.getElementById("count");
       const lightbox = document.getElementById("lightbox");
       const lightboxImg = document.getElementById("lightbox-img");
@@ -220,6 +230,78 @@
       const lightboxFullscreen = document.getElementById("lightbox-fullscreen");
       const lightboxBox = document.getElementById("lightbox-box");
       let currentLightboxBox = null;
+
+      const renderAlerts = (items) => {
+        alertListNode.innerHTML = "";
+        if (!items.length) {
+          alertListNode.textContent = "No face alerts yet.";
+          return;
+        }
+        items.forEach((item) => {
+          const card = document.createElement("div");
+          card.className = "face-card";
+          const label = item.label || item.camera_id || "camera";
+          const snapshotUrl = item.snapshot_url || "";
+          const time = item.ts || "unknown time";
+          const message = item.message || "Unknown face detected";
+          const faceBox = item.face_box ? JSON.stringify(item.face_box) : "";
+          card.innerHTML = `
+            <div class="face-row">
+              <div>
+                ${snapshotUrl ? `<div class="thumb" data-box='${faceBox}'>
+                  <img src="${snapshotUrl}" alt="Face alert" data-snapshot="${snapshotUrl}" />
+                  <div class="face-box"></div>
+                </div>` : "<div class='meta'>No snapshot</div>"}
+              </div>
+              <div>
+                <div><strong>${label}</strong></div>
+                <div class="meta">${time}</div>
+                <div class="meta">${message}</div>
+              </div>
+            </div>
+          `;
+          const img = card.querySelector("img");
+          const thumb = card.querySelector(".thumb");
+          const boxNode = card.querySelector(".face-box");
+          if (thumb && boxNode && item.face_box) {
+            const box = item.face_box;
+            const applyBox = () => {
+              const imgEl = thumb.querySelector("img");
+              if (!imgEl || !imgEl.naturalWidth || !imgEl.naturalHeight) return;
+              const scaleX = imgEl.clientWidth / imgEl.naturalWidth;
+              const scaleY = imgEl.clientHeight / imgEl.naturalHeight;
+              const xMin = Number(box.x_min ?? 0);
+              const yMin = Number(box.y_min ?? 0);
+              const xMax = Number(box.x_max ?? 0);
+              const yMax = Number(box.y_max ?? 0);
+              const left = xMin * scaleX;
+              const top = yMin * scaleY;
+              const width = Math.max(1, (xMax - xMin) * scaleX);
+              const height = Math.max(1, (yMax - yMin) * scaleY);
+              boxNode.style.left = `${left}px`;
+              boxNode.style.top = `${top}px`;
+              boxNode.style.width = `${width}px`;
+              boxNode.style.height = `${height}px`;
+              boxNode.style.display = "block";
+            };
+            if (img) {
+              img.addEventListener("load", applyBox);
+              if (img.complete) {
+                applyBox();
+              }
+            }
+          }
+          if (img && snapshotUrl) {
+            img.addEventListener("click", () => {
+              lightboxImg.src = snapshotUrl;
+              currentLightboxBox = item.face_box || null;
+              lightbox.classList.add("open");
+              lightbox.setAttribute("aria-hidden", "false");
+            });
+          }
+          alertListNode.appendChild(card);
+        });
+      };
 
       const render = (items) => {
         listNode.innerHTML = "";
@@ -371,7 +453,20 @@
         }
       };
 
+      const loadAlerts = async () => {
+        try {
+          const res = await fetch("/vision/alerts/recent?limit=10");
+          const data = await res.json();
+          const items = Array.isArray(data.items) ? data.items : [];
+          alertCountNode.textContent = `${data.count ?? items.length} alerts`;
+          renderAlerts(items);
+        } catch (err) {
+          alertListNode.textContent = "Failed to load alerts.";
+        }
+      };
+
       document.getElementById("refresh").addEventListener("click", load);
+      document.getElementById("refresh-alerts").addEventListener("click", loadAlerts);
       document.getElementById("clear-unknown").addEventListener("click", async () => {
         const ok = confirm("Clear all unknown face entries?");
         if (!ok) return;
@@ -430,6 +525,7 @@
           lightboxBox.style.display = "none";
         }
       });
+      loadAlerts();
       load();
     </script>
   </body>

@@ -18,6 +18,39 @@ from . import cameras as cameras_mod
 from . import settings, store
 
 
+def _load_ha_people(conn) -> List[Dict[str, Any]]:
+    summary = store.get_memory(conn, "homeassistant.summary")
+    if isinstance(summary, dict):
+        people = summary.get("people")
+        if isinstance(people, list):
+            return [item for item in people if isinstance(item, dict)]
+    entities = store.get_memory(conn, "homeassistant.entities")
+    people = []
+    if isinstance(entities, dict):
+        for entity_id, payload in entities.items():
+            if not isinstance(entity_id, str) or not entity_id.startswith("person."):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            attributes = payload.get("attributes", {}) if isinstance(payload.get("attributes"), dict) else {}
+            name = attributes.get("friendly_name") or entity_id
+            people.append({"entity_id": entity_id, "name": str(name), "state": payload.get("state")})
+    return people
+
+
+def _match_ha_person(name: str, people: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not name:
+        return None
+    needle = name.strip().lower()
+    for person in people:
+        pname = str(person.get("name") or "").strip().lower()
+        entity_id = str(person.get("entity_id") or "")
+        entity_tail = entity_id.split(".", 1)[-1].lower() if "." in entity_id else entity_id.lower()
+        if needle == pname or needle == entity_id.lower() or needle == entity_tail:
+            return person
+    return None
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -206,7 +239,14 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
     provider = module_cfg.get("provider", {})
     min_confidence = float(provider.get("min_confidence", 0.7)) if isinstance(provider, dict) else 0.7
 
-    def _emit_unknown_alert(camera_id: str, label: Optional[str], snapshot_path: Optional[Path], enabled: bool) -> None:
+    def _emit_unknown_alert(
+        camera_id: str,
+        label: Optional[str],
+        snapshot_path: Optional[Path],
+        enabled: bool,
+        snapshot_hash: Optional[str],
+        face_box: Optional[Dict[str, Any]],
+    ) -> None:
         if not enabled:
             return
         message = f"Unknown face detected"
@@ -221,6 +261,8 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
                     "camera_id": camera_id,
                     "label": label,
                     "snapshot_path": str(snapshot_path) if snapshot_path else None,
+                    "snapshot_hash": snapshot_hash,
+                    "face_box": face_box,
                     "report_url": "/ui/network",
                 },
                 "severity": "warn",
@@ -232,6 +274,10 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
             pass
 
     processed = 0
+    subject_map = store.get_memory(conn, "vision.subject_person_map") or {}
+    if not isinstance(subject_map, dict):
+        subject_map = {}
+    ha_people = _load_ha_people(conn)
     for cam in cameras:
         if processed >= max_cameras:
             break
@@ -283,6 +329,17 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
             continue
         if recognition and recognition.get("name") and recognition.get("confidence") is not None:
             if float(recognition["confidence"]) >= min_confidence:
+                subject = recognition.get("name")
+                match = None
+                if isinstance(subject, str) and subject in subject_map:
+                    match = subject_map.get(subject)
+                if not match and isinstance(subject, str):
+                    match = _match_ha_person(subject, ha_people)
+                    if match:
+                        subject_map[subject] = {
+                            "entity_id": match.get("entity_id"),
+                            "name": match.get("name"),
+                        }
                 events.append(
                     {
                         "source": "vision",
@@ -295,6 +352,8 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
                             "snapshot_path": str(snapshot_path) if snapshot_path else None,
                             "snapshot_hash": snapshot_hash,
                             "face_box": face_box,
+                            "ha_person_id": match.get("entity_id") if isinstance(match, dict) else None,
+                            "ha_person_name": match.get("name") if isinstance(match, dict) else None,
                         },
                         "severity": "info",
                     }
@@ -322,6 +381,8 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
                         cam.get("label"),
                         snapshot_path,
                         bool(cam.get("alert_unknown_faces", True)) and camera_id not in disabled_set,
+                        snapshot_hash,
+                        face_box,
                     )
         else:
             face_detected = bool(recognition.get("face_detected")) if isinstance(recognition, dict) else False
@@ -346,9 +407,13 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
                     cam.get("label"),
                     snapshot_path,
                     bool(cam.get("alert_unknown_faces", True)) and camera_id not in disabled_set,
+                    snapshot_hash,
+                    face_box,
                 )
         processed += 1
 
+    if subject_map:
+        store.set_memory(conn, "vision.subject_person_map", subject_map)
     if events:
         store.set_memory(conn, "vision.last", {"ts": _now_iso(), "events": events[-10:]})
     return events
