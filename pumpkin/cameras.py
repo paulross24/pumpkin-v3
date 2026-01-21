@@ -117,6 +117,12 @@ def sync_registry(
             key = _camera_key(entry)
             registry_by_key[key] = _merge_camera(registry_by_key.get(key, {}), entry)
 
+    known_ips = {
+        cam.get("ip")
+        for cam in registry_by_key.values()
+        if isinstance(cam, dict) and isinstance(cam.get("ip"), str)
+    }
+
     useful_ips = {
         item.get("ip")
         for item in useful
@@ -129,6 +135,8 @@ def sync_registry(
                 continue
             ip = device.get("ip")
             if not isinstance(ip, str):
+                continue
+            if ip in known_ips:
                 continue
             if ip not in useful_ips:
                 continue
