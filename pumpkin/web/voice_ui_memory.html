@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pumpkin Memory Console</title>
+    <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='29' y='10' width='6' height='12' fill='%235b4b41'/><circle cx='32' cy='36' r='20' fill='%23e67c2e'/><circle cx='20' cy='36' r='14' fill='%23f08a3a' opacity='0.85'/><circle cx='44' cy='36' r='14' fill='%23f08a3a' opacity='0.85'/></svg>" />
+    <style>
+      :root {
+        --bg: #f6efe8;
+        --bg-accent: #f2d6b5;
+        --ink: #2a1b12;
+        --muted: #5b4b41;
+        --pumpkin: #e67c2e;
+        --pumpkin-dark: #b95519;
+        --card: #fff8f2;
+        --line: #e5d6c6;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Iowan Old Style", "Palatino", "Bookman", "Georgia", serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at 12% 10%, rgba(230, 124, 46, 0.15), transparent 40%),
+          linear-gradient(160deg, var(--bg), var(--bg-accent));
+        min-height: 100vh;
+      }
+      header {
+        padding: 28px 24px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .title {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 26px;
+        font-weight: 700;
+      }
+      .pumpkin-icon { width: 24px; height: 24px; flex: 0 0 auto; }
+      .sub { color: var(--muted); }
+      main {
+        padding: 12px 24px 40px;
+        display: grid;
+        gap: 16px;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 16px;
+        box-shadow: 0 12px 32px rgba(50, 33, 22, 0.08);
+      }
+      .section-title {
+        font-size: 14px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+      .list {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        display: grid;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+      .pill {
+        display: inline-block;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: rgba(230, 124, 46, 0.12);
+        color: var(--pumpkin-dark);
+        font-size: 12px;
+        font-weight: 600;
+      }
+      button {
+        border: 1px solid var(--line);
+        background: var(--card);
+        color: var(--ink);
+        padding: 8px 12px;
+        border-radius: 10px;
+        cursor: pointer;
+      }
+      .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      a { color: var(--pumpkin-dark); text-decoration: none; }
+      .turns { font-family: "SFMono-Regular", Menlo, Monaco, Consolas, monospace; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="title">
+        <svg class="pumpkin-icon" viewBox="0 0 64 64" aria-hidden="true">
+          <rect x="29" y="10" width="6" height="12" fill="var(--muted)" />
+          <circle cx="32" cy="36" r="20" fill="var(--pumpkin)" />
+          <circle cx="20" cy="36" r="14" fill="#f08a3a" opacity="0.85" />
+          <circle cx="44" cy="36" r="14" fill="#f08a3a" opacity="0.85" />
+        </svg>
+        Memory Console
+      </div>
+      <div class="sub">
+        Unified profile and conversation memory across devices.
+        <a href="/ui">Back to dashboard →</a>
+      </div>
+    </header>
+    <main>
+      <section class="card">
+        <div class="row" style="margin-bottom: 8px;">
+          <span class="pill" id="profile-name">Unknown</span>
+          <button id="refresh">Refresh</button>
+        </div>
+        <div class="section-title">Profile</div>
+        <ul class="list" id="profile-list"></ul>
+      </section>
+      <section class="card">
+        <div class="section-title">Preferences</div>
+        <ul class="list" id="pref-list"></ul>
+      </section>
+      <section class="card">
+        <div class="section-title">Conversation Summary</div>
+        <ul class="list" id="summary-list"></ul>
+      </section>
+      <section class="card">
+        <div class="section-title">Recent Turns</div>
+        <ul class="list turns" id="turn-list"></ul>
+      </section>
+    </main>
+    <script>
+      const setList = (node, items, empty = "None") => {
+        node.innerHTML = "";
+        if (!items.length) {
+          const li = document.createElement("li");
+          li.textContent = empty;
+          node.appendChild(li);
+          return;
+        }
+        items.forEach((item) => {
+          const li = document.createElement("li");
+          li.textContent = item;
+          node.appendChild(li);
+        });
+      };
+
+      const profileName = document.getElementById("profile-name");
+      const profileList = document.getElementById("profile-list");
+      const prefList = document.getElementById("pref-list");
+      const summaryList = document.getElementById("summary-list");
+      const turnList = document.getElementById("turn-list");
+
+      const load = async () => {
+        try {
+          const res = await fetch("/memory");
+          const data = await res.json();
+          const profile = data.profile || {};
+          const memory = data.memory || {};
+          profileName.textContent = profile.name || "Unknown";
+          setList(profileList, [
+            `device: ${data.device || "n/a"}`,
+            `ha user: ${profile.ha_user_id || "n/a"}`,
+            `ha person: ${profile.ha_person_id || "n/a"}`,
+            `last seen: ${profile.last_seen_ts || "n/a"}`,
+            `turns: ${profile.turns_count ?? "n/a"}`,
+          ]);
+          const prefs = profile.preferences || {};
+          const prefItems = Object.keys(prefs).length
+            ? Object.entries(prefs).map(([key, value]) => `${key}: ${value}`)
+            : [];
+          setList(prefList, prefItems, "No preferences saved.");
+          const facts = memory.facts || [];
+          setList(summaryList, [
+            `summary: ${memory.summary || "n/a"}`,
+            `facts: ${facts.length || 0}`,
+            `turns: ${memory.turns ?? "n/a"}`,
+            `last updated: ${memory.last_updated || "n/a"}`,
+          ]);
+          const recent = (memory.recent || []).slice(-12).reverse();
+          const turnItems = recent.map((entry) => `${entry.role}: ${entry.text}`);
+          setList(turnList, turnItems, "No recent turns.");
+        } catch (err) {
+          profileName.textContent = "Unknown";
+          setList(profileList, []);
+          setList(prefList, []);
+          setList(summaryList, []);
+          setList(turnList, []);
+        }
+      };
+
+      document.getElementById("refresh").addEventListener("click", load);
+      load();
+    </script>
+  </body>
+</html>

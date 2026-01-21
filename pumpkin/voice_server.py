@@ -383,6 +383,9 @@ def _conversation_key(device: str | None, profile: Dict[str, Any] | None) -> str
         person_id = profile.get("ha_person_id")
         if isinstance(person_id, str) and person_id.strip():
             return f"memory.conversation.person:{person_id.strip()}"
+        ha_user_id = profile.get("ha_user_id")
+        if isinstance(ha_user_id, str) and ha_user_id.strip():
+            return f"memory.conversation.user:{ha_user_id.strip()}"
     if isinstance(device, str) and device.strip():
         return f"memory.conversation.device:{device.strip()}"
     return None
@@ -430,6 +433,16 @@ def _update_profile_activity(
     if not profile.get("created_ts"):
         profile["created_ts"] = profile["last_seen_ts"]
     store.set_memory(conn, key, profile)
+    ha_user_id = profile.get("ha_user_id")
+    if isinstance(ha_user_id, str) and ha_user_id.strip():
+        user_profile = _load_ha_user_profile(conn, ha_user_id) or {}
+        merged = _merge_profiles(user_profile, profile)
+        merged["last_seen_ts"] = profile["last_seen_ts"]
+        merged["last_text"] = profile.get("last_text")
+        merged["last_reply"] = profile.get("last_reply")
+        merged["last_device"] = profile.get("last_device")
+        merged["turns_count"] = profile.get("turns_count")
+        _save_ha_user_profile(conn, ha_user_id, merged)
     try:
         store.insert_event(
             conn,
@@ -458,17 +471,21 @@ def _apply_ha_identity(
     if not isinstance(ha_user_id, str) or not ha_user_id.strip():
         return
     key = f"speaker.profile.device:{device.strip()}"
-    profile = store.get_memory(conn, key)
-    if not isinstance(profile, dict):
-        profile = {"state": "named"}
-    profile["ha_user_id"] = ha_user_id.strip()
+    device_profile = store.get_memory(conn, key)
+    if not isinstance(device_profile, dict):
+        device_profile = {"state": "named"}
+    user_profile = _load_ha_user_profile(conn, ha_user_id) or {}
+    merged = _merge_profiles(user_profile, device_profile)
+    merged["ha_user_id"] = ha_user_id.strip()
     if isinstance(ha_user_name, str) and ha_user_name.strip():
-        profile["name"] = ha_user_name.strip()
-    if not profile.get("created_ts"):
-        profile["created_ts"] = datetime.now(timezone.utc).isoformat()
-    profile["last_seen_ts"] = datetime.now(timezone.utc).isoformat()
-    profile["last_device"] = device.strip()
-    store.set_memory(conn, key, profile)
+        merged["name"] = ha_user_name.strip()
+    if not merged.get("created_ts"):
+        merged["created_ts"] = datetime.now(timezone.utc).isoformat()
+    merged["last_seen_ts"] = datetime.now(timezone.utc).isoformat()
+    merged["last_device"] = device.strip()
+    store.set_memory(conn, key, merged)
+    _save_ha_user_profile(conn, ha_user_id, merged)
+    store.set_memory(conn, f"speaker.device_for_user:{ha_user_id.strip()}", device.strip())
 
 
 def _apply_ha_person_link(
@@ -495,6 +512,11 @@ def _apply_ha_person_link(
     profile["last_seen_ts"] = datetime.now(timezone.utc).isoformat()
     profile["last_device"] = device.strip()
     store.set_memory(conn, key, profile)
+    ha_user_id = profile.get("ha_user_id")
+    if isinstance(ha_user_id, str) and ha_user_id.strip():
+        user_profile = _load_ha_user_profile(conn, ha_user_id) or {}
+        merged = _merge_profiles(user_profile, profile)
+        _save_ha_user_profile(conn, ha_user_id, merged)
     try:
         store.insert_event(
             conn,
@@ -1531,9 +1553,47 @@ def _speaker_profile_from_device(conn, device: str | None) -> Dict[str, Any] | N
         return None
     key = f"speaker.profile.device:{device.strip()}"
     profile = store.get_memory(conn, key)
-    if isinstance(profile, dict):
-        return profile
-    return None
+    if not isinstance(profile, dict):
+        return None
+    ha_user_id = profile.get("ha_user_id")
+    user_profile = _load_ha_user_profile(conn, ha_user_id)
+    if isinstance(user_profile, dict):
+        return _merge_profiles(user_profile, profile)
+    return profile
+
+
+def _ha_user_profile_key(ha_user_id: str) -> str:
+    return f"speaker.profile.ha_user:{ha_user_id.strip()}"
+
+
+def _load_ha_user_profile(conn, ha_user_id: str | None) -> Dict[str, Any] | None:
+    if not isinstance(ha_user_id, str) or not ha_user_id.strip():
+        return None
+    profile = store.get_memory(conn, _ha_user_profile_key(ha_user_id))
+    return profile if isinstance(profile, dict) else None
+
+
+def _save_ha_user_profile(conn, ha_user_id: str, profile: Dict[str, Any]) -> None:
+    if not isinstance(ha_user_id, str) or not ha_user_id.strip():
+        return
+    store.set_memory(conn, _ha_user_profile_key(ha_user_id), profile)
+
+
+def _merge_profiles(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    merged = dict(base)
+    base_prefs = base.get("preferences")
+    override_prefs = override.get("preferences")
+    if isinstance(base_prefs, dict) or isinstance(override_prefs, dict):
+        prefs = dict(base_prefs) if isinstance(base_prefs, dict) else {}
+        if isinstance(override_prefs, dict):
+            prefs.update(override_prefs)
+        merged["preferences"] = prefs
+    for key, value in override.items():
+        if key == "preferences":
+            continue
+        if value is not None:
+            merged[key] = value
+    return merged
 
 
 def _parse_dt(value: str | None) -> datetime | None:
@@ -2985,6 +3045,7 @@ def _identity_snapshot(conn, device: str | None) -> Dict[str, Any]:
         profile_summary = {
             "name": profile.get("name"),
             "ha_person_id": profile.get("ha_person_id"),
+            "ha_user_id": profile.get("ha_user_id"),
             "preferences": profile.get("preferences", {}),
             "created_ts": profile.get("created_ts"),
             "last_seen_ts": profile.get("last_seen_ts"),
@@ -3007,6 +3068,27 @@ def _identity_snapshot(conn, device: str | None) -> Dict[str, Any]:
         "device": device,
         "profile": profile_summary,
         "memory": memory_summary,
+    }
+
+
+def _memory_snapshot(conn, device: str | None) -> Dict[str, Any]:
+    profile = _speaker_profile_from_device(conn, device)
+    memory_key = _conversation_key(device, profile)
+    memory = None
+    if memory_key:
+        stored = store.get_memory(conn, memory_key)
+        if isinstance(stored, dict):
+            memory = {
+                "summary": stored.get("summary"),
+                "facts": stored.get("facts") or [],
+                "recent": stored.get("recent") or [],
+                "turns": stored.get("turns"),
+                "last_updated": stored.get("updated_ts"),
+            }
+    return {
+        "device": device,
+        "profile": profile,
+        "memory": memory,
     }
 
 
@@ -3055,6 +3137,11 @@ def _update_profile_preference(conn, device: str | None, key: str, value: Any) -
     prefs[key] = value
     profile["preferences"] = prefs
     store.set_memory(conn, f"speaker.profile.device:{device.strip()}", profile)
+    ha_user_id = profile.get("ha_user_id")
+    if isinstance(ha_user_id, str) and ha_user_id.strip():
+        user_profile = _load_ha_user_profile(conn, ha_user_id) or {}
+        merged = _merge_profiles(user_profile, profile)
+        _save_ha_user_profile(conn, ha_user_id, merged)
     if key == "quiet_hours":
         store.set_memory(conn, "core.quiet_hours", value)
     return None
@@ -3077,6 +3164,11 @@ def _store_speaker_name(conn, device: str | None, name: str) -> str | None:
         profile["created_ts"] = datetime.now(timezone.utc).isoformat()
     profile["last_seen_ts"] = datetime.now(timezone.utc).isoformat()
     store.set_memory(conn, key, profile)
+    ha_user_id = profile.get("ha_user_id")
+    if isinstance(ha_user_id, str) and ha_user_id.strip():
+        user_profile = _load_ha_user_profile(conn, ha_user_id) or {}
+        merged = _merge_profiles(user_profile, profile)
+        _save_ha_user_profile(conn, ha_user_id, merged)
     return None
 
 
@@ -4351,6 +4443,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "GET /health",
                             "GET /ha/callback",
                             "GET /ui",
+                            "GET /ui/memory",
                             "GET /ui/autonomy",
                             "GET /ui/homeassistant",
                             "GET /ui/scoreboard",
@@ -4368,6 +4461,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "GET /ask/result",
                             "GET /proposals",
                             "GET /summary",
+                            "GET /memory",
                             "GET /timeline",
                             "GET /car/telemetry",
                             "GET /inventory",
@@ -4417,6 +4511,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 return
             if path in {"/ui", "/ui/"}:
                 _send_html(self, 200, _load_voice_ui_asset("voice_ui.html"))
+                return
+            if path == "/ui/memory":
+                _send_html(self, 200, _load_voice_ui_asset("voice_ui_memory.html"))
                 return
             if path == "/ui/autonomy":
                 _send_html(self, 200, _load_voice_ui_asset("voice_ui_autonomy.html"))
@@ -4673,6 +4770,14 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "events": timeline,
                     },
                 )
+                return
+            if path == "/memory":
+                device = params.get("device", [None])[0]
+                conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+                if not isinstance(device, str) or not device.strip():
+                    last_device = store.get_memory(conn, "voice.last_device")
+                    device = last_device if isinstance(last_device, str) else None
+                _send_json(self, 200, _memory_snapshot(conn, device))
                 return
             if path == "/summary":
                 status = params.get("status", ["pending"])[0]
@@ -4999,8 +5104,10 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "/inventory": {"get": {"summary": "Inventory snapshot and opportunities"}},
                             "/ui/autonomy": {"get": {"summary": "Autonomy dashboard"}},
                             "/ui/homeassistant": {"get": {"summary": "Home Assistant dashboard"}},
+                            "/ui/memory": {"get": {"summary": "Memory dashboard"}},
                             "/ui/scoreboard": {"get": {"summary": "Scoreboard dashboard"}},
                             "/ui/inventory": {"get": {"summary": "Inventory dashboard"}},
+                            "/memory": {"get": {"summary": "Memory snapshot"}},
                             "/summary": {
                                 "get": {
                                     "summary": "System summary",
