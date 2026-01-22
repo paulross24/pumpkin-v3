@@ -152,6 +152,8 @@ modules:
     post_async: true
   car.telemetry:
     baseline:
+      mode: "auto"
+      window_days: 30
       label: "generic"
       speed_mph_max: 90
       rpm_max: 4000

@@ -3937,6 +3937,62 @@ def _load_car_baseline_config() -> Dict[str, Any]:
     return baseline if isinstance(baseline, dict) else {}
 
 
+def _percentile(values: list[float], pct: float) -> float | None:
+    if not values:
+        return None
+    if pct <= 0:
+        return min(values)
+    if pct >= 100:
+        return max(values)
+    sorted_vals = sorted(values)
+    k = (len(sorted_vals) - 1) * (pct / 100.0)
+    f = int(k)
+    c = min(f + 1, len(sorted_vals) - 1)
+    if f == c:
+        return sorted_vals[f]
+    d0 = sorted_vals[f] * (c - k)
+    d1 = sorted_vals[c] * (k - f)
+    return d0 + d1
+
+
+def _auto_baseline_from_records(records: list[Dict[str, Any]], window_days: int) -> Dict[str, Any] | None:
+    if not records:
+        return None
+    cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
+    speeds: list[float] = []
+    rpms: list[float] = []
+    coolants: list[float] = []
+    window_records: list[Dict[str, Any]] = []
+    for record in records:
+        ts = _parse_iso_ts(record.get("ts") or record.get("_event_ts"))
+        if not ts or ts < cutoff:
+            continue
+        window_records.append(record)
+        readings = record.get("readings")
+        if not isinstance(readings, dict):
+            continue
+        speed_kph = _safe_float(readings.get("speed_kph"))
+        if speed_kph is not None:
+            speeds.append(speed_kph * _KPH_TO_MPH)
+        rpm = _safe_float(readings.get("rpm"))
+        if rpm is not None:
+            rpms.append(rpm)
+        coolant = _safe_float(readings.get("coolant_c"))
+        if coolant is not None:
+            coolants.append(coolant)
+    if len(window_records) < 30:
+        return None
+    idle_pct = _car_telemetry_stats(window_records).get("idle_pct")
+    return {
+        "mode": "auto",
+        "label": f"auto-{window_days}d",
+        "speed_mph_max": _percentile(speeds, 95),
+        "rpm_max": _percentile(rpms, 95),
+        "coolant_c_max": _percentile(coolants, 95),
+        "idle_pct_max": idle_pct,
+    }
+
+
 def _parse_iso_ts(value: Any) -> datetime | None:
     if not value:
         return None
@@ -4195,7 +4251,13 @@ def _car_telemetry_summary(conn) -> Dict[str, Any]:
     avg_coolant = stats.get("avg_coolant_c")
     idle_pct = stats.get("idle_pct")
     latest_fuel = _safe_float(readings.get("fuel_level_pct"))
-    baseline = _load_car_baseline_config()
+    baseline_cfg = _load_car_baseline_config()
+    baseline = baseline_cfg
+    if isinstance(baseline_cfg, dict) and baseline_cfg.get("mode") == "auto":
+        window_days = int(baseline_cfg.get("window_days") or 30)
+        auto_baseline = _auto_baseline_from_records(long_term_records, window_days)
+        if auto_baseline:
+            baseline = auto_baseline
     baseline_label = None
     baseline_notes = []
     if baseline:
