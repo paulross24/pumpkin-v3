@@ -759,6 +759,7 @@ def _filter_entity(
 def _summarize_states(states: Dict[str, Dict[str, Any]], areas: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     counts: Dict[str, int] = {}
     home_people: List[str] = []
+    home_devices: List[str] = []
     people: List[Dict[str, Any]] = []
     zones: List[Dict[str, Any]] = []
     entity_areas: Dict[str, str] = {}
@@ -814,6 +815,10 @@ def _summarize_states(states: Dict[str, Dict[str, Any]], areas: Dict[str, Dict[s
                     "state": payload.get("state"),
                 }
             )
+        if domain == "device_tracker":
+            name = payload.get("attributes", {}).get("friendly_name") or entity_id
+            if payload.get("state") == "home":
+                home_devices.append(str(name))
         if domain == "zone":
             attributes = payload.get("attributes", {}) or {}
             name = attributes.get("friendly_name") or entity_id
@@ -831,7 +836,9 @@ def _summarize_states(states: Dict[str, Dict[str, Any]], areas: Dict[str, Dict[s
     return {
         "entity_count": len(states),
         "counts_by_domain": counts,
-        "people_home": sorted(home_people),
+        "people_home": sorted({*home_people, *home_devices}),
+        "people_home_person": sorted(home_people),
+        "people_home_device_tracker": sorted(home_devices),
         "people": sorted(people, key=lambda item: item.get("name", "")),
         "zones": sorted(zones, key=lambda item: item.get("name", "")),
         "entity_areas": entity_areas,
