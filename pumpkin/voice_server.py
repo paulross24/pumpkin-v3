@@ -3881,7 +3881,28 @@ def _parse_car_telemetry_text(text: str) -> Dict[str, Any] | None:
         payload = json.loads(raw)
     except Exception:
         return None
-    return payload if isinstance(payload, dict) else None
+    if not isinstance(payload, dict):
+        return None
+    readings = payload.get("readings")
+    if isinstance(readings, dict):
+        def _as_float(value: Any) -> float | None:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+        speed = _as_float(readings.get("speed_kph"))
+        rpm = _as_float(readings.get("rpm"))
+        runtime = _as_float(readings.get("engine_runtime_s"))
+        if speed is not None and speed >= 200:
+            if (rpm is not None and rpm <= 0.1) or (runtime is not None and runtime <= 1):
+                readings["speed_kph_raw"] = speed
+                readings["speed_kph"] = None
+                flags = payload.setdefault("_flags", [])
+                if "speed_spike" not in flags:
+                    flags.append("speed_spike")
+                notes = payload.setdefault("_notes", [])
+                notes.append("speed spike filtered (engine off / rpm 0)")
+    return payload
 
 
 _KPH_TO_MPH = 0.621371
@@ -3985,7 +4006,11 @@ def _car_telemetry_stats(records: list[Dict[str, Any]]) -> Dict[str, Any]:
     coolant_samples: list[float] = []
     idle_samples = 0
     samples_with_speed = 0
+    ignored_speed = 0
     for record in records:
+        flags = record.get("_flags") if isinstance(record, dict) else None
+        if isinstance(flags, list) and "speed_spike" in flags:
+            ignored_speed += 1
         readings = record.get("readings")
         if not isinstance(readings, dict):
             continue
@@ -4021,6 +4046,7 @@ def _car_telemetry_stats(records: list[Dict[str, Any]]) -> Dict[str, Any]:
         "max_coolant_c": max_coolant,
         "idle_pct": idle_pct,
         "sampled": len(speed_samples),
+        "ignored_speed_samples": ignored_speed,
     }
 
 
@@ -4184,6 +4210,9 @@ def _car_telemetry_summary(conn) -> Dict[str, Any]:
         notes.append("Limited telemetry sample size; analysis may be incomplete.")
     if not trips:
         notes.append("Trip segmentation unavailable (insufficient timestamps).")
+    ignored_speed = stats.get("ignored_speed_samples", 0)
+    if isinstance(ignored_speed, int) and ignored_speed > 0:
+        notes.append(f"Ignored {ignored_speed} speed spikes with engine off.")
     return {
         "count": len(records),
         "last": {
