@@ -784,7 +784,7 @@ def _rule_based_proposals(events: List[Any], conn) -> List[Dict[str, Any]]:
             title = str(payload.get("title") or "Insight").strip()
             detail = str(payload.get("detail") or "").strip()
             summary = f"Insight: {title}"
-            if store.proposal_exists(conn, summary, {"pending", "approved"}):
+            if store.proposal_exists(conn, summary, {"pending", "approved", "executed", "rejected"}):
                 continue
             message = detail or title
             proposals.append(
