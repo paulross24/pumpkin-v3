@@ -140,7 +140,7 @@ modules:
     capture_seconds: 2.5
     poll_interval_seconds: 10
     cooldown_seconds: 15
-    threshold_db: -28
+    threshold_db: -50
     debug: true
     sample_rate: 16000
     channels: 1

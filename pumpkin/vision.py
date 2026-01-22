@@ -229,7 +229,8 @@ def _compreface_enroll(image_bytes: bytes, subject: str, provider: Dict[str, Any
     if not subject:
         return {"ok": False, "error": "missing_subject"}
     base = endpoint.rsplit("/", 1)[0]
-    enroll_url = f"{base}/subjects/{quote(subject)}/add"
+    # CompreFace enroll uses /faces with subject as query parameter.
+    enroll_url = f"{base}/faces?subject={quote(subject)}"
     boundary = f"----pumpkin-{uuid.uuid4().hex}"
     body = (
         f"--{boundary}\r\n"
@@ -244,6 +245,18 @@ def _compreface_enroll(image_bytes: bytes, subject: str, provider: Dict[str, Any
     try:
         with request.urlopen(req, timeout=provider.get("timeout_seconds", 6)) as resp:
             payload = resp.read()
+    except error.HTTPError as exc:
+        try:
+            payload = exc.read()
+        except Exception:
+            payload = b""
+        detail = payload.decode("utf-8", errors="replace") if payload else ""
+        return {
+            "ok": False,
+            "error": "compreface_error",
+            "status": getattr(exc, "code", None),
+            "detail": detail or str(exc),
+        }
     except error.URLError as exc:
         return {"ok": False, "error": "request_failed", "detail": str(exc)}
     try:

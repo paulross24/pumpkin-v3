@@ -1634,7 +1634,7 @@ def _rule_based_proposals(events: List[Any], conn) -> List[Dict[str, Any]]:
                 continue
             label = item.get("label") or "device"
             summary = f"Integrate {label} device at {ip}"
-            if store.proposal_exists(conn, summary, statuses=["pending", "approved"]):
+            if store.proposal_exists(conn, summary, statuses=["pending", "approved", "rejected"]):
                 continue
             device = devices_by_ip.get(ip, {})
             hints = device.get("hints", [])
