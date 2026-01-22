@@ -65,6 +65,8 @@ THOUGHT_EVENT_TYPES = {
     "voice.mic_forwarded",
     "insight.generated",
     "insight.briefing",
+    "action.summary",
+    "system.pulse",
 }
 
 _DEEP_SCAN_LOCK = threading.Lock()
@@ -265,6 +267,7 @@ def _finalize_reply_only(
 ) -> str:
     if notice:
         reply = f"{reply} {notice}"
+    reply = _maybe_append_life_cues(conn, reply, memory_ctx or {})
     _record_reply_event(conn, payload, reply, route)
     if memory_ctx is None:
         memory_ctx = {}
@@ -284,6 +287,7 @@ def _reply_and_record(
     route: str,
     memory_ctx: Dict[str, Any] | None = None,
 ) -> None:
+    reply = _maybe_append_life_cues(conn, reply, memory_ctx or {})
     _record_reply_event(conn, payload, reply, route)
     if memory_ctx is None:
         memory_ctx = {}
@@ -353,6 +357,23 @@ def _format_thought_message(event_type: str, payload: Dict[str, Any]) -> str:
         return f"vision alert: {_truncate_text(str(message or 'unknown face'), 80)}"
     if event_type == "behavior.alert":
         return f"vision behavior: {_truncate_text(str(message or 'dog alert'), 80)}"
+    if event_type == "action.summary":
+        return f"action: {_truncate_text(str(summary or message or 'executed'), 80)}"
+    if event_type == "system.pulse":
+        if isinstance(payload, dict):
+            people = payload.get("people_home")
+            devices = payload.get("device_count")
+            pending = payload.get("pending_proposals")
+            parts = []
+            if people is not None:
+                parts.append(f"{people} home")
+            if devices is not None:
+                parts.append(f"{devices} devices")
+            if pending is not None:
+                parts.append(f"{pending} proposals")
+            if parts:
+                return "pulse: " + ", ".join(parts)
+        return "pulse: monitoring"
     if event_type.startswith("insight."):
         return f"insight: {_truncate_text(str(title or summary or event_type), 80)}"
     return _truncate_text(str(message or summary or event_type), 80)
@@ -411,6 +432,33 @@ def _load_conversation_memory(conn, key: str) -> Dict[str, Any]:
 
 def _store_conversation_memory(conn, key: str, memory: Dict[str, Any]) -> None:
     store.set_memory(conn, key, memory)
+
+
+def _maybe_append_life_cues(
+    conn,
+    reply: str,
+    memory: Dict[str, Any] | None,
+    min_seconds: int = 120,
+) -> str:
+    last_ts = store.get_memory(conn, "voice.last_life_cue_ts") or 0
+    try:
+        last_ts = float(last_ts)
+    except (TypeError, ValueError):
+        last_ts = 0.0
+    if time.time() - last_ts < min_seconds:
+        return reply
+    cues: List[str] = []
+    last_action = store.get_memory(conn, "actions.last_summary")
+    if isinstance(last_action, str) and last_action.strip():
+        cues.append(f"Just handled: {last_action}.")
+    if memory and isinstance(memory.get("facts"), list) and memory["facts"]:
+        fact = memory["facts"][-1]
+        if isinstance(fact, str) and fact.strip():
+            cues.append(f"Remembering: {_truncate_text(fact, 80)}.")
+    if not cues:
+        return reply
+    store.set_memory(conn, "voice.last_life_cue_ts", time.time())
+    return f"{reply} {' '.join(cues)}"
 
 
 def _update_profile_activity(

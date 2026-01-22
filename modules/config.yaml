@@ -45,6 +45,7 @@ modules:
     action_cooldowns_seconds:
       homeassistant.service: 20
       network.discovery: 120
+    pulse_interval_seconds: 60
   network.discovery:
     subnet: "auto"
     tcp_ports:

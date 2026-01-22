@@ -281,6 +281,58 @@ def _collect_module_events(conn) -> List[Dict[str, Any]]:
     return events
 
 
+def _record_action_summary(
+    conn,
+    action_type: str,
+    status: str,
+    proposal_id: int | None,
+    detail: str | None = None,
+) -> None:
+    summary = f"{action_type} {status}"
+    if detail:
+        summary = f"{summary} ({detail})"
+    store.set_memory(conn, "actions.last_summary", summary)
+    store.set_memory(conn, "actions.last_summary_ts", datetime.now(timezone.utc).isoformat())
+    store.insert_event(
+        conn,
+        "system",
+        "action.summary",
+        {
+            "summary": summary,
+            "action_type": action_type,
+            "status": status,
+            "proposal_id": proposal_id,
+        },
+        severity="info" if status == "succeeded" else "warn",
+    )
+
+
+def _record_pulse(
+    conn,
+    ha_summary: Dict[str, Any],
+    network_snapshot: Dict[str, Any],
+    proposals_count: int,
+    pulse_interval: int,
+) -> None:
+    if pulse_interval <= 0:
+        return
+    if not _cooldown_elapsed(conn, "system.pulse", pulse_interval):
+        return
+    people_home = ha_summary.get("people_home") or []
+    device_count = 0
+    if isinstance(network_snapshot, dict):
+        devices = network_snapshot.get("devices") or []
+        if isinstance(devices, list):
+            device_count = len(devices)
+    payload = {
+        "people_home": len(people_home),
+        "device_count": device_count,
+        "pending_proposals": proposals_count,
+    }
+    store.insert_event(conn, "system", "system.pulse", payload, severity="info")
+    _record_cooldown(conn, "system.pulse")
+
+
 def _load_autonomy_config() -> Dict[str, Any]:
     config_path = settings.modules_config_path()
     if not config_path.exists():
@@ -745,6 +797,7 @@ def _execute_approved(conn, policy: policy_mod.Policy, autonomy_cfg: Dict[str, A
             result = execute_action(action_type, action_params, str(settings.audit_path()))
             store.finish_action(conn, action_id, "succeeded", result=result)
             store.update_proposal_status(conn, proposal_id, "executed")
+            _record_action_summary(conn, action_type, "succeeded", proposal_id)
             audit.append_jsonl(
                 str(settings.audit_path()),
                 {
@@ -808,6 +861,7 @@ def _execute_approved(conn, policy: policy_mod.Policy, autonomy_cfg: Dict[str, A
         except Exception as exc:
             store.finish_action(conn, action_id, "failed", result={"error": str(exc)})
             store.update_proposal_status(conn, proposal_id, "failed")
+            _record_action_summary(conn, action_type, "failed", proposal_id, detail="error")
             audit.append_jsonl(
                 str(settings.audit_path()),
                 {
@@ -969,6 +1023,18 @@ def run_once() -> Dict[str, Any]:
             proposals.extend(improvement)
         store.set_memory(conn, "core.last_reflection_date", datetime.now().date().isoformat())
     _record_proposals(conn, policy, proposals)
+    autonomy_cfg = _load_autonomy_config()
+    try:
+        pulse_interval = int(autonomy_cfg.get("pulse_interval_seconds", 60))
+    except (TypeError, ValueError):
+        pulse_interval = 60
+    _record_pulse(
+        conn,
+        ha_summary if isinstance(ha_summary, dict) else {},
+        network_snapshot if isinstance(network_snapshot, dict) else {},
+        len(proposals),
+        pulse_interval,
+    )
 
     now = time.time()
     last_selfcheck = store.get_memory(conn, "selfcheck.last_ts") or 0
@@ -981,7 +1047,6 @@ def run_once() -> Dict[str, Any]:
         store.set_memory(conn, "selfcheck.last_ts", now)
 
     _requeue_orphaned_suggestions(conn, policy.policy_hash)
-    autonomy_cfg = _load_autonomy_config()
     executed_actions = _execute_approved(conn, policy, autonomy_cfg)
     total_executed = store.get_memory(conn, "actions.total_executed") or 0
     try:
