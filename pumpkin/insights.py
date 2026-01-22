@@ -141,6 +141,24 @@ def _auto_notify_min_minutes(cfg: Dict[str, Any]) -> int:
         return 30
 
 
+def _insight_dedupe_minutes(cfg: Dict[str, Any]) -> int:
+    try:
+        return max(1, int(cfg.get("insight_dedupe_minutes", 10)))
+    except Exception:
+        return 10
+
+
+def _insight_signature(insight: Dict[str, Any]) -> str:
+    if not isinstance(insight, dict):
+        return "invalid"
+    parts = [
+        str(insight.get("type") or ""),
+        str(insight.get("title") or ""),
+        str(insight.get("detail") or ""),
+    ]
+    return "|".join(part.strip() for part in parts if isinstance(part, str))
+
+
 def _maybe_auto_notify(conn, insight: Dict[str, Any], cfg: Dict[str, Any]) -> None:
     if not isinstance(insight, dict):
         return
@@ -350,8 +368,18 @@ def record_insights(conn, insights: Iterable[Dict[str, Any]]) -> None:
         return
     now = datetime.now().isoformat()
     cfg = _load_insights_cfg()
+    dedupe_minutes = _insight_dedupe_minutes(cfg)
     payloads = []
     for item in items:
+        signature = _insight_signature(item)
+        if signature:
+            last_ts = store.get_memory(conn, f"insights.last_event.{signature}")
+            if isinstance(last_ts, str):
+                parsed = _parse_timestamp(last_ts)
+                if parsed:
+                    delta = _minutes_since(parsed)
+                    if delta is not None and delta < dedupe_minutes:
+                        continue
         event_payload = dict(item)
         event_payload["ts"] = now
         payloads.append(event_payload)
@@ -362,6 +390,8 @@ def record_insights(conn, insights: Iterable[Dict[str, Any]]) -> None:
             payload=event_payload,
             severity=item.get("severity", "info"),
         )
+        if signature:
+            store.set_memory(conn, f"insights.last_event.{signature}", datetime.now(timezone.utc).isoformat())
         _maybe_auto_notify(conn, event_payload, cfg)
     current = store.get_memory(conn, "insights.latest")
     if not isinstance(current, list):
