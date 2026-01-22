@@ -202,6 +202,7 @@ def run_rtsp_mic(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
         )
         return events
 
+    debug_enabled = bool(module_cfg.get("debug", False))
     capture_seconds = float(module_cfg.get("capture_seconds", 2.5))
     threshold_db = float(module_cfg.get("threshold_db", -28.0))
     sample_rate = int(module_cfg.get("sample_rate", 16000))
@@ -216,9 +217,37 @@ def run_rtsp_mic(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     pcm = _capture_audio_pcm(rtsp_url, capture_seconds, ffmpeg_path, sample_rate, channels)
     if not pcm:
+        if debug_enabled:
+            events.append(
+                {
+                    "source": "voice",
+                    "type": "voice.mic_debug",
+                    "payload": {
+                        "camera_id": camera_id,
+                        "stage": "capture",
+                        "status": "no_audio",
+                    },
+                    "severity": "info",
+                }
+            )
         return events
     level_db = _pcm_rms_db(pcm)
     if level_db is None or level_db < threshold_db:
+        if debug_enabled:
+            events.append(
+                {
+                    "source": "voice",
+                    "type": "voice.mic_debug",
+                    "payload": {
+                        "camera_id": camera_id,
+                        "stage": "threshold",
+                        "status": "below_threshold",
+                        "level_db": level_db,
+                        "threshold_db": threshold_db,
+                    },
+                    "severity": "info",
+                }
+            )
         return events
 
     llm_cfg = _load_llm_config(conn)
@@ -237,13 +266,73 @@ def run_rtsp_mic(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
     wav_bytes = _pcm_to_wav_bytes(pcm, sample_rate, channels)
     transcript = _openai_transcribe_audio(wav_bytes, llm_cfg.get("model", "whisper-1"), api_key)
     if not transcript:
+        if debug_enabled:
+            events.append(
+                {
+                    "source": "voice",
+                    "type": "voice.mic_debug",
+                    "payload": {
+                        "camera_id": camera_id,
+                        "stage": "transcribe",
+                        "status": "empty",
+                        "level_db": level_db,
+                    },
+                    "severity": "info",
+                }
+            )
         return events
 
     cleaned = " ".join(transcript.split())
     if len(cleaned) < min_chars:
+        if debug_enabled:
+            events.append(
+                {
+                    "source": "voice",
+                    "type": "voice.mic_debug",
+                    "payload": {
+                        "camera_id": camera_id,
+                        "stage": "min_chars",
+                        "status": "too_short",
+                        "level_db": level_db,
+                        "text": cleaned,
+                    },
+                    "severity": "info",
+                }
+            )
         return events
     if wake_words and not _contains_wake_word(cleaned, wake_words):
+        if debug_enabled:
+            events.append(
+                {
+                    "source": "voice",
+                    "type": "voice.mic_debug",
+                    "payload": {
+                        "camera_id": camera_id,
+                        "stage": "wake_word",
+                        "status": "miss",
+                        "level_db": level_db,
+                        "text": cleaned,
+                        "wake_words": wake_words,
+                    },
+                    "severity": "info",
+                }
+            )
         return events
+    if debug_enabled:
+        events.append(
+            {
+                "source": "voice",
+                "type": "voice.mic_debug",
+                "payload": {
+                    "camera_id": camera_id,
+                    "stage": "wake_word",
+                    "status": "hit",
+                    "level_db": level_db,
+                    "text": cleaned,
+                },
+                "severity": "info",
+            }
+        )
 
     payload = {
         "text": cleaned,
