@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pumpkin Insights</title>
+    <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='29' y='10' width='6' height='12' fill='%235b4b41'/><circle cx='32' cy='36' r='20' fill='%23e67c2e'/><circle cx='20' cy='36' r='14' fill='%23f08a3a' opacity='0.85'/><circle cx='44' cy='36' r='14' fill='%23f08a3a' opacity='0.85'/></svg>" />
+    <style>
+      :root {
+        --bg: #f6efe8;
+        --bg-accent: #f2d6b5;
+        --ink: #2a1b12;
+        --muted: #5b4b41;
+        --pumpkin: #e67c2e;
+        --pumpkin-dark: #b95519;
+        --card: #fff8f2;
+        --line: #e5d6c6;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Iowan Old Style", "Palatino", "Bookman", "Georgia", serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at 10% 10%, rgba(230, 124, 46, 0.15), transparent 40%),
+          linear-gradient(160deg, var(--bg), var(--bg-accent));
+        min-height: 100vh;
+      }
+      header {
+        padding: 28px 24px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .title {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 26px;
+        font-weight: 700;
+      }
+      .pumpkin-icon { width: 24px; height: 24px; }
+      .sub { color: var(--muted); }
+      main {
+        padding: 12px 24px 40px;
+        display: grid;
+        gap: 16px;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 16px;
+        box-shadow: 0 12px 32px rgba(50, 33, 22, 0.08);
+        display: grid;
+        gap: 10px;
+      }
+      .stat { font-size: 22px; font-weight: 700; }
+      .list {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        display: grid;
+        gap: 6px;
+        font-size: 13px;
+        color: var(--muted);
+      }
+      a { color: var(--pumpkin-dark); text-decoration: none; font-weight: 600; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="title">
+        <svg class="pumpkin-icon" viewBox="0 0 64 64" aria-hidden="true">
+          <rect x="29" y="10" width="6" height="12" fill="#5b4b41"/>
+          <circle cx="32" cy="36" r="20" fill="#e67c2e"/>
+          <circle cx="20" cy="36" r="14" fill="#f08a3a" opacity="0.85"/>
+          <circle cx="44" cy="36" r="14" fill="#f08a3a" opacity="0.85"/>
+        </svg>
+        Insights
+      </div>
+      <div class="sub"><a href="/ui">← Back to dashboard</a></div>
+    </header>
+    <main>
+      <section class="card">
+        <div class="stat" id="insight-count">0</div>
+        <div class="sub" id="briefing-text">No briefing yet.</div>
+      </section>
+      <section class="card">
+        <div class="stat">Recent Insights</div>
+        <ul class="list" id="insight-list"></ul>
+      </section>
+    </main>
+    <script>
+      const byId = (id) => document.getElementById(id);
+      const setText = (node, text) => { if (node) node.textContent = text; };
+      const setList = (node, items) => {
+        if (!node) return;
+        node.innerHTML = "";
+        if (!items.length) {
+          const li = document.createElement("li");
+          li.textContent = "None";
+          node.appendChild(li);
+          return;
+        }
+        items.forEach((item) => {
+          const li = document.createElement("li");
+          const title = item.title || "Insight";
+          const detail = item.detail ? ` - ${item.detail}` : "";
+          li.textContent = `${title}${detail}`;
+          node.appendChild(li);
+        });
+      };
+
+      const load = async () => {
+        try {
+          const res = await fetch("/summary");
+          const summary = await res.json();
+          const insights = summary.insights || [];
+          setText(byId("insight-count"), `${insights.length} insights`);
+          setText(byId("briefing-text"), summary.briefing || "No briefing yet.");
+          setList(byId("insight-list"), insights);
+        } catch (err) {
+          setText(byId("insight-count"), "Failed to load insights");
+        }
+      };
+
+      load();
+    </script>
+  </body>
+</html>

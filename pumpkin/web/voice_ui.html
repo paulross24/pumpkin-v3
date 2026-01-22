@@ -110,6 +110,25 @@
         display: grid;
         gap: 8px;
       }
+      .card.is-link {
+        cursor: pointer;
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+      }
+      .card.is-link:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 16px 36px rgba(50, 33, 22, 0.14);
+      }
+      .card-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .card-cta {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--pumpkin-dark);
+      }
       .card h3 {
         margin: 0;
         font-size: 14px;
@@ -288,6 +307,10 @@
       <div class="sub" id="subtitle">Loading status...</div>
       <nav class="menu">
         <a href="/ui">Overview</a>
+        <a href="/ui/health">Health</a>
+        <a href="/ui/identity">Identity</a>
+        <a href="/ui/thoughts">Thoughts</a>
+        <a href="/ui/insights">Insights</a>
         <a href="/ui/memory">Memory</a>
         <a href="/ui/homeassistant">Home Assistant</a>
         <a href="/ui/autonomy">Autonomy</a>
@@ -297,12 +320,12 @@
         <a href="/ui/vision">Vision</a>
         <a href="/ui/dogwatch">Dog Watch</a>
         <a href="/ui/car">Car</a>
-        <a href="/ui/car/alerts">Alerts</a>
+        <a href="/ui/alerts">Alerts</a>
         <a href="/ui/inventory">Inventory</a>
       </nav>
     </header>
     <main>
-      <section class="card grid-span pulse-card">
+      <section class="card grid-span pulse-card is-link" data-link="/ui/thoughts">
         <div class="pulse-shell" id="thought-pulse" data-level="0">
           <svg class="pumpkin-svg" viewBox="0 0 200 200" aria-hidden="true">
             <rect x="90" y="24" width="20" height="36" rx="6" fill="#5b4b41" />
@@ -323,71 +346,101 @@
           </div>
         </div>
         <div>
-          <h3>Thought Pulse</h3>
+          <div class="card-head">
+            <h3>Thought Pulse</h3>
+            <span class="card-cta">Open →</span>
+          </div>
           <div class="stat" id="thought-status">Listening...</div>
           <ul class="list" id="thought-meta"></ul>
         </div>
       </section>
-      <section class="card">
-        <h3>System Health</h3>
+      <section class="card is-link" data-link="/ui/health">
+        <div class="card-head">
+          <h3>System Health</h3>
+          <span class="card-cta">Open →</span>
+        </div>
         <div class="stat" id="health-status">...</div>
         <ul class="list" id="health-details"></ul>
       </section>
-      <section class="card">
-        <h3>Identity</h3>
+      <section class="card is-link" data-link="/ui/identity">
+        <div class="card-head">
+          <h3>Identity</h3>
+          <span class="card-cta">Open →</span>
+        </div>
         <div class="stat" id="identity-name">Unknown</div>
         <ul class="list" id="identity-meta"></ul>
       </section>
-      <section class="card">
-        <h3>Proposals</h3>
+      <section class="card is-link" data-link="/ui/proposals">
+        <div class="card-head">
+          <h3>Proposals</h3>
+          <span class="card-cta">Open →</span>
+        </div>
         <div class="stat" id="proposal-count">0</div>
         <div class="sub">
           <a class="link" href="/ui/proposals">Open proposal desk →</a>
         </div>
         <ul class="list" id="proposal-list"></ul>
       </section>
-      <section class="card">
-        <h3>Autonomy</h3>
+      <section class="card is-link" data-link="/ui/autonomy">
+        <div class="card-head">
+          <h3>Autonomy</h3>
+          <span class="card-cta">Open →</span>
+        </div>
         <div class="stat" id="autonomy-total">0</div>
         <div class="sub">
           <a class="link" href="/ui/autonomy">Open autonomy desk →</a>
         </div>
         <ul class="list" id="autonomy-list"></ul>
       </section>
-      <section class="card">
-        <h3>Scoreboard</h3>
+      <section class="card is-link" data-link="/ui/scoreboard">
+        <div class="card-head">
+          <h3>Scoreboard</h3>
+          <span class="card-cta">Open →</span>
+        </div>
         <div class="stat" id="scoreboard-title">Pumpkin vs Alexa</div>
         <div class="sub">
           <a class="link" href="/ui/scoreboard">Open scoreboard →</a>
         </div>
         <ul class="list" id="scoreboard-list"></ul>
       </section>
-      <section class="card">
-        <h3>Alerts</h3>
+      <section class="card is-link" data-link="/ui/alerts">
+        <div class="card-head">
+          <h3>Alerts</h3>
+          <span class="card-cta">Open →</span>
+        </div>
         <div class="stat" id="alerts-count">0</div>
         <div class="sub">
-          <a class="link" href="/ui/car/alerts">Open alerts →</a>
+          <a class="link" href="/ui/alerts">Open alerts →</a>
         </div>
         <ul class="list" id="alerts-list"></ul>
       </section>
-      <section class="card">
-        <h3>Network</h3>
+      <section class="card is-link" data-link="/ui/network">
+        <div class="card-head">
+          <h3>Network</h3>
+          <span class="card-cta">Open →</span>
+        </div>
         <div class="stat" id="network-count">0 devices</div>
         <div class="sub">
           <a class="link" href="/ui/network">Open network desk →</a>
         </div>
         <ul class="list" id="network-list"></ul>
       </section>
-      <section class="card">
-        <h3>Cameras</h3>
+      <section class="card is-link" data-link="/ui/vision">
+        <div class="card-head">
+          <h3>Cameras</h3>
+          <span class="card-cta">Open →</span>
+        </div>
         <div class="stat" id="camera-count">0</div>
         <div class="sub">
           <a class="link" href="/ui/vision">Review unknown faces →</a>
         </div>
         <ul class="list" id="camera-list"></ul>
       </section>
-      <section class="card">
-        <h3>Insights</h3>
+      <section class="card is-link" data-link="/ui/insights">
+        <div class="card-head">
+          <h3>Insights</h3>
+          <span class="card-cta">Open →</span>
+        </div>
         <div class="stat" id="insight-count">0</div>
         <div class="sub" id="briefing-text">No briefing yet.</div>
         <ul class="list" id="insight-list"></ul>
@@ -438,6 +491,18 @@
       const thoughtStatus = byId("thought-status");
       const thoughtMeta = byId("thought-meta");
       const thoughtReel = byId("thought-reel");
+
+      const linkCards = () => {
+        const cards = document.querySelectorAll(".card.is-link");
+        cards.forEach((card) => {
+          card.addEventListener("click", (event) => {
+            const target = event.target;
+            if (target && (target.tagName === "A" || target.tagName === "BUTTON")) return;
+            const link = card.dataset.link;
+            if (link) window.location.href = link;
+          });
+        });
+      };
 
       const formatProposal = (proposal) => `${proposal.summary} (${proposal.status})`;
       const formatDevice = (device) => {
@@ -527,6 +592,7 @@
 
       const load = async () => {
         try {
+          linkCards();
           const [healthRes, summaryRes, configRes] = await Promise.all([
             fetch("/health"),
             fetch("/summary"),

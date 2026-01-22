@@ -4786,6 +4786,10 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "GET /ha/callback",
                             "GET /ui",
                             "GET /ui/memory",
+                            "GET /ui/health",
+                            "GET /ui/identity",
+                            "GET /ui/insights",
+                            "GET /ui/thoughts",
                             "GET /ui/autonomy",
                             "GET /ui/homeassistant",
                             "GET /ui/scoreboard",
@@ -4856,6 +4860,18 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 return
             if path == "/ui/memory":
                 _send_html(self, 200, _load_voice_ui_asset("voice_ui_memory.html"))
+                return
+            if path == "/ui/health":
+                _send_html(self, 200, _load_voice_ui_asset("voice_ui_health.html"))
+                return
+            if path == "/ui/identity":
+                _send_html(self, 200, _load_voice_ui_asset("voice_ui_identity.html"))
+                return
+            if path == "/ui/insights":
+                _send_html(self, 200, _load_voice_ui_asset("voice_ui_insights.html"))
+                return
+            if path == "/ui/thoughts":
+                _send_html(self, 200, _load_voice_ui_asset("voice_ui_thoughts.html"))
                 return
             if path == "/ui/autonomy":
                 _send_html(self, 200, _load_voice_ui_asset("voice_ui_autonomy.html"))
@@ -5527,6 +5543,10 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "/ui/autonomy": {"get": {"summary": "Autonomy dashboard"}},
                             "/ui/homeassistant": {"get": {"summary": "Home Assistant dashboard"}},
                             "/ui/memory": {"get": {"summary": "Memory dashboard"}},
+                            "/ui/health": {"get": {"summary": "System health dashboard"}},
+                            "/ui/identity": {"get": {"summary": "Identity dashboard"}},
+                            "/ui/insights": {"get": {"summary": "Insights dashboard"}},
+                            "/ui/thoughts": {"get": {"summary": "Thought stream dashboard"}},
                             "/ui/scoreboard": {"get": {"summary": "Scoreboard dashboard"}},
                             "/ui/inventory": {"get": {"summary": "Inventory dashboard"}},
                             "/memory": {"get": {"summary": "Memory snapshot"}},
