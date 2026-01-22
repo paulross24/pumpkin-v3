@@ -150,6 +150,13 @@ modules:
     min_chars: 4
     ffmpeg_path: "ffmpeg"
     post_async: true
+  car.telemetry:
+    baseline:
+      label: "generic"
+      speed_mph_max: 90
+      rpm_max: 4000
+      coolant_c_max: 105
+      idle_pct_max: 0.5
   selfheal:
     enabled: true
     cooldown_seconds: 300

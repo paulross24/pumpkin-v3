@@ -3926,6 +3926,17 @@ def _safe_float(value: Any) -> float | None:
     return None
 
 
+def _load_car_baseline_config() -> Dict[str, Any]:
+    config_path = settings.modules_config_path()
+    if not config_path.exists():
+        return {}
+    config = module_config.load_config(str(config_path))
+    modules_cfg = config.get("modules", {}) if isinstance(config, dict) else {}
+    car_cfg = modules_cfg.get("car.telemetry", {}) if isinstance(modules_cfg, dict) else {}
+    baseline = car_cfg.get("baseline", {}) if isinstance(car_cfg, dict) else {}
+    return baseline if isinstance(baseline, dict) else {}
+
+
 def _parse_iso_ts(value: Any) -> datetime | None:
     if not value:
         return None
@@ -4184,6 +4195,42 @@ def _car_telemetry_summary(conn) -> Dict[str, Any]:
     avg_coolant = stats.get("avg_coolant_c")
     idle_pct = stats.get("idle_pct")
     latest_fuel = _safe_float(readings.get("fuel_level_pct"))
+    baseline = _load_car_baseline_config()
+    baseline_label = None
+    baseline_notes = []
+    if baseline:
+        baseline_label = baseline.get("label") if isinstance(baseline.get("label"), str) else None
+        speed_max = _safe_float(baseline.get("speed_mph_max"))
+        rpm_max = _safe_float(baseline.get("rpm_max"))
+        coolant_max = _safe_float(baseline.get("coolant_c_max"))
+        idle_max = _safe_float(baseline.get("idle_pct_max"))
+        summary_bits = []
+        if speed_max is not None:
+            summary_bits.append(f"speed ≤ {speed_max:.0f} mph")
+        if rpm_max is not None:
+            summary_bits.append(f"rpm ≤ {rpm_max:.0f}")
+        if coolant_max is not None:
+            summary_bits.append(f"coolant ≤ {coolant_max:.0f}°C")
+        if idle_max is not None:
+            summary_bits.append(f"idle ≤ {idle_max * 100:.0f}%")
+        if baseline_label:
+            baseline_notes.append(f"Baseline profile: {baseline_label}.")
+        if summary_bits:
+            baseline_notes.append("Baseline targets: " + ", ".join(summary_bits) + ".")
+        if speed_max is not None and max_speed_mph is not None and max_speed_mph > speed_max:
+            concerns.append(
+                f"Speed exceeded baseline max ({max_speed_mph:.0f} mph > {speed_max:.0f} mph)."
+            )
+        if rpm_max is not None and max_rpm is not None and max_rpm > rpm_max:
+            concerns.append(f"RPM exceeded baseline max ({max_rpm:.0f} > {rpm_max:.0f}).")
+        if coolant_max is not None and max_coolant is not None and max_coolant > coolant_max:
+            concerns.append(
+                f"Coolant exceeded baseline max ({max_coolant:.1f}°C > {coolant_max:.1f}°C)."
+            )
+        if idle_max is not None and idle_pct is not None and idle_pct > idle_max:
+            concerns.append(
+                f"Idle time exceeded baseline max ({idle_pct * 100:.0f}% > {idle_max * 100:.0f}%)."
+            )
     if max_coolant is not None and max_coolant >= 110:
         concerns.append(f"Coolant peaked at {max_coolant:.1f}°C (possible overheating).")
     elif avg_coolant is not None and avg_coolant >= 105:
@@ -4213,6 +4260,7 @@ def _car_telemetry_summary(conn) -> Dict[str, Any]:
     ignored_speed = stats.get("ignored_speed_samples", 0)
     if isinstance(ignored_speed, int) and ignored_speed > 0:
         notes.append(f"Ignored {ignored_speed} speed spikes with engine off.")
+    notes.extend(baseline_notes)
     return {
         "count": len(records),
         "last": {
@@ -4234,6 +4282,7 @@ def _car_telemetry_summary(conn) -> Dict[str, Any]:
         "analysis": {
             "concerns": concerns,
             "notes": notes,
+            "baseline": baseline or None,
             "driving": {
                 "avg_speed_mph": avg_speed_mph,
                 "max_speed_mph": max_speed_mph,
