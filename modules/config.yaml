@@ -75,6 +75,7 @@ modules:
       enabled: true
       scan_subnet: true
       ssdp: true
+      mdns: true
       http: true
       rtsp: true
       ssh: true

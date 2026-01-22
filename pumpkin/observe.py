@@ -6,6 +6,7 @@ import base64
 import os
 import shutil
 import socket
+import subprocess
 import time
 import ipaddress
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -81,7 +82,7 @@ def _detect_local_ip() -> Optional[str]:
 
 
 def _read_arp_table() -> List[Dict[str, str]]:
-    entries: List[Dict[str, str]] = []
+    entries: Dict[str, Dict[str, str]] = {}
     try:
         with open("/proc/net/arp", "r", encoding="utf-8") as f:
             next(f, None)
@@ -92,10 +93,95 @@ def _read_arp_table() -> List[Dict[str, str]]:
                 ip, _, _, mac, _, device = parts[:6]
                 if mac == "00:00:00:00:00:00":
                     continue
-                entries.append({"ip": ip, "mac": mac.lower(), "device": device})
+                entries[ip] = {"ip": ip, "mac": mac.lower(), "device": device}
     except FileNotFoundError:
         pass
+    for entry in _read_ip_neigh():
+        ip = entry.get("ip")
+        if not ip:
+            continue
+        current = entries.get(ip, {"ip": ip})
+        if entry.get("mac"):
+            current["mac"] = entry["mac"]
+        if entry.get("device"):
+            current["device"] = entry["device"]
+        entries[ip] = current
+    return list(entries.values())
+
+
+def _read_ip_neigh() -> List[Dict[str, str]]:
+    entries: List[Dict[str, str]] = []
+    try:
+        result = subprocess.run(
+            ["ip", "neigh", "show"], capture_output=True, text=True, check=False
+        )
+    except Exception:
+        return entries
+    if result.returncode != 0 or not result.stdout:
+        return entries
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        ip = parts[0]
+        mac = None
+        device = None
+        for idx, part in enumerate(parts):
+            if part == "dev" and idx + 1 < len(parts):
+                device = parts[idx + 1]
+            if part == "lladdr" and idx + 1 < len(parts):
+                mac = parts[idx + 1].lower()
+        if mac and mac != "00:00:00:00:00:00":
+            entries.append({"ip": ip, "mac": mac, "device": device or ""})
     return entries
+
+
+def _mdns_discover(timeout: float, max_responses: int) -> List[Dict[str, str]]:
+    responders: Dict[str, Dict[str, str]] = {}
+    query = b"".join(
+        [
+            b"\x00\x00",  # Transaction ID
+            b"\x00\x00",  # Flags
+            b"\x00\x01",  # Questions
+            b"\x00\x00",  # Answer RRs
+            b"\x00\x00",  # Authority RRs
+            b"\x00\x00",  # Additional RRs
+            b"\x09_services\x07_dns-sd\x04_udp\x05local\x00",
+            b"\x00\x0c",  # PTR
+            b"\x00\x01",  # IN
+        ]
+    )
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind(("", 5353))
+        except OSError:
+            sock.bind(("", 0))
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
+        try:
+            mreq = socket.inet_aton("224.0.0.251") + socket.inet_aton("0.0.0.0")
+            sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+        except OSError:
+            pass
+        sock.settimeout(timeout)
+        sock.sendto(query, ("224.0.0.251", 5353))
+        while len(responders) < max_responses:
+            try:
+                _data, addr = sock.recvfrom(4096)
+            except socket.timeout:
+                break
+            ip = addr[0]
+            if ip and ip not in responders:
+                responders[ip] = {"ip": ip}
+    except Exception:
+        return []
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+    return list(responders.values())
 
 
 def _probe_port(ip: str, port: int, timeout: float) -> bool:
@@ -451,6 +537,7 @@ def network_discovery(
     active_enabled = bool(active_cfg.get("enabled", False))
     scan_subnet = bool(active_cfg.get("scan_subnet", False))
     ssdp_enabled = bool(active_cfg.get("ssdp", False))
+    mdns_enabled = bool(active_cfg.get("mdns", False))
     http_enabled = bool(active_cfg.get("http", False))
     rtsp_enabled = bool(active_cfg.get("rtsp", False))
     ssh_enabled = bool(active_cfg.get("ssh", False))
@@ -459,6 +546,7 @@ def network_discovery(
     max_ssdp_responses = int(active_cfg.get("max_ssdp_responses", 32))
 
     ssdp_services = _ssdp_discover(timeout_seconds, max_ssdp_responses) if active_enabled and ssdp_enabled else []
+    mdns_services = _mdns_discover(timeout_seconds, max_ssdp_responses) if active_enabled and mdns_enabled else []
 
     seen_ips: set[str] = set()
     candidates: List[Tuple[str, Optional[Dict[str, str]]]] = []
@@ -476,6 +564,19 @@ def network_discovery(
             continue
         seen_ips.add(ip)
         candidates.append((ip, entry))
+
+    for entry in mdns_services:
+        ip = entry.get("ip")
+        if not ip or ip in seen_ips:
+            continue
+        if network:
+            try:
+                if ipaddress.ip_address(ip) not in network:
+                    continue
+            except ValueError:
+                continue
+        seen_ips.add(ip)
+        candidates.append((ip, {"ip": ip, "device": "mdns"}))
 
     if scan_subnet and network:
         for host in network.hosts():
@@ -542,6 +643,7 @@ def network_discovery(
         "device_count": len(devices),
         "devices": devices,
         "ssdp": ssdp_services,
+        "mdns": mdns_services,
     }
 
 
