@@ -281,6 +281,18 @@ def _collect_module_events(conn) -> List[Dict[str, Any]]:
     return events
 
 
+def _load_autonomy_config() -> Dict[str, Any]:
+    config_path = settings.modules_config_path()
+    if not config_path.exists():
+        return {}
+    config = module_config.load_config(str(config_path))
+    modules_cfg = config.get("modules", {})
+    if not isinstance(modules_cfg, dict):
+        return {}
+    autonomy_cfg = modules_cfg.get("autonomy", {})
+    return autonomy_cfg if isinstance(autonomy_cfg, dict) else {}
+
+
 def _inventory_change_event(conn) -> Dict[str, Any] | None:
     inventory = inventory_mod.snapshot(conn)
     opportunities = inventory_mod.opportunities(inventory)
@@ -532,7 +544,7 @@ def _maybe_auto_approve_action(
     return True
 
 
-def _execute_approved(conn, policy: policy_mod.Policy) -> int:
+def _execute_approved(conn, policy: policy_mod.Policy, autonomy_cfg: Dict[str, Any]) -> int:
     executed_count = 0
     approved = store.fetch_approved_unexecuted(conn)
     if not approved:
@@ -548,7 +560,30 @@ def _execute_approved(conn, policy: policy_mod.Policy) -> int:
                     "policy_hash": policy.policy_hash,
                 },
             )
+    try:
+        max_actions = int(autonomy_cfg.get("max_actions_per_loop", 3))
+    except (TypeError, ValueError):
+        max_actions = 3
+    action_cooldowns = autonomy_cfg.get("action_cooldowns_seconds") or {}
+    if not isinstance(action_cooldowns, dict):
+        action_cooldowns = {}
+    try:
+        default_cooldown = int(autonomy_cfg.get("default_action_cooldown_seconds", 0))
+    except (TypeError, ValueError):
+        default_cooldown = 0
+
     for row in approved:
+        if executed_count >= max_actions:
+            audit.append_jsonl(
+                str(settings.audit_path()),
+                {
+                    "kind": "action.loop_limit_reached",
+                    "max_actions": max_actions,
+                    "skipped_count": max(0, len(approved) - executed_count),
+                    "policy_hash": policy.policy_hash,
+                },
+            )
+            break
         proposal_id = row["id"]
         details = json.loads(row["details_json"])
         action_type = details.get("action_type")
@@ -624,6 +659,39 @@ def _execute_approved(conn, policy: policy_mod.Policy) -> int:
             )
             continue
 
+        cooldown_seconds = 0
+        if action_type in action_cooldowns:
+            try:
+                cooldown_seconds = int(action_cooldowns.get(action_type, 0))
+            except (TypeError, ValueError):
+                cooldown_seconds = 0
+        elif default_cooldown:
+            cooldown_seconds = default_cooldown
+        if cooldown_seconds > 0:
+            cooldown_key = f"action.cooldown:{action_type}"
+            if not _cooldown_elapsed(conn, cooldown_key, cooldown_seconds):
+                audit.append_jsonl(
+                    str(settings.audit_path()),
+                    {
+                        "kind": "action.skipped_cooldown",
+                        "proposal_id": proposal_id,
+                        "action_type": action_type,
+                        "cooldown_seconds": cooldown_seconds,
+                        "policy_hash": policy.policy_hash,
+                    },
+                )
+                _append_recent_memory(
+                    conn,
+                    "actions.recent",
+                    {
+                        "ts": datetime.now().isoformat(),
+                        "proposal_id": proposal_id,
+                        "action_type": action_type,
+                        "status": "skipped_cooldown",
+                    },
+                )
+                continue
+
         try:
             decision = policy_mod.evaluate_action(
                 policy, action_type, action_params, risk=row["risk"]
@@ -690,7 +758,41 @@ def _execute_approved(conn, policy: policy_mod.Policy) -> int:
             if verify_url:
                 verify = act.verify_health(str(verify_url))
                 if not verify.get("ok"):
+                    audit.append_jsonl(
+                        str(settings.audit_path()),
+                        {
+                            "kind": "action.verify_failed",
+                            "action_id": action_id,
+                            "proposal_id": proposal_id,
+                            "action_type": action_type,
+                            "error": verify,
+                            "policy_hash": policy.policy_hash,
+                        },
+                    )
                     raise RuntimeError(f"verification_failed: {verify}")
+                audit.append_jsonl(
+                    str(settings.audit_path()),
+                    {
+                        "kind": "action.verify_succeeded",
+                        "action_id": action_id,
+                        "proposal_id": proposal_id,
+                        "action_type": action_type,
+                        "policy_hash": policy.policy_hash,
+                    },
+                )
+            if cooldown_seconds > 0:
+                _record_cooldown(conn, f"action.cooldown:{action_type}")
+                audit.append_jsonl(
+                    str(settings.audit_path()),
+                    {
+                        "kind": "action.cooldown_set",
+                        "action_id": action_id,
+                        "proposal_id": proposal_id,
+                        "action_type": action_type,
+                        "cooldown_seconds": cooldown_seconds,
+                        "policy_hash": policy.policy_hash,
+                    },
+                )
             _append_recent_memory(
                 conn,
                 "actions.recent",
@@ -879,7 +981,8 @@ def run_once() -> Dict[str, Any]:
         store.set_memory(conn, "selfcheck.last_ts", now)
 
     _requeue_orphaned_suggestions(conn, policy.policy_hash)
-    executed_actions = _execute_approved(conn, policy)
+    autonomy_cfg = _load_autonomy_config()
+    executed_actions = _execute_approved(conn, policy, autonomy_cfg)
     total_executed = store.get_memory(conn, "actions.total_executed") or 0
     try:
         total_executed = int(total_executed)

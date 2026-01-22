@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Pumpkin Autonomy Desk</title>
+    <title>Pumpkin Audit Trail</title>
     <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='29' y='10' width='6' height='12' fill='%235b4b41'/><circle cx='32' cy='36' r='20' fill='%23e67c2e'/><circle cx='20' cy='36' r='14' fill='%23f08a3a' opacity='0.85'/><circle cx='44' cy='36' r='14' fill='%23f08a3a' opacity='0.85'/></svg>" />
     <style>
       :root {
@@ -65,29 +65,22 @@
         padding: 0;
         list-style: none;
         display: grid;
-        gap: 6px;
+        gap: 8px;
         color: var(--muted);
-        font-size: 14px;
+        font-size: 13px;
       }
-      button {
+      .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      input, button {
         border: 1px solid var(--line);
         background: var(--card);
         color: var(--ink);
         padding: 8px 12px;
         border-radius: 10px;
-        cursor: pointer;
+        font-family: inherit;
       }
+      button { cursor: pointer; }
       a { color: var(--pumpkin-dark); text-decoration: none; }
-      .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-      .pill {
-        display: inline-block;
-        padding: 4px 10px;
-        border-radius: 999px;
-        background: rgba(230, 124, 46, 0.12);
-        color: var(--pumpkin-dark);
-        font-size: 12px;
-        font-weight: 600;
-      }
+      code { color: var(--pumpkin-dark); }
     </style>
   </head>
   <body>
@@ -99,32 +92,37 @@
           <circle cx="20" cy="36" r="14" fill="#f08a3a" opacity="0.85" />
           <circle cx="44" cy="36" r="14" fill="#f08a3a" opacity="0.85" />
         </svg>
-        Autonomy Desk
+        Audit Trail
       </div>
       <div class="sub">
-        Track autonomous execution, proposals, and recent actions.
+        Full execution trail for proposals, approvals, and actions.
         <a href="/ui">Back to dashboard →</a>
       </div>
     </header>
     <main>
       <section class="card">
         <div class="row" style="margin-bottom: 8px;">
-          <span class="pill" id="total-executed">0 executed</span>
+          <input id="kind-filter" placeholder="Filter by kind (optional)" />
           <button id="refresh">Refresh</button>
         </div>
-        <div class="section-title">Autonomy Summary</div>
-        <ul class="list" id="autonomy-summary"></ul>
+        <div class="section-title">Audit Log</div>
+        <ul class="list" id="audit-list"></ul>
       </section>
       <section class="card">
         <div class="section-title">Recent Actions</div>
         <ul class="list" id="action-list"></ul>
       </section>
       <section class="card">
-        <div class="section-title">Recent Proposals</div>
-        <ul class="list" id="proposal-list"></ul>
+        <div class="section-title">Recent Approvals</div>
+        <ul class="list" id="approval-list"></ul>
       </section>
     </main>
     <script>
+      const auditList = document.getElementById("audit-list");
+      const actionList = document.getElementById("action-list");
+      const approvalList = document.getElementById("approval-list");
+      const filterInput = document.getElementById("kind-filter");
+
       const setList = (node, items) => {
         node.innerHTML = "";
         if (!items.length) {
@@ -140,58 +138,57 @@
         });
       };
 
-      const totalExecuted = document.getElementById("total-executed");
-      const autonomySummary = document.getElementById("autonomy-summary");
-      const actionList = document.getElementById("action-list");
-      const proposalList = document.getElementById("proposal-list");
+      const loadAudit = async () => {
+        const params = new URLSearchParams();
+        params.set("limit", "60");
+        if (filterInput.value.trim()) {
+          params.set("kind", filterInput.value.trim());
+        }
+        const res = await fetch(`/audit?${params.toString()}`);
+        const payload = await res.json();
+        const entries = payload.entries || [];
+        setList(
+          auditList,
+          entries.map((entry) => {
+            const when = entry.ts || "n/a";
+            const kind = entry.kind || "audit";
+            return `${when} • ${kind} • ${JSON.stringify(entry).slice(0, 160)}`;
+          })
+        );
+      };
+
+      const loadActions = async () => {
+        const res = await fetch("/actions?limit=20");
+        const payload = await res.json();
+        const actions = payload.actions || [];
+        setList(
+          actionList,
+          actions.map((item) => {
+            const when = item.ts_started || "n/a";
+            return `${when} • ${item.action_type} • ${item.status}`;
+          })
+        );
+      };
+
+      const loadApprovals = async () => {
+        const res = await fetch("/approvals?limit=20");
+        const payload = await res.json();
+        const approvals = payload.approvals || [];
+        setList(
+          approvalList,
+          approvals.map((item) => {
+            return `${item.ts} • ${item.decision} • proposal ${item.proposal_id}`;
+          })
+        );
+      };
 
       const load = async () => {
         try {
-          const summaryRes = await fetch("/summary");
-          const summary = await summaryRes.json();
-          const autonomy = summary.autonomy || {};
-          const guardrails = autonomy.guardrails || {};
-          totalExecuted.textContent = `${autonomy.total_executed || 0} executed`;
-          const guardrailLines = [];
-          if (guardrails.max_actions_per_loop !== undefined) {
-            guardrailLines.push(`max actions per loop: ${guardrails.max_actions_per_loop}`);
-          }
-          if (guardrails.default_action_cooldown_seconds !== undefined) {
-            guardrailLines.push(
-              `default cooldown: ${guardrails.default_action_cooldown_seconds}s`
-            );
-          }
-          const cooldowns = guardrails.action_cooldowns_seconds || {};
-          if (Object.keys(cooldowns).length) {
-            guardrailLines.push(
-              `cooldowns: ${Object.entries(cooldowns)
-                .map(([key, val]) => `${key}=${val}s`)
-                .join(", ")}`
-            );
-          }
-          setList(autonomySummary, [
-            `last executed: ${autonomy.last_executed_count ?? 0}`,
-            `last run: ${autonomy.last_executed_ts || "n/a"}`,
-            `pending proposals: ${summary.proposal_count || 0}`,
-            ...guardrailLines,
-          ]);
-
-          const recentActions = autonomy.recent_actions || [];
-          setList(
-            actionList,
-            recentActions.map((item) => `${item.ts} • ${item.action_type} • ${item.status}`)
-          );
-
-          const proposals = (summary.proposals || []).slice(0, 10);
-          setList(
-            proposalList,
-            proposals.map((item) => `${item.summary} • ${item.status} • risk ${item.risk}`)
-          );
+          await Promise.all([loadAudit(), loadActions(), loadApprovals()]);
         } catch (err) {
-          totalExecuted.textContent = "0 executed";
-          setList(autonomySummary, []);
+          setList(auditList, []);
           setList(actionList, []);
-          setList(proposalList, []);
+          setList(approvalList, []);
         }
       };
 

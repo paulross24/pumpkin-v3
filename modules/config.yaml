@@ -33,9 +33,18 @@ modules:
       - hvac_mode
       - hvac_action
       - preset_mode
+    presence_map:
+      device_trackers: {}
+      macs: {}
   code.assistant:
     repo_root: "/home/rossp"
     require_approval: true
+  autonomy:
+    max_actions_per_loop: 3
+    default_action_cooldown_seconds: 30
+    action_cooldowns_seconds:
+      homeassistant.service: 20
+      network.discovery: 120
   network.discovery:
     subnet: "auto"
     tcp_ports:

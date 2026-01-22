@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 from . import settings
 
@@ -58,3 +58,28 @@ def append_jsonl(path: str, entry: Dict[str, Any]) -> None:
         f.write(json.dumps(entry, ensure_ascii=True) + "\n")
         f.flush()
         os.fsync(f.fileno())
+
+
+def read_tail(path: str, limit: int = 100, kind: Optional[str] = None) -> List[Dict[str, Any]]:
+    file_path = Path(path)
+    if not file_path.exists():
+        return []
+    data = file_path.read_bytes()
+    max_bytes = settings.audit_max_bytes()
+    if len(data) > max_bytes:
+        data = data[-max_bytes:]
+    lines = data.decode("utf-8", errors="ignore").splitlines()
+    entries: List[Dict[str, Any]] = []
+    for line in reversed(lines):
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except Exception:
+            continue
+        if kind and entry.get("kind") != kind:
+            continue
+        entries.append(entry)
+        if len(entries) >= limit:
+            break
+    return entries

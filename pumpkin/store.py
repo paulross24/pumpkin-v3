@@ -214,6 +214,20 @@ def finish_action(
     conn.commit()
 
 
+def list_actions(conn: sqlite3.Connection, limit: int = 50) -> List[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM actions ORDER BY id DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+
+
+def list_approvals(conn: sqlite3.Connection, limit: int = 50) -> List[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM approvals ORDER BY id DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+
+
 def get_memory(conn: sqlite3.Connection, key: str) -> Optional[Any]:
     row = conn.execute("SELECT value_json FROM memory WHERE key = ?", (key,)).fetchone()
     if not row:

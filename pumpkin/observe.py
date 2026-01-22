@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from . import ha_client
+from . import module_config
 from . import settings
 
 def _read_meminfo() -> Dict[str, int]:
@@ -735,6 +736,64 @@ def _normalize_attributes(attributes: Dict[str, Any], allowlist: Iterable[str]) 
     return normalized
 
 
+def _load_presence_map() -> Dict[str, Dict[str, str]]:
+    config_path = settings.modules_config_path()
+    if not config_path.exists():
+        return {}
+    try:
+        config = module_config.load_config(str(config_path))
+    except Exception:
+        return {}
+    modules_cfg = config.get("modules", {})
+    if not isinstance(modules_cfg, dict):
+        return {}
+    module_cfg = modules_cfg.get("homeassistant.observer", {})
+    if not isinstance(module_cfg, dict):
+        module_cfg = modules_cfg.get("homeassistant", {})
+    if not isinstance(module_cfg, dict):
+        return {}
+    presence_map = module_cfg.get("presence_map", {})
+    if not isinstance(presence_map, dict):
+        return {}
+    device_trackers = presence_map.get("device_trackers", {})
+    macs = presence_map.get("macs", {})
+    normalized = {
+        "device_trackers": {},
+        "macs": {},
+    }
+    if isinstance(device_trackers, dict):
+        normalized["device_trackers"] = {
+            str(k).lower(): str(v) for k, v in device_trackers.items() if str(k).strip()
+        }
+    if isinstance(macs, dict):
+        normalized["macs"] = {str(k).lower(): str(v) for k, v in macs.items() if str(k).strip()}
+    return normalized
+
+
+def _presence_map_name(
+    entity_id: str, payload: Dict[str, Any], presence_map: Dict[str, Dict[str, str]]
+) -> Optional[str]:
+    if not presence_map:
+        return None
+    attrs = payload.get("attributes", {}) if isinstance(payload, dict) else {}
+    if isinstance(attrs, dict):
+        for key in ("mac", "mac_address"):
+            value = attrs.get(key)
+            if isinstance(value, str) and value.strip():
+                mapped = presence_map.get("macs", {}).get(value.lower())
+                if mapped:
+                    return mapped
+    mapped = presence_map.get("device_trackers", {}).get(entity_id.lower())
+    if mapped:
+        return mapped
+    name = attrs.get("friendly_name") if isinstance(attrs, dict) else None
+    if isinstance(name, str) and name.strip():
+        mapped = presence_map.get("device_trackers", {}).get(name.lower())
+        if mapped:
+            return mapped
+    return None
+
+
 def _filter_entity(
     entity_id: str,
     include_domains: Optional[Iterable[str]],
@@ -756,7 +815,11 @@ def _filter_entity(
     return True
 
 
-def _summarize_states(states: Dict[str, Dict[str, Any]], areas: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+def _summarize_states(
+    states: Dict[str, Dict[str, Any]],
+    areas: Dict[str, Dict[str, Any]],
+    presence_map: Optional[Dict[str, Dict[str, str]]] = None,
+) -> Dict[str, Any]:
     counts: Dict[str, int] = {}
     home_people: List[str] = []
     home_devices: List[str] = []
@@ -818,7 +881,8 @@ def _summarize_states(states: Dict[str, Dict[str, Any]], areas: Dict[str, Dict[s
         if domain == "device_tracker":
             name = payload.get("attributes", {}).get("friendly_name") or entity_id
             if payload.get("state") == "home":
-                home_devices.append(str(name))
+                mapped = _presence_map_name(entity_id, payload, presence_map or {})
+                home_devices.append(str(mapped or name))
         if domain == "zone":
             attributes = payload.get("attributes", {}) or {}
             name = attributes.get("friendly_name") or entity_id
@@ -1025,7 +1089,8 @@ def homeassistant_snapshot(
             "area_id": area_id,
         }
 
-    summary = _summarize_states(current, areas_map)
+    presence_map = _load_presence_map()
+    summary = _summarize_states(current, areas_map, presence_map)
     summary["areas"] = [
         {"area_id": aid, "name": area.get("name")} for aid, area in areas_map.items() if isinstance(area, dict)
     ]

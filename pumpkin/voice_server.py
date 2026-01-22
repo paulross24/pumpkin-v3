@@ -22,6 +22,7 @@ from urllib.parse import parse_qs, quote, urlparse
 
 from . import settings
 from . import store
+from . import audit
 from . import module_config
 from . import module_registry
 from . import ha_client
@@ -5046,6 +5047,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
             if path == "/ui/inventory":
                 _send_html(self, 200, _load_voice_ui_asset("voice_ui_inventory.html"))
                 return
+            if path == "/ui/audit":
+                _send_html(self, 200, _load_voice_ui_asset("voice_ui_audit.html"))
+                return
             if path == "/car/telemetry":
                 conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
                 _send_json(self, 200, {"status": "ok", "car_telemetry": _car_telemetry_summary(conn)})
@@ -5354,11 +5358,38 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 actions_recent = store.get_memory(conn, "actions.recent") or []
                 if not isinstance(actions_recent, list):
                     actions_recent = []
+                autonomy_cfg = {}
+                config_path = settings.modules_config_path()
+                if config_path.exists():
+                    try:
+                        cfg = module_config.load_config(str(config_path))
+                        modules_cfg = cfg.get("modules", {})
+                        if isinstance(modules_cfg, dict):
+                            autonomy_cfg = modules_cfg.get("autonomy", {}) or {}
+                    except Exception:
+                        autonomy_cfg = {}
+                guardrails = {}
+                if isinstance(autonomy_cfg, dict):
+                    try:
+                        guardrails = {
+                            "max_actions_per_loop": int(
+                                autonomy_cfg.get("max_actions_per_loop", 3)
+                            ),
+                            "default_action_cooldown_seconds": int(
+                                autonomy_cfg.get("default_action_cooldown_seconds", 0)
+                            ),
+                            "action_cooldowns_seconds": autonomy_cfg.get(
+                                "action_cooldowns_seconds", {}
+                            ),
+                        }
+                    except (TypeError, ValueError):
+                        guardrails = {}
                 autonomy = {
                     "total_executed": store.get_memory(conn, "actions.total_executed") or 0,
                     "last_executed_count": store.get_memory(conn, "actions.last_executed_count") or 0,
                     "last_executed_ts": store.get_memory(conn, "actions.last_executed_ts"),
                     "recent_actions": actions_recent[-5:],
+                    "guardrails": guardrails,
                 }
                 now_ts = datetime.now(timezone.utc)
                 since_ts = (now_ts - timedelta(hours=24)).isoformat()
@@ -5409,6 +5440,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 briefing = store.get_memory(conn, "insights.last_briefing")
                 if not isinstance(briefing, dict):
                     briefing = None
+                audit_tail = audit.read_tail(str(settings.audit_path()), limit=5)
                 router_rows = store.list_events(
                     conn,
                     limit=5,
@@ -5452,11 +5484,71 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "proactivity": proactivity,
                         "insights": insights_latest[-5:],
                         "briefing": briefing,
+                        "audit_tail": audit_tail,
                         "router_events": router_events,
                         "proposals": proposal_items,
                         "proposal_count": len(proposal_items),
                     },
                 )
+                return
+            if path == "/audit":
+                limit = _parse_limit(params.get("limit", [None])[0], default=50, max_limit=200)
+                kind = params.get("kind", [None])[0]
+                if not isinstance(kind, str) or not kind.strip():
+                    kind = None
+                entries = audit.read_tail(str(settings.audit_path()), limit=limit, kind=kind)
+                _send_json(
+                    self,
+                    200,
+                    {"count": len(entries), "entries": entries},
+                )
+                return
+            if path == "/actions":
+                limit = _parse_limit(params.get("limit", [None])[0], default=50, max_limit=200)
+                conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+                rows = store.list_actions(conn, limit=limit)
+                actions = []
+                for row in rows:
+                    try:
+                        params = json.loads(row["params_json"])
+                    except Exception:
+                        params = {}
+                    try:
+                        result = json.loads(row["result_json"]) if row["result_json"] else None
+                    except Exception:
+                        result = None
+                    actions.append(
+                        {
+                            "id": row["id"],
+                            "proposal_id": row["proposal_id"],
+                            "ts_started": row["ts_started"],
+                            "ts_finished": row["ts_finished"],
+                            "action_type": row["action_type"],
+                            "params": params,
+                            "status": row["status"],
+                            "result": result,
+                        }
+                    )
+                _send_json(self, 200, {"count": len(actions), "actions": actions})
+                return
+            if path == "/approvals":
+                limit = _parse_limit(params.get("limit", [None])[0], default=50, max_limit=200)
+                conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+                rows = store.list_approvals(conn, limit=limit)
+                approvals = []
+                for row in rows:
+                    approvals.append(
+                        {
+                            "id": row["id"],
+                            "proposal_id": row["proposal_id"],
+                            "ts": row["ts"],
+                            "actor": row["actor"],
+                            "decision": row["decision"],
+                            "reason": row["reason"],
+                            "policy_hash": row["policy_hash"],
+                        }
+                    )
+                _send_json(self, 200, {"count": len(approvals), "approvals": approvals})
                 return
             if path == "/vision/stats":
                 conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
@@ -5544,6 +5636,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "/catalog": {"get": {"summary": "Module catalog"}},
                             "/capabilities": {"get": {"summary": "Capability snapshot"}},
                             "/car/telemetry": {"get": {"summary": "Car telemetry summary"}},
+                            "/audit": {"get": {"summary": "Audit log tail"}},
+                            "/actions": {"get": {"summary": "Recent action executions"}},
+                            "/approvals": {"get": {"summary": "Recent approvals"}},
                             "/notifications": {"get": {"summary": "Recent alerts"}},
                             "/thoughts": {"get": {"summary": "Recent thought stream"}},
                             "/vision/alerts": {"get": {"summary": "Unknown face alert settings"}},
@@ -5689,6 +5784,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "/ui/thoughts": {"get": {"summary": "Thought stream dashboard"}},
                             "/ui/scoreboard": {"get": {"summary": "Scoreboard dashboard"}},
                             "/ui/inventory": {"get": {"summary": "Inventory dashboard"}},
+                            "/ui/audit": {"get": {"summary": "Audit trail dashboard"}},
                             "/memory": {"get": {"summary": "Memory snapshot"}},
                             "/summary": {
                                 "get": {
