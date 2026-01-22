@@ -400,6 +400,31 @@ def record_insights(conn, insights: Iterable[Dict[str, Any]]) -> None:
     store.set_memory(conn, "insights.latest", current[-30:])
 
 
+def filter_recent_insights(
+    conn, insights: Iterable[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    items = [item for item in insights if isinstance(item, dict)]
+    if not items:
+        return []
+    cfg = _load_insights_cfg()
+    dedupe_minutes = _insight_dedupe_minutes(cfg)
+    filtered: List[Dict[str, Any]] = []
+    now = datetime.now(timezone.utc).isoformat()
+    for item in items:
+        signature = _insight_signature(item)
+        if signature:
+            last_ts = store.get_memory(conn, f"insights.last_event.{signature}")
+            if isinstance(last_ts, str):
+                parsed = _parse_timestamp(last_ts)
+                if parsed:
+                    delta = _minutes_since(parsed)
+                    if delta is not None and delta < dedupe_minutes:
+                        continue
+            store.set_memory(conn, f"insights.last_event.{signature}", now)
+        filtered.append(item)
+    return filtered
+
+
 def _should_brief(
     conn,
     in_quiet_hours: bool,

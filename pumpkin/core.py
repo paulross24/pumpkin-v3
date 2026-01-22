@@ -835,9 +835,11 @@ def run_once() -> Dict[str, Any]:
         network_snapshot=network_snapshot if isinstance(network_snapshot, dict) else {},
         prev_network_snapshot=prev_network if isinstance(prev_network, dict) else {},
     )
+    insight_items = insights.filter_recent_insights(conn, insight_items)
     insights.record_insights(conn, insight_items)
     new_events = _load_events_since_last(conn)
     event_insights = insights.build_event_insights(new_events)
+    event_insights = insights.filter_recent_insights(conn, event_insights)
     insights.record_insights(conn, event_insights)
     all_insights = list(insight_items) + list(event_insights)
     brief_times = insights.briefing_times()
