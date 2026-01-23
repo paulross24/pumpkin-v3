@@ -6601,7 +6601,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
         )
         store.update_proposal_status(conn, proposal_id, decision)
         if decision == "rejected":
-            summary = row.get("summary")
+            summary = row["summary"] if "summary" in row.keys() else None
             if isinstance(summary, str) and summary.strip():
                 current = store.get_memory(conn, "proposal.snoozed")
                 if not isinstance(current, list):
