@@ -450,7 +450,7 @@ def _watchdog_stalled_actions(conn, policy: policy_mod.Policy, autonomy_cfg: Dic
                 capability_request=None,
                 steps=["Approve retry", "Verify action starts"],
             )
-        cooldown_key = f\"proposal.stalled:{row['id']}\"
+        cooldown_key = f"proposal.stalled:{row['id']}"
         if not _cooldown_elapsed(conn, cooldown_key, stall_minutes * 60):
             continue
         store.insert_event(
