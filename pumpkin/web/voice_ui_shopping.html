@@ -158,6 +158,25 @@
           } else {
             link.textContent = "No link available.";
           }
+          const actions = document.createElement("div");
+          actions.className = "meta";
+          const markButton = document.createElement("button");
+          markButton.className = "btn";
+          markButton.type = "button";
+          markButton.textContent = "Mark acquired";
+          markButton.addEventListener("click", async () => {
+            try {
+              await fetch("/shopping/mark", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name: item.name }),
+              });
+            } catch (err) {
+              // noop
+            }
+            load();
+          });
+          actions.appendChild(markButton);
           const source = document.createElement("div");
           source.className = "meta";
           source.textContent = `Proposal #${item.proposal_id}: ${item.proposal_summary || "n/a"}`;
@@ -165,6 +184,7 @@
           li.appendChild(meta);
           li.appendChild(reason);
           li.appendChild(link);
+          li.appendChild(actions);
           li.appendChild(source);
           list.appendChild(li);
         });

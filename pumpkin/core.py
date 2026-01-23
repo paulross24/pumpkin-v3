@@ -339,6 +339,10 @@ def _record_pulse(
 def _update_shopping_list(conn) -> List[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
     seen = set()
+    acquired = store.get_memory(conn, "shopping.acquired")
+    if not isinstance(acquired, list):
+        acquired = []
+    acquired_keys = {str(item).lower() for item in acquired if isinstance(item, str)}
     for status in ("pending", "approved"):
         for row in store.list_proposals(conn, status=status, limit=200):
             try:
@@ -353,6 +357,8 @@ def _update_shopping_list(conn) -> List[Dict[str, Any]]:
                     continue
                 name = str(entry.get("name") or "").strip()
                 if not name:
+                    continue
+                if name.lower() in acquired_keys:
                     continue
                 link = entry.get("link") or entry.get("url") or entry.get("purchase_url")
                 if not link:

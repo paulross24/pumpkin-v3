@@ -4842,6 +4842,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
             if self.path == "/network/rtsp_probe":
                 self._handle_network_rtsp_probe()
                 return
+            if self.path == "/shopping/mark":
+                self._handle_shopping_mark()
+                return
             if self.path == "/vision/alerts":
                 self._handle_vision_alerts()
                 return
@@ -6703,6 +6706,39 @@ class VoiceHandler(BaseHTTPRequestHandler):
             severity="info",
         )
         _send_json(self, 200, {"status": "ok", "marked": item})
+
+    def _handle_shopping_mark(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+        try:
+            data = _parse_json(body)
+        except ValueError:
+            _bad_request(self, "invalid JSON")
+            return
+        if not isinstance(data, dict):
+            _bad_request(self, "JSON body must be an object")
+            return
+        name = data.get("name") or data.get("item")
+        if not isinstance(name, str) or not name.strip():
+            _bad_request(self, "name must be a string")
+            return
+        cleaned = name.strip()
+        key = cleaned.lower()
+        conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+        acquired = store.get_memory(conn, "shopping.acquired")
+        if not isinstance(acquired, list):
+            acquired = []
+        if key not in acquired:
+            acquired.append(key)
+            store.set_memory(conn, "shopping.acquired", acquired[-500:])
+        store.insert_event(
+            conn,
+            source="shopping",
+            event_type="shopping.acquired",
+            payload={"name": cleaned, "key": key},
+            severity="info",
+        )
+        _send_json(self, 200, {"status": "ok", "name": cleaned})
 
     def _handle_network_deep_scan(self) -> None:
         length = int(self.headers.get("Content-Length", "0"))
