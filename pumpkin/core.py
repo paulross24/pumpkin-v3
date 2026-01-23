@@ -419,6 +419,37 @@ def _watchdog_stalled_actions(conn, policy: policy_mod.Policy, autonomy_cfg: Dic
         ).fetchone()
         if action_row:
             continue
+        summary = f"Retry stalled proposal #{row['id']}: {row['summary']}"
+        if not store.proposal_exists(conn, summary, statuses=["pending", "approved"]):
+            store.insert_proposal(
+                conn,
+                kind="action.request",
+                summary=summary,
+                details={
+                    "rationale": "Action did not start within the expected window; retry with a single forced execution.",
+                    "action_type": "proposal.retry_execute",
+                    "action_params": {"proposal_id": row["id"]},
+                    "implementation": "Set a one-time force_execute flag so the action runs on the next loop.",
+                    "verification": "Confirm an action starts and proposal status updates.",
+                    "rollback_plan": "Clear the force_execute flag if retry is not desired.",
+                    "retry_plan": {
+                        "checks": [
+                            "Execution plan confirmed",
+                            "No prior action started",
+                            "Core loop running",
+                        ],
+                        "bypass": "action cooldown (one attempt)",
+                        "attempts": 1,
+                    },
+                },
+                risk=0.2,
+                expected_outcome="A single retry attempt is executed for the stalled action.",
+                status="pending",
+                policy_hash=policy.policy_hash,
+                needs_new_capability=False,
+                capability_request=None,
+                steps=["Approve retry", "Verify action starts"],
+            )
         cooldown_key = f\"proposal.stalled:{row['id']}\"
         if not _cooldown_elapsed(conn, cooldown_key, stall_minutes * 60):
             continue
@@ -1012,6 +1043,7 @@ def _execute_approved(conn, policy: policy_mod.Policy, autonomy_cfg: Dict[str, A
         rollback_type = details.get("rollback_action_type")
         rollback_params = details.get("rollback_action_params")
         verify_url = details.get("verify_url")
+        force_execute = bool(details.get("force_execute"))
 
         if not action_type:
             suggestion = details.get("suggestion")
@@ -1091,6 +1123,8 @@ def _execute_approved(conn, policy: policy_mod.Policy, autonomy_cfg: Dict[str, A
                 cooldown_seconds = 0
         elif default_cooldown:
             cooldown_seconds = default_cooldown
+        if force_execute:
+            cooldown_seconds = 0
         if cooldown_seconds > 0:
             cooldown_key = f"action.cooldown:{action_type}"
             if not _cooldown_elapsed(conn, cooldown_key, cooldown_seconds):
@@ -1169,6 +1203,9 @@ def _execute_approved(conn, policy: policy_mod.Policy, autonomy_cfg: Dict[str, A
             result = execute_action(action_type, action_params, str(settings.audit_path()))
             store.finish_action(conn, action_id, "succeeded", result=result)
             store.update_proposal_status(conn, proposal_id, "executed")
+            if force_execute:
+                details.pop("force_execute", None)
+                store.update_proposal_details(conn, proposal_id, details)
             _record_action_summary(conn, action_type, "succeeded", proposal_id)
             audit.append_jsonl(
                 str(settings.audit_path()),
@@ -1233,6 +1270,9 @@ def _execute_approved(conn, policy: policy_mod.Policy, autonomy_cfg: Dict[str, A
         except Exception as exc:
             store.finish_action(conn, action_id, "failed", result={"error": str(exc)})
             store.update_proposal_status(conn, proposal_id, "failed")
+            if force_execute:
+                details.pop("force_execute", None)
+                store.update_proposal_details(conn, proposal_id, details)
             _record_action_summary(conn, action_type, "failed", proposal_id, detail="error")
             audit.append_jsonl(
                 str(settings.audit_path()),

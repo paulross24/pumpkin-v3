@@ -44,6 +44,11 @@ ACTION_METADATA = {
         "verification": "Confirm proposal details show execution_plan_confirmed=true.",
         "rollback": "Re-open the plan by clearing the confirmation flag.",
     },
+    "proposal.retry_execute": {
+        "description": "Retry a stalled proposal by forcing a single execution attempt.",
+        "verification": "Confirm an action is created and proposal executes or fails.",
+        "rollback": "Clear the force_execute flag on the proposal.",
+    },
 }
 
 
@@ -70,6 +75,8 @@ def execute_action(
         return network_mark_useful(params, audit_path)
     if action_type == "proposal.confirm_plan":
         return confirm_plan_action(params, audit_path)
+    if action_type == "proposal.retry_execute":
+        return retry_execute_action(params, audit_path)
     raise ValueError(f"unsupported action_type: {action_type}")
 
 
@@ -280,6 +287,42 @@ def confirm_plan_action(params: Dict[str, Any], audit_path: str) -> Dict[str, An
         audit_path,
         {
             "kind": "proposal.plan_confirmed",
+            "proposal_id": proposal_id,
+        },
+    )
+    return {"ok": True, "proposal_id": proposal_id}
+
+
+def retry_execute_action(params: Dict[str, Any], audit_path: str) -> Dict[str, Any]:
+    proposal_id = params.get("proposal_id")
+    if not isinstance(proposal_id, int):
+        raise ValueError("proposal_id_missing")
+    conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+    row = store.get_proposal(conn, proposal_id)
+    if not row:
+        raise ValueError("proposal_not_found")
+    try:
+        details = json.loads(row["details_json"])
+    except Exception:
+        details = {}
+    if details.get("execution_plan_confirmed") is not True:
+        raise ValueError("execution_plan_not_confirmed")
+    if not details.get("action_type"):
+        raise ValueError("action_type_missing")
+    details["force_execute"] = True
+    details["retry_requested_at"] = utc_now_iso()
+    store.update_proposal_details(conn, proposal_id, details)
+    store.insert_event(
+        conn,
+        source="core",
+        event_type="proposal.retry_requested",
+        payload={"proposal_id": proposal_id},
+        severity="info",
+    )
+    append_jsonl(
+        audit_path,
+        {
+            "kind": "proposal.retry_requested",
             "proposal_id": proposal_id,
         },
     )
