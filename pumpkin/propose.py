@@ -2050,6 +2050,21 @@ def _hardware_opportunity_proposals(conn) -> List[Dict[str, Any]]:
     inventory = inventory_mod.snapshot(conn)
     ha = inventory.get("homeassistant", {}) if isinstance(inventory.get("homeassistant"), dict) else {}
     domains = ha.get("domains", {}) if isinstance(ha.get("domains"), dict) else {}
+    ha_entities = store.get_memory(conn, "homeassistant.entities") or {}
+    has_temperature = False
+    has_humidity = False
+    if isinstance(ha_entities, dict):
+        for payload in ha_entities.values():
+            if not isinstance(payload, dict):
+                continue
+            attrs = payload.get("attributes") if isinstance(payload.get("attributes"), dict) else {}
+            device_class = attrs.get("device_class")
+            if device_class == "temperature":
+                has_temperature = True
+            elif device_class == "humidity":
+                has_humidity = True
+            if has_temperature and has_humidity:
+                break
     proposals: List[Dict[str, Any]] = []
 
     def add(summary: str, rationale: str, items: List[Dict[str, str]], priority: float = 0.2) -> None:
@@ -2089,7 +2104,7 @@ def _hardware_opportunity_proposals(conn) -> List[Dict[str, Any]]:
                 }
             ],
         )
-    if domains.get("sensor", 0) < 5:
+    if domains.get("sensor", 0) < 5 and not (has_temperature and has_humidity):
         add(
             "Add multi-sensors in key rooms",
             "Limited environmental sensors detected; more data improves comfort and alerts.",
