@@ -1613,6 +1613,7 @@ def _is_code_request(text: str) -> bool:
 def _is_improvement_request(text: str) -> bool:
     lowered = text.lower()
     triggers = [
+        "create proposals",
         "improve yourself",
         "work better",
         "get better",
@@ -1620,6 +1621,8 @@ def _is_improvement_request(text: str) -> bool:
         "self-improve",
         "self improve",
         "plan improvements",
+        "generate proposals",
+        "suggest improvements",
         "propose improvements",
         "propose system improvements",
         "system improvements",
@@ -1642,7 +1645,9 @@ def _maybe_improvement_plan(text: str, device: str | None, conn, api_key: str | 
     if prev_mode is None:
         os.environ["PUMPKIN_PLANNER_MODE"] = "openai"
     try:
-        proposals = propose.build_proposals(events, conn)
+        proposals = propose.build_improvement_proposals(conn)
+        if not proposals:
+            proposals = propose.build_proposals(events, conn)
     except Exception as exc:
         print(f"PumpkinVoice planner_error {exc}", flush=True)
         return "I couldn't generate improvement plans right now."
@@ -3027,6 +3032,8 @@ def _maybe_auto_approve_action_proposal(
     if not isinstance(details, dict):
         return False
     action_type = details.get("action_type")
+    if action_type == "code.apply_patch":
+        return False
     action_params = details.get("action_params", {})
     if not isinstance(action_type, str) or not isinstance(action_params, dict):
         return False

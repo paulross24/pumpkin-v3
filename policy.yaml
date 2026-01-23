@@ -9,6 +9,7 @@ approval:
     - network.dns_change
     - network.cloudflared_change
     - network.firewall_change
+    - code.apply_patch
 auto_approve: []
 actions:
   - action_type: notify.local
