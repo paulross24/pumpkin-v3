@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pumpkin Shopping List</title>
+    <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='29' y='10' width='6' height='12' fill='%235b4b41'/><circle cx='32' cy='36' r='20' fill='%23e67c2e'/><circle cx='20' cy='36' r='14' fill='%23f08a3a' opacity='0.85'/><circle cx='44' cy='36' r='14' fill='%23f08a3a' opacity='0.85'/></svg>" />
+    <style>
+      :root {
+        --bg: #f6efe8;
+        --bg-accent: #f2d6b5;
+        --ink: #2a1b12;
+        --muted: #5b4b41;
+        --pumpkin: #e67c2e;
+        --pumpkin-dark: #b95519;
+        --card: #fff8f2;
+        --line: #e5d6c6;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Iowan Old Style", "Palatino", "Bookman", "Georgia", serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at 12% 10%, rgba(230, 124, 46, 0.15), transparent 40%),
+          linear-gradient(160deg, var(--bg), var(--bg-accent));
+        min-height: 100vh;
+      }
+      header {
+        padding: 28px 24px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .title {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 26px;
+        font-weight: 700;
+      }
+      .pumpkin-icon { width: 24px; height: 24px; flex: 0 0 auto; }
+      .sub { color: var(--muted); }
+      main {
+        padding: 12px 24px 40px;
+        display: grid;
+        gap: 16px;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 16px;
+        box-shadow: 0 12px 32px rgba(50, 33, 22, 0.08);
+      }
+      .section-title {
+        font-size: 14px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+      .list {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        display: grid;
+        gap: 10px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .item {
+        display: grid;
+        gap: 4px;
+      }
+      .name { color: var(--ink); font-weight: 700; }
+      .meta { font-size: 12px; }
+      .pill {
+        display: inline-block;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: rgba(230, 124, 46, 0.12);
+        color: var(--pumpkin-dark);
+        font-size: 12px;
+        font-weight: 600;
+      }
+      button {
+        border: 1px solid var(--line);
+        background: var(--card);
+        color: var(--ink);
+        padding: 8px 12px;
+        border-radius: 10px;
+        cursor: pointer;
+      }
+      a { color: var(--pumpkin-dark); text-decoration: none; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="title">
+        <svg class="pumpkin-icon" viewBox="0 0 64 64" aria-hidden="true">
+          <rect x="29" y="10" width="6" height="12" fill="var(--muted)" />
+          <circle cx="32" cy="36" r="20" fill="var(--pumpkin)" />
+          <circle cx="20" cy="36" r="14" fill="#f08a3a" opacity="0.85" />
+          <circle cx="44" cy="36" r="14" fill="#f08a3a" opacity="0.85" />
+        </svg>
+        Shopping List
+      </div>
+      <div class="sub">
+        Hardware ideas from Pumpkin proposals.
+        <a href="/ui">Back to dashboard →</a>
+      </div>
+    </header>
+    <main>
+      <section class="card">
+        <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+          <span class="pill" id="count-pill">0 items</span>
+          <button id="refresh">Refresh</button>
+        </div>
+        <div class="section-title">Suggested Purchases</div>
+        <ul class="list" id="shopping-list"></ul>
+      </section>
+    </main>
+    <script>
+      const list = document.getElementById("shopping-list");
+      const countPill = document.getElementById("count-pill");
+
+      const render = (items) => {
+        list.innerHTML = "";
+        countPill.textContent = `${items.length} items`;
+        if (!items.length) {
+          const li = document.createElement("li");
+          li.textContent = "No shopping items yet.";
+          list.appendChild(li);
+          return;
+        }
+        items.forEach((item) => {
+          const li = document.createElement("li");
+          li.className = "item";
+          const name = document.createElement("div");
+          name.className = "name";
+          name.textContent = item.name || "Unknown item";
+          const meta = document.createElement("div");
+          meta.className = "meta";
+          meta.textContent = `${item.category || "general"} • priority ${item.priority || "medium"}`;
+          const reason = document.createElement("div");
+          reason.className = "meta";
+          reason.textContent = item.reason || "No reason recorded.";
+          const source = document.createElement("div");
+          source.className = "meta";
+          source.textContent = `Proposal #${item.proposal_id}: ${item.proposal_summary || "n/a"}`;
+          li.appendChild(name);
+          li.appendChild(meta);
+          li.appendChild(reason);
+          li.appendChild(source);
+          list.appendChild(li);
+        });
+      };
+
+      const load = async () => {
+        try {
+          const res = await fetch("/shopping");
+          const payload = await res.json();
+          render(payload.items || []);
+        } catch (err) {
+          render([]);
+        }
+      };
+
+      document.getElementById("refresh").addEventListener("click", load);
+      load();
+    </script>
+  </body>
+</html>

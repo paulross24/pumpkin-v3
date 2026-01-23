@@ -19,6 +19,7 @@ from . import runbook
 from . import retrieval
 from . import settings
 from . import store
+from . import inventory as inventory_mod
 from .audit import append_jsonl
 
 MAX_PROPOSALS_PER_LOOP = settings.max_proposals_per_loop()
@@ -2010,9 +2011,10 @@ def build_improvement_proposals(conn) -> List[Dict[str, Any]]:
     context_pack, context_hash, context_excerpt = build_context_pack(conn)
     prompt = (
         _render_prompt(context_pack)
-        + "\n\nFocus only on improving existing capabilities, accuracy, or reliability. "
-        "Do not propose new modules or new capabilities. "
-        "Keep proposals to maintenance, action.request, policy.change, or hardware.recommendation."
+        + "\n\nFocus on making Pumpkin more helpful for the household and suggesting useful hardware additions. "
+        "You may propose maintenance, action.request, policy.change, or hardware.recommendation. "
+        "For hardware.recommendation proposals, include details.shopping_items as a list of items "
+        "with fields: name, category, priority (high/medium/low), reason."
     )
     if planner_cooldown_active(conn):
         append_jsonl(
@@ -2029,7 +2031,7 @@ def build_improvement_proposals(conn) -> List[Dict[str, Any]]:
         result = plan.generate(context_pack, prompt)
         validated = _validate_planner_output(policy, result.proposals)
     except Exception:
-        return []
+        validated = []
     _clear_planner_cooldown(conn)
 
     filtered = []
@@ -2039,7 +2041,133 @@ def build_improvement_proposals(conn) -> List[Dict[str, Any]]:
         proposal["ai_context_hash"] = context_hash
         proposal["ai_context_excerpt"] = _proposal_excerpt(proposal)
         filtered.append(proposal)
+    heuristic = _hardware_opportunity_proposals(conn)
+    filtered.extend(heuristic)
     return filtered[:MAX_PROPOSALS_PER_LOOP]
+
+
+def _hardware_opportunity_proposals(conn) -> List[Dict[str, Any]]:
+    inventory = inventory_mod.snapshot(conn)
+    ha = inventory.get("homeassistant", {}) if isinstance(inventory.get("homeassistant"), dict) else {}
+    domains = ha.get("domains", {}) if isinstance(ha.get("domains"), dict) else {}
+    proposals: List[Dict[str, Any]] = []
+
+    def add(summary: str, rationale: str, items: List[Dict[str, str]], priority: float = 0.2) -> None:
+        if store.proposal_exists(conn, summary, statuses=["pending", "approved", "rejected"]):
+            return
+        proposals.append(
+            {
+                "kind": "hardware.recommendation",
+                "summary": summary,
+                "details": {
+                    "rationale": rationale,
+                    "recommendation": summary,
+                    "shopping_items": items,
+                    "implementation": "Review options and confirm compatibility with Home Assistant.",
+                    "verification": "Confirm device appears in Home Assistant and in Pumpkin inventory.",
+                    "rollback_plan": "Skip purchase or return hardware if not needed.",
+                },
+                "risk": priority,
+                "expected_outcome": "Shopping list updated with suggested hardware.",
+                "source_event_ids": [],
+                "needs_new_capability": False,
+                "capability_request": None,
+                "steps": ["Review hardware options", "Approve purchase if useful"],
+            }
+        )
+
+    if domains.get("media_player", 0) == 0:
+        add(
+            "Add a smart speaker for hands-free voice control",
+            "No media_player entities detected; a speaker enables room-by-room voice responses.",
+            [
+                {
+                    "name": "Smart speaker (Echo, Google, or ESPHome audio)",
+                    "category": "audio",
+                    "priority": "medium",
+                    "reason": "Provide voice responses and announcements.",
+                }
+            ],
+        )
+    if domains.get("sensor", 0) < 5:
+        add(
+            "Add multi-sensors in key rooms",
+            "Limited environmental sensors detected; more data improves comfort and alerts.",
+            [
+                {
+                    "name": "Temp/humidity/motion multi-sensor",
+                    "category": "sensors",
+                    "priority": "medium",
+                    "reason": "Improve comfort automation and alerts.",
+                }
+            ],
+        )
+    if domains.get("binary_sensor", 0) < 5:
+        add(
+            "Add door/window contact sensors",
+            "Few binary sensors detected; contacts improve security and awareness.",
+            [
+                {
+                    "name": "Door/window contact sensor",
+                    "category": "security",
+                    "priority": "medium",
+                    "reason": "Detect open doors/windows for family safety.",
+                }
+            ],
+        )
+    if domains.get("camera", 0) == 0:
+        add(
+            "Add a camera for key entry areas",
+            "No camera entities detected; a camera improves security and presence context.",
+            [
+                {
+                    "name": "Indoor/outdoor IP camera with RTSP/ONVIF",
+                    "category": "security",
+                    "priority": "medium",
+                    "reason": "Enable snapshots and person alerts.",
+                }
+            ],
+        )
+    if domains.get("lock", 0) == 0:
+        add(
+            "Add a smart lock for key doors",
+            "No smart locks detected; enables secure access tracking.",
+            [
+                {
+                    "name": "Smart lock (Zigbee/Z-Wave)",
+                    "category": "security",
+                    "priority": "low",
+                    "reason": "Track access and lock status remotely.",
+                }
+            ],
+        )
+    if domains.get("climate", 0) == 0:
+        add(
+            "Add a smart thermostat or TRVs",
+            "No climate devices detected; improves comfort and energy savings.",
+            [
+                {
+                    "name": "Smart thermostat or radiator TRVs",
+                    "category": "comfort",
+                    "priority": "low",
+                    "reason": "Automate heating based on presence.",
+                }
+            ],
+        )
+    add(
+        "Add a UPS for Pumpkin Core",
+        "Recent power outages show a need for graceful shutdown and uptime.",
+        [
+            {
+                "name": "UPS sized for Pumpkin Core host",
+                "category": "reliability",
+                "priority": "high",
+                "reason": "Keep Pumpkin online during short outages.",
+            }
+        ],
+        priority=0.3,
+    )
+    return proposals
 
 
 def build_suggestion_followup(conn, suggestion: str) -> Dict[str, Any] | None:

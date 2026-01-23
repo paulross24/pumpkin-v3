@@ -333,6 +333,50 @@ def _record_pulse(
     _record_cooldown(conn, "system.pulse")
 
 
+def _update_shopping_list(conn) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    seen = set()
+    for status in ("pending", "approved"):
+        for row in store.list_proposals(conn, status=status, limit=200):
+            try:
+                details = json.loads(row["details_json"])
+            except Exception:
+                details = {}
+            shopping = details.get("shopping_items")
+            if not isinstance(shopping, list):
+                continue
+            for entry in shopping:
+                if not isinstance(entry, dict):
+                    continue
+                name = str(entry.get("name") or "").strip()
+                if not name:
+                    continue
+                key = name.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                items.append(
+                    {
+                        "name": name,
+                        "category": entry.get("category"),
+                        "priority": entry.get("priority"),
+                        "reason": entry.get("reason"),
+                        "proposal_id": row["id"],
+                        "proposal_summary": row["summary"],
+                        "status": row["status"],
+                    }
+                )
+    priority_order = {"high": 0, "medium": 1, "low": 2}
+    items.sort(
+        key=lambda item: (
+            priority_order.get(str(item.get("priority") or "medium").lower(), 9),
+            str(item.get("name") or ""),
+        )
+    )
+    store.set_memory(conn, "shopping.list", items)
+    return items
+
+
 def _load_autonomy_config() -> Dict[str, Any]:
     config_path = settings.modules_config_path()
     if not config_path.exists():
@@ -1023,6 +1067,7 @@ def run_once() -> Dict[str, Any]:
             proposals.extend(improvement)
         store.set_memory(conn, "core.last_reflection_date", datetime.now().date().isoformat())
     _record_proposals(conn, policy, proposals)
+    _update_shopping_list(conn)
     autonomy_cfg = _load_autonomy_config()
     try:
         pulse_interval = int(autonomy_cfg.get("pulse_interval_seconds", 60))

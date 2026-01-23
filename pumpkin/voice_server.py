@@ -5098,6 +5098,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
             if path == "/ui/audit":
                 _send_html(self, 200, _load_voice_ui_asset("voice_ui_audit.html"))
                 return
+            if path == "/ui/shopping":
+                _send_html(self, 200, _load_voice_ui_asset("voice_ui_shopping.html"))
+                return
             if path == "/car/telemetry":
                 conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
                 _send_json(self, 200, {"status": "ok", "car_telemetry": _car_telemetry_summary(conn)})
@@ -5489,6 +5492,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 if not isinstance(briefing, dict):
                     briefing = None
                 audit_tail = audit.read_tail(str(settings.audit_path()), limit=5)
+                shopping_list = store.get_memory(conn, "shopping.list")
+                if not isinstance(shopping_list, list):
+                    shopping_list = []
                 router_rows = store.list_events(
                     conn,
                     limit=5,
@@ -5533,11 +5539,19 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "insights": insights_latest[-5:],
                         "briefing": briefing,
                         "audit_tail": audit_tail,
+                        "shopping_list": shopping_list[:20],
                         "router_events": router_events,
                         "proposals": proposal_items,
                         "proposal_count": len(proposal_items),
                     },
                 )
+                return
+            if path == "/shopping":
+                conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+                shopping_list = store.get_memory(conn, "shopping.list")
+                if not isinstance(shopping_list, list):
+                    shopping_list = []
+                _send_json(self, 200, {"count": len(shopping_list), "items": shopping_list})
                 return
             if path == "/audit":
                 limit = _parse_limit(params.get("limit", [None])[0], default=50, max_limit=200)
@@ -5687,6 +5701,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "/audit": {"get": {"summary": "Audit log tail"}},
                             "/actions": {"get": {"summary": "Recent action executions"}},
                             "/approvals": {"get": {"summary": "Recent approvals"}},
+                            "/shopping": {"get": {"summary": "Hardware shopping list"}},
                             "/notifications": {"get": {"summary": "Recent alerts"}},
                             "/thoughts": {"get": {"summary": "Recent thought stream"}},
                             "/vision/alerts": {"get": {"summary": "Unknown face alert settings"}},
@@ -5833,6 +5848,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "/ui/scoreboard": {"get": {"summary": "Scoreboard dashboard"}},
                             "/ui/inventory": {"get": {"summary": "Inventory dashboard"}},
                             "/ui/audit": {"get": {"summary": "Audit trail dashboard"}},
+                            "/ui/shopping": {"get": {"summary": "Shopping list dashboard"}},
                             "/memory": {"get": {"summary": "Memory snapshot"}},
                             "/summary": {
                                 "get": {
