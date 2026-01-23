@@ -2014,7 +2014,7 @@ def build_improvement_proposals(conn) -> List[Dict[str, Any]]:
         + "\n\nFocus on making Pumpkin more helpful for the household and suggesting useful hardware additions. "
         "You may propose maintenance, action.request, policy.change, or hardware.recommendation. "
         "For hardware.recommendation proposals, include details.shopping_items as a list of items "
-        "with fields: name, category, priority (high/medium/low), reason."
+        "with fields: name, category, priority (high/medium/low), reason, link (optional)."
     )
     if planner_cooldown_active(conn):
         append_jsonl(

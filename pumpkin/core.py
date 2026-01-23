@@ -7,6 +7,7 @@ import os
 import time
 import urllib.error
 import urllib.request
+import urllib.parse
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
@@ -353,6 +354,9 @@ def _update_shopping_list(conn) -> List[Dict[str, Any]]:
                 name = str(entry.get("name") or "").strip()
                 if not name:
                     continue
+                link = entry.get("link") or entry.get("url") or entry.get("purchase_url")
+                if not link:
+                    link = f"https://www.amazon.co.uk/s?k={urllib.parse.quote_plus(name)}"
                 key = name.lower()
                 if key in seen:
                     continue
@@ -363,6 +367,7 @@ def _update_shopping_list(conn) -> List[Dict[str, Any]]:
                         "category": entry.get("category"),
                         "priority": entry.get("priority"),
                         "reason": entry.get("reason"),
+                        "link": link,
                         "proposal_id": row["id"],
                         "proposal_summary": row["summary"],
                         "status": row["status"],

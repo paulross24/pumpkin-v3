@@ -146,12 +146,25 @@
           const reason = document.createElement("div");
           reason.className = "meta";
           reason.textContent = item.reason || "No reason recorded.";
+          const link = document.createElement("div");
+          link.className = "meta";
+          if (item.link) {
+            const anchor = document.createElement("a");
+            anchor.href = item.link;
+            anchor.target = "_blank";
+            anchor.rel = "noopener noreferrer";
+            anchor.textContent = "View item";
+            link.appendChild(anchor);
+          } else {
+            link.textContent = "No link available.";
+          }
           const source = document.createElement("div");
           source.className = "meta";
           source.textContent = `Proposal #${item.proposal_id}: ${item.proposal_summary || "n/a"}`;
           li.appendChild(name);
           li.appendChild(meta);
           li.appendChild(reason);
+          li.appendChild(link);
           li.appendChild(source);
           list.appendChild(li);
         });
