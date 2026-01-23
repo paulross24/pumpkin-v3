@@ -338,6 +338,11 @@ def _ensure_execution_plan(conn, policy: policy_mod.Policy, row: Any) -> bool:
     action_type = details.get("action_type")
     if not action_type:
         return True
+    if action_type in {"proposal.confirm_plan", "proposal.retry_execute"}:
+        return True
+    summary = row["summary"] if "summary" in row.keys() else None
+    if isinstance(summary, str) and summary.startswith("Confirm execution plan"):
+        return True
     if details.get("execution_plan_confirmed") is True:
         return True
     if "execution_plan" not in details:
