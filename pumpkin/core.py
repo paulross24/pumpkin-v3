@@ -310,6 +310,142 @@ def _record_action_summary(
     )
 
 
+def _infer_action_commands(details: Dict[str, Any]) -> List[str]:
+    action_type = details.get("action_type")
+    if action_type == "code.apply_patch":
+        repo_root = details.get("action_params", {}).get("repo_root")
+        if repo_root:
+            return [f"apply patch to {repo_root}"]
+        return ["apply code patch"]
+    if action_type == "network.deep_scan":
+        ip = details.get("action_params", {}).get("ip")
+        return [f"run deep scan on {ip}"] if ip else ["run deep scan"]
+    if action_type == "network.mark_useful":
+        ip = details.get("action_params", {}).get("ip")
+        return [f"mark {ip} as useful"] if ip else ["mark device useful"]
+    if action_type == "proposal.confirm_plan":
+        return ["confirm execution plan"]
+    if isinstance(action_type, str) and action_type:
+        return [f"execute {action_type}"]
+    return ["execute action"]
+
+
+def _ensure_execution_plan(conn, policy: policy_mod.Policy, row: Any) -> bool:
+    try:
+        details = json.loads(row["details_json"])
+    except Exception:
+        details = {}
+    action_type = details.get("action_type")
+    if not action_type:
+        return True
+    if details.get("execution_plan_confirmed") is True:
+        return True
+    if "execution_plan" not in details:
+        details["execution_plan"] = {
+            "owner": "pumpkin",
+            "dependencies": details.get("dependencies", []),
+            "commands": _infer_action_commands(details),
+            "notes": "Confirm before execution.",
+        }
+        details["execution_plan_confirmed"] = False
+        store.update_proposal_details(conn, row["id"], details)
+
+    summary = f"Confirm execution plan for proposal #{row['id']}: {row['summary']}"
+    if not store.proposal_exists(conn, summary, statuses=["pending", "approved"]):
+        store.insert_proposal(
+            conn,
+            kind="action.request",
+            summary=summary,
+            details={
+                "rationale": "Execution plans must be confirmed before actions run.",
+                "action_type": "proposal.confirm_plan",
+                "action_params": {"proposal_id": row["id"]},
+                "implementation": "Confirm the execution plan so the action can run.",
+                "verification": "Proposal details show execution_plan_confirmed=true.",
+                "rollback_plan": "Decline if the plan looks incorrect.",
+                "execution_plan": details.get("execution_plan"),
+            },
+            risk=0.1,
+            expected_outcome="Execution plan confirmed for the proposal.",
+            status="pending",
+            policy_hash=policy.policy_hash,
+            needs_new_capability=False,
+            capability_request=None,
+            steps=["Review execution plan", "Approve to confirm"],
+        )
+    audit.append_jsonl(
+        str(settings.audit_path()),
+        {
+            "kind": "proposal.execution_plan_required",
+            "proposal_id": row["id"],
+            "action_type": action_type,
+            "policy_hash": policy.policy_hash,
+        },
+    )
+    return False
+
+
+def _watchdog_stalled_actions(conn, policy: policy_mod.Policy, autonomy_cfg: Dict[str, Any]) -> None:
+    try:
+        stall_minutes = int(autonomy_cfg.get("action_stall_minutes", 10))
+    except (TypeError, ValueError):
+        stall_minutes = 10
+    if stall_minutes <= 0:
+        return
+    cutoff = datetime.now(timezone.utc).timestamp() - (stall_minutes * 60)
+    approved = store.list_proposals(conn, status="approved", limit=200)
+    for row in approved:
+        try:
+            details = json.loads(row["details_json"])
+        except Exception:
+            details = {}
+        action_type = details.get("action_type")
+        if not action_type:
+            continue
+        if details.get("execution_plan_confirmed") is not True:
+            continue
+        ts_created = row.get("ts_created")
+        if not isinstance(ts_created, str):
+            continue
+        try:
+            created_ts = datetime.fromisoformat(ts_created).timestamp()
+        except Exception:
+            continue
+        if created_ts > cutoff:
+            continue
+        action_row = conn.execute(
+            "SELECT ts_started FROM actions WHERE proposal_id = ? ORDER BY id DESC LIMIT 1",
+            (row["id"],),
+        ).fetchone()
+        if action_row:
+            continue
+        cooldown_key = f\"proposal.stalled:{row['id']}\"
+        if not _cooldown_elapsed(conn, cooldown_key, stall_minutes * 60):
+            continue
+        store.insert_event(
+            conn,
+            source="core",
+            event_type="action.stalled",
+            payload={
+                "proposal_id": row["id"],
+                "summary": row["summary"],
+                "action_type": action_type,
+                "stall_minutes": stall_minutes,
+            },
+            severity="warn",
+        )
+        _record_cooldown(conn, cooldown_key)
+        audit.append_jsonl(
+            str(settings.audit_path()),
+            {
+                "kind": "action.stalled",
+                "proposal_id": row["id"],
+                "action_type": action_type,
+                "stall_minutes": stall_minutes,
+                "policy_hash": policy.policy_hash,
+            },
+        )
+
 def _record_pulse(
     conn,
     ha_summary: Dict[str, Any],
@@ -944,6 +1080,9 @@ def _execute_approved(conn, policy: policy_mod.Policy, autonomy_cfg: Dict[str, A
             )
             continue
 
+        if not _ensure_execution_plan(conn, policy, row):
+            continue
+
         cooldown_seconds = 0
         if action_type in action_cooldowns:
             try:
@@ -1282,6 +1421,7 @@ def run_once() -> Dict[str, Any]:
 
     _requeue_orphaned_suggestions(conn, policy.policy_hash)
     executed_actions = _execute_approved(conn, policy, autonomy_cfg)
+    _watchdog_stalled_actions(conn, policy, autonomy_cfg)
     _repair_failed_patches(conn)
     total_executed = store.get_memory(conn, "actions.total_executed") or 0
     try:

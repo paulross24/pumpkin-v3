@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, List
 
 import os
@@ -38,6 +39,11 @@ ACTION_METADATA = {
         "verification": "Confirm device appears in network.discovery.useful list.",
         "rollback": "Remove the entry from network.discovery.useful.",
     },
+    "proposal.confirm_plan": {
+        "description": "Mark a proposal execution plan as confirmed.",
+        "verification": "Confirm proposal details show execution_plan_confirmed=true.",
+        "rollback": "Re-open the plan by clearing the confirmation flag.",
+    },
 }
 
 
@@ -62,6 +68,8 @@ def execute_action(
         return network_deep_scan(params, audit_path)
     if action_type == "network.mark_useful":
         return network_mark_useful(params, audit_path)
+    if action_type == "proposal.confirm_plan":
+        return confirm_plan_action(params, audit_path)
     raise ValueError(f"unsupported action_type: {action_type}")
 
 
@@ -245,6 +253,37 @@ def network_mark_useful(params: Dict[str, Any], audit_path: str) -> Dict[str, An
     )
     append_jsonl(audit_path, {"kind": "network.mark_useful", "ip": item["ip"], "label": item["label"]})
     return {"ok": True, "marked": item}
+
+
+def confirm_plan_action(params: Dict[str, Any], audit_path: str) -> Dict[str, Any]:
+    proposal_id = params.get("proposal_id")
+    if not isinstance(proposal_id, int):
+        raise ValueError("proposal_id_missing")
+    conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+    row = store.get_proposal(conn, proposal_id)
+    if not row:
+        raise ValueError("proposal_not_found")
+    try:
+        details = json.loads(row["details_json"])
+    except Exception:
+        details = {}
+    details["execution_plan_confirmed"] = True
+    store.update_proposal_details(conn, proposal_id, details)
+    store.insert_event(
+        conn,
+        source="core",
+        event_type="proposal.plan_confirmed",
+        payload={"proposal_id": proposal_id},
+        severity="info",
+    )
+    append_jsonl(
+        audit_path,
+        {
+            "kind": "proposal.plan_confirmed",
+            "proposal_id": proposal_id,
+        },
+    )
+    return {"ok": True, "proposal_id": proposal_id}
 
 
 def verify_health(url: str, timeout: float = 5.0) -> Dict[str, Any]:
