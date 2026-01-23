@@ -6600,6 +6600,26 @@ class VoiceHandler(BaseHTTPRequestHandler):
             policy_hash=policy_hash,
         )
         store.update_proposal_status(conn, proposal_id, decision)
+        if decision == "rejected":
+            summary = row.get("summary")
+            if isinstance(summary, str) and summary.strip():
+                current = store.get_memory(conn, "proposal.snoozed")
+                if not isinstance(current, list):
+                    current = []
+                entry = {
+                    "summary": summary.strip(),
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                }
+                if entry not in current:
+                    current.append(entry)
+                    store.set_memory(conn, "proposal.snoozed", current[-500:])
+                store.insert_event(
+                    conn,
+                    source="core",
+                    event_type="proposal.snoozed",
+                    payload=entry,
+                    severity="info",
+                )
         _send_json(self, 200, {"status": "ok", "id": proposal_id, "decision": decision})
 
     def _handle_llm_config(self) -> None:

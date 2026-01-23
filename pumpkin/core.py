@@ -679,11 +679,39 @@ def _should_reflect(conn) -> bool:
     return _in_quiet_hours(conn)
 
 
+def _load_snoozed_summaries(conn, days: int = 30) -> set[str]:
+    entries = store.get_memory(conn, "proposal.snoozed")
+    if not isinstance(entries, list):
+        return set()
+    cutoff = datetime.now(timezone.utc).timestamp() - (days * 86400)
+    kept: List[Dict[str, Any]] = []
+    summaries: set[str] = set()
+    for item in entries:
+        if not isinstance(item, dict):
+            continue
+        summary = item.get("summary")
+        ts = item.get("ts")
+        if not isinstance(summary, str) or not summary.strip():
+            continue
+        try:
+            ts_val = datetime.fromisoformat(str(ts)).timestamp()
+        except Exception:
+            ts_val = cutoff
+        if ts_val < cutoff:
+            continue
+        summaries.add(summary)
+        kept.append({"summary": summary, "ts": ts})
+    if kept != entries:
+        store.set_memory(conn, "proposal.snoozed", kept[-500:])
+    return summaries
+
+
 def _record_proposals(conn, policy: policy_mod.Policy, proposals: List[Dict[str, Any]]) -> None:
     module_install_ids: Dict[str, int] = {}
     ordered = sorted(
         proposals, key=lambda p: 0 if p.get("kind") == "module.install" else 1
     )
+    snoozed = _load_snoozed_summaries(conn)
     for proposal in ordered:
         details = proposal["details"]
         link_key = proposal.get("link_key")
@@ -696,6 +724,15 @@ def _record_proposals(conn, policy: policy_mod.Policy, proposals: List[Dict[str,
             proposal["details"] = details
 
         summary = proposal["summary"]
+        if summary in snoozed:
+            audit.append_jsonl(
+                str(settings.audit_path()),
+                {
+                    "kind": "proposal.skipped_snoozed",
+                    "summary": summary,
+                },
+            )
+            continue
         if store.proposal_exists(conn, summary, statuses=["pending", "approved"]):
             audit.append_jsonl(
                 str(settings.audit_path()),
