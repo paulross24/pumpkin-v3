@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
@@ -375,6 +377,145 @@ def _update_shopping_list(conn) -> List[Dict[str, Any]]:
     )
     store.set_memory(conn, "shopping.list", items)
     return items
+
+
+def _load_llm_config(conn) -> Dict[str, Any]:
+    api_key = os.getenv("PUMPKIN_OPENAI_API_KEY") or store.get_memory(conn, "llm.openai_api_key")
+    model = os.getenv("PUMPKIN_OPENAI_MODEL") or store.get_memory(conn, "llm.openai_model") or "gpt-4o-mini"
+    base_url = (
+        os.getenv("PUMPKIN_OPENAI_BASE_URL")
+        or store.get_memory(conn, "llm.openai_base_url")
+        or "https://api.openai.com/v1/chat/completions"
+    )
+    return {"api_key": api_key, "model": model, "base_url": base_url}
+
+
+def _repair_patch_with_llm(
+    api_key: str, model: str, base_url: str, patch: str, error: str
+) -> str | None:
+    prompt = (
+        "You are a senior software engineer. Fix the unified diff patch below so it applies cleanly. "
+        "Return ONLY a valid unified diff patch with file headers. No explanations.\n\n"
+        f"Patch error: {error}\n\nPATCH:\n{patch}\n"
+    )
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "Return only a valid unified diff patch."},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.2,
+        "max_tokens": 800,
+    }
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(base_url, data=data, method="POST")
+    req.add_header("Authorization", f"Bearer {api_key}")
+    req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            body = resp.read().decode("utf-8")
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError):
+        return None
+    try:
+        parsed = json.loads(body)
+        content = parsed["choices"][0]["message"]["content"]
+    except Exception:
+        return None
+    return content.strip()
+
+
+def _repair_failed_patches(conn) -> None:
+    last_ts = store.get_memory(conn, "actions.last_repair_ts")
+    if not isinstance(last_ts, str):
+        last_ts = "1970-01-01T00:00:00+00:00"
+    rows = conn.execute(
+        "SELECT id, proposal_id, ts_finished, action_type, status, result_json, params_json "
+        "FROM actions WHERE action_type = 'code.apply_patch' AND status = 'failed' "
+        "AND ts_finished > ? ORDER BY ts_finished ASC",
+        (last_ts,),
+    ).fetchall()
+    if not rows:
+        return
+    llm = _load_llm_config(conn)
+    api_key = llm.get("api_key")
+    if not isinstance(api_key, str) or not api_key.strip():
+        append_jsonl(
+            str(settings.audit_path()),
+            {"kind": "patch.repair_skipped", "reason": "missing_api_key"},
+        )
+        return
+    model = str(llm.get("model") or "gpt-4o-mini")
+    base_url = str(llm.get("base_url") or "https://api.openai.com/v1/chat/completions")
+    for row in rows:
+        action_id, proposal_id, ts_finished, _, _, result_json, params_json = row
+        if isinstance(ts_finished, str):
+            last_ts = ts_finished
+        try:
+            result = json.loads(result_json or "{}")
+        except Exception:
+            result = {}
+        error = str(result.get("error") or "patch_failed")
+        try:
+            params = json.loads(params_json or "{}")
+        except Exception:
+            params = {}
+        patch = params.get("patch")
+        repo_root = params.get("repo_root")
+        if not isinstance(patch, str) or not isinstance(repo_root, str):
+            continue
+        target_id = proposal_id or action_id
+        summary = f"Repair failed patch for proposal #{target_id}"
+        if store.proposal_exists(conn, summary, statuses=["pending", "approved"]):
+            continue
+        repaired = _repair_patch_with_llm(api_key.strip(), model, base_url, patch, error)
+        if not isinstance(repaired, str) or not repaired.strip():
+            append_jsonl(
+                str(settings.audit_path()),
+                {
+                    "kind": "patch.repair_failed",
+                    "action_id": action_id,
+                    "proposal_id": proposal_id,
+                },
+            )
+            continue
+        details = {
+            "rationale": "Auto-repaired a failed patch so it can be applied cleanly.",
+            "action_type": "code.apply_patch",
+            "action_params": {"repo_root": repo_root, "patch": repaired},
+            "implementation": "Apply the repaired patch after review.",
+            "verification": "Confirm patch applies and run relevant checks.",
+            "rollback_plan": "Revert changes if tests fail.",
+            "original_action_id": action_id,
+            "original_proposal_id": proposal_id,
+            "original_error": error,
+        }
+        store.insert_proposal(
+            conn,
+            kind="action.request",
+            summary=summary,
+            details=details,
+            steps=[
+                "Review repaired patch",
+                "Approve to apply",
+                "Verify behavior",
+            ],
+            risk=0.4,
+            expected_outcome="Patch applied cleanly after review.",
+            policy_hash=policy_mod.load_policy(str(settings.policy_path())).policy_hash,
+            needs_new_capability=False,
+            capability_request=None,
+            ai_context_hash=None,
+            ai_context_excerpt=None,
+        )
+        append_jsonl(
+            str(settings.audit_path()),
+            {
+                "kind": "patch.repair_proposal_created",
+                "action_id": action_id,
+                "proposal_id": proposal_id,
+            },
+        )
+    store.set_memory(conn, "actions.last_repair_ts", last_ts)
 
 
 def _load_autonomy_config() -> Dict[str, Any]:
@@ -1093,6 +1234,7 @@ def run_once() -> Dict[str, Any]:
 
     _requeue_orphaned_suggestions(conn, policy.policy_hash)
     executed_actions = _execute_approved(conn, policy, autonomy_cfg)
+    _repair_failed_patches(conn)
     total_executed = store.get_memory(conn, "actions.total_executed") or 0
     try:
         total_executed = int(total_executed)
