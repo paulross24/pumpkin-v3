@@ -158,6 +158,28 @@
         font-size: 12px;
         font-weight: 600;
       }
+      .field {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        margin-top: 8px;
+      }
+      label {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+      }
+      input[type="text"],
+      input[type="password"] {
+        border: 1px solid var(--line);
+        background: #fff;
+        color: var(--ink);
+        padding: 8px 10px;
+        border-radius: 10px;
+        font-family: inherit;
+        font-size: 13px;
+      }
       .link {
         color: var(--pumpkin-dark);
         text-decoration: none;
@@ -372,6 +394,35 @@
         <div class="stat" id="identity-name">Unknown</div>
         <ul class="list" id="identity-meta"></ul>
       </section>
+      <section class="card" id="llm-card">
+        <div class="card-head">
+          <h3>LLM Config</h3>
+        </div>
+        <div class="row">
+          <span class="pill" id="llm-status">Loading...</span>
+          <span class="sub" id="llm-model-label">Model: n/a</span>
+        </div>
+        <div class="field">
+          <label for="llm-key">OpenAI API key</label>
+          <input id="llm-key" type="password" placeholder="sk-..." autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="llm-model-input">Model</label>
+          <input id="llm-model-input" type="text" placeholder="gpt-4o-mini" />
+        </div>
+        <div class="field">
+          <label for="llm-base-url-input">Base URL</label>
+          <input
+            id="llm-base-url-input"
+            type="text"
+            placeholder="https://api.openai.com/v1/chat/completions"
+          />
+        </div>
+        <div class="row" style="margin-top: 8px;">
+          <button id="llm-save">Save LLM settings</button>
+          <span class="sub" id="llm-save-status"></span>
+        </div>
+      </section>
       <section class="card is-link" data-link="/ui/proposals">
         <div class="card-head">
           <h3>Proposals</h3>
@@ -493,6 +544,14 @@
       const thoughtStatus = byId("thought-status");
       const thoughtMeta = byId("thought-meta");
       const thoughtReel = byId("thought-reel");
+      const llmStatus = byId("llm-status");
+      const llmModelLabel = byId("llm-model-label");
+      const llmKeyInput = byId("llm-key");
+      const llmModelInput = byId("llm-model-input");
+      const llmBaseUrlInput = byId("llm-base-url-input");
+      const llmSave = byId("llm-save");
+      const llmSaveStatus = byId("llm-save-status");
+      let llmLoadedOnce = false;
 
       const linkCards = () => {
         const cards = document.querySelectorAll(".card.is-link");
@@ -589,6 +648,59 @@
           return Array.isArray(data.thoughts) ? data.thoughts : [];
         } catch (err) {
           return [];
+        }
+      };
+
+      const loadLlmConfig = async () => {
+        if (!llmStatus) return;
+        try {
+          const res = await fetch("/llm/config");
+          const data = await res.json();
+          const enabled = Boolean(data.enabled);
+          llmStatus.textContent = enabled ? "Key set" : "Key missing";
+          if (llmModelLabel) {
+            llmModelLabel.textContent = `Model: ${data.model || "n/a"}`;
+          }
+          if (!llmLoadedOnce || (llmModelInput && !llmModelInput.value)) {
+            llmModelInput.value = data.model || "";
+          }
+          if (!llmLoadedOnce || (llmBaseUrlInput && !llmBaseUrlInput.value)) {
+            llmBaseUrlInput.value = data.base_url || "";
+          }
+          llmLoadedOnce = true;
+        } catch (err) {
+          llmStatus.textContent = "LLM config unavailable";
+        }
+      };
+
+      const saveLlmConfig = async () => {
+        if (!llmSaveStatus) return;
+        llmSaveStatus.textContent = "Saving...";
+        const payload = {};
+        const keyValue = llmKeyInput?.value.trim();
+        if (keyValue) payload.api_key = keyValue;
+        const modelValue = llmModelInput?.value.trim();
+        if (modelValue) payload.model = modelValue;
+        const baseUrlValue = llmBaseUrlInput?.value.trim();
+        if (baseUrlValue) payload.base_url = baseUrlValue;
+        try {
+          const res = await fetch("/llm/config", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) throw new Error("request_failed");
+          const data = await res.json();
+          if (llmStatus) {
+            llmStatus.textContent = data.enabled ? "Key set" : "Key missing";
+          }
+          if (llmModelLabel) {
+            llmModelLabel.textContent = `Model: ${data.model || "n/a"}`;
+          }
+          llmSaveStatus.textContent = "Saved.";
+          if (llmKeyInput) llmKeyInput.value = "";
+        } catch (err) {
+          llmSaveStatus.textContent = "Save failed.";
         }
       };
 
@@ -702,9 +814,16 @@
 
       const refreshBtn = byId("refresh");
       if (refreshBtn) {
-        refreshBtn.addEventListener("click", load);
+        refreshBtn.addEventListener("click", () => {
+          load();
+          loadLlmConfig();
+        });
+      }
+      if (llmSave) {
+        llmSave.addEventListener("click", saveLlmConfig);
       }
       load();
+      loadLlmConfig();
       setInterval(load, 15000);
     </script>
   </body>
