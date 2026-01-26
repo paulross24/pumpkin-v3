@@ -5528,11 +5528,35 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         evidence = json.loads(row["evidence_json"]) if row["evidence_json"] else {}
                     except Exception:
                         evidence = {}
+                    detection_summary = None
+                    detection_type = None
+                    detection_severity = None
+                    detection_details = {}
+                    if row["detection_id"]:
+                        detection_row = conn.execute(
+                            "SELECT * FROM detections WHERE id = ?", (row["detection_id"],)
+                        ).fetchone()
+                        if detection_row:
+                            detection_summary = detection_row["summary"]
+                            detection_type = detection_row["detection_type"]
+                            detection_severity = detection_row["severity"]
+                            try:
+                                detection_details = (
+                                    json.loads(detection_row["details_json"])
+                                    if detection_row["details_json"]
+                                    else {}
+                                )
+                            except Exception:
+                                detection_details = {}
                     decisions.append(
                         {
                             "id": row["id"],
                             "ts": row["ts"],
                             "detection_id": row["detection_id"],
+                            "detection_summary": detection_summary,
+                            "detection_type": detection_type,
+                            "detection_severity": detection_severity,
+                            "detection_details": detection_details,
                             "observation": row["observation"],
                             "reasoning": row["reasoning"],
                             "decision": row["decision"],

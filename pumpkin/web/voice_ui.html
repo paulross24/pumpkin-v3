@@ -908,7 +908,10 @@
           setText(decisionCount, decisions.length);
           setList(
             decisionList,
-            decisions.map((item) => `${item.ts} • ${item.decision || "decision"}`)
+            decisions.map(
+              (item) =>
+                `${item.ts} • ${item.detection_summary || item.observation || item.decision || "decision"}`
+            )
           );
 
           const briefings = Array.isArray(briefingsData?.briefings) ? briefingsData.briefings : [];

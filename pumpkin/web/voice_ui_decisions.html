@@ -122,17 +122,28 @@
           card.className = "decision";
 
           const title = document.createElement("div");
-          title.textContent = item.decision || "Decision";
+          const headline =
+            item.detection_summary ||
+            item.observation ||
+            item.decision ||
+            "Decision";
+          title.textContent = headline;
 
           const meta = document.createElement("div");
           meta.className = "meta";
-          meta.textContent = `${item.ts || "n/a"} • ${item.action_type || "no action"} • ${item.verification_status || "pending"}`;
+          const severity = item.detection_severity ? ` • ${item.detection_severity}` : "";
+          const dtype = item.detection_type ? ` • ${item.detection_type}` : "";
+          meta.textContent = `${item.ts || "n/a"} • ${item.action_type || "no action"} • ${item.verification_status || "pending"}${severity}${dtype}`;
+
+          const observation = document.createElement("pre");
+          observation.textContent = item.observation || "No observation";
 
           const reasoning = document.createElement("pre");
           reasoning.textContent = item.reasoning || "No reasoning";
 
           card.appendChild(title);
           card.appendChild(meta);
+          card.appendChild(observation);
           card.appendChild(reasoning);
           listNode.appendChild(card);
         });
