@@ -275,7 +275,7 @@
           const res = await fetch("/proposals?status=pending&limit=25&include_events=1");
           const data = await res.json();
           const items = Array.isArray(data.proposals) ? data.proposals : [];
-          countNode.textContent = `${data.count ?? items.length} pending`;
+          countNode.textContent = `${items.length} pending`;
           render(items);
         } catch (err) {
           listNode.innerHTML = "Failed to load proposals.";

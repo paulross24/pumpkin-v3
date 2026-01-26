@@ -147,6 +147,13 @@ def insert_approval(
 def update_proposal_status(conn: sqlite3.Connection, proposal_id: int, status: str) -> None:
     conn.execute("UPDATE proposals SET status = ? WHERE id = ?", (status, proposal_id))
     conn.commit()
+    if status in {"rejected", "failed"}:
+        row = conn.execute(
+            "SELECT summary FROM proposals WHERE id = ?",
+            (proposal_id,),
+        ).fetchone()
+        if row and row["summary"]:
+            snooze_proposal_summary(conn, row["summary"], reason=status)
     if status == "approved":
         row = conn.execute(
             "SELECT summary FROM proposals WHERE id = ?",
@@ -164,6 +171,19 @@ def update_proposal_status(conn: sqlite3.Connection, proposal_id: int, status: s
                 (row["summary"], proposal_id),
             )
             conn.commit()
+
+
+def snooze_proposal_summary(
+    conn: sqlite3.Connection, summary: str, reason: str, max_entries: int = 500
+) -> None:
+    if not isinstance(summary, str) or not summary.strip():
+        return
+    entries = get_memory(conn, "proposal.snoozed")
+    if not isinstance(entries, list):
+        entries = []
+    kept = [item for item in entries if isinstance(item, dict) and item.get("summary") != summary]
+    kept.append({"summary": summary, "ts": utc_now_iso(), "reason": reason})
+    set_memory(conn, "proposal.snoozed", kept[-max_entries:])
 
 
 def insert_action(

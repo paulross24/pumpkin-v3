@@ -8,6 +8,7 @@ import math
 import os
 import re
 import subprocess
+import tempfile
 import time
 import wave
 from datetime import datetime, timezone
@@ -163,7 +164,41 @@ def _contains_wake_word(text: str, wake_words: List[str]) -> bool:
             continue
         if re.search(rf"\\b{re.escape(needle)}\\b", hay):
             return True
+        if len(needle) >= 4 and needle in hay:
+            return True
     return False
+
+
+def _play_wake_beep(cfg: Dict[str, Any]) -> bool:
+    if not cfg.get("enabled", False):
+        return False
+    aplay = cfg.get("aplay_path", "aplay")
+    freq_hz = float(cfg.get("frequency_hz", 880.0))
+    duration_ms = int(cfg.get("duration_ms", 120))
+    volume = float(cfg.get("volume", 0.2))
+    if duration_ms <= 0 or freq_hz <= 0:
+        return False
+
+    sample_rate = 16000
+    samples = int(sample_rate * (duration_ms / 1000.0))
+    amplitude = max(0.0, min(1.0, volume)) * 32767.0
+    data = bytearray()
+    for i in range(samples):
+        value = int(amplitude * math.sin(2.0 * math.pi * freq_hz * i / sample_rate))
+        data += value.to_bytes(2, byteorder="little", signed=True)
+
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+            wav_path = tmp.name
+            with wave.open(tmp, "wb") as wav:
+                wav.setnchannels(1)
+                wav.setsampwidth(2)
+                wav.setframerate(sample_rate)
+                wav.writeframes(bytes(data))
+        subprocess.run([aplay, "-q", wav_path], check=False, timeout=2)
+        return True
+    except Exception:
+        return False
 
 
 def _find_camera_url(conn, camera_id: Optional[str]) -> Optional[str]:
@@ -214,6 +249,7 @@ def run_rtsp_mic(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
     wake_words = [str(word) for word in wake_words if word]
     min_chars = int(module_cfg.get("min_chars", 4))
     async_flag = bool(module_cfg.get("post_async", True))
+    wake_beep_cfg = module_cfg.get("wake_beep", {}) if isinstance(module_cfg.get("wake_beep"), dict) else {}
 
     pcm = _capture_audio_pcm(rtsp_url, capture_seconds, ffmpeg_path, sample_rate, channels)
     if not pcm:
@@ -333,6 +369,7 @@ def run_rtsp_mic(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "severity": "info",
             }
         )
+    _play_wake_beep(wake_beep_cfg)
 
     payload = {
         "text": cleaned,

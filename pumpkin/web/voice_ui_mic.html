@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pumpkin Mic Desk</title>
+    <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='29' y='10' width='6' height='12' fill='%235b4b41'/><circle cx='32' cy='36' r='20' fill='%23e67c2e'/><circle cx='20' cy='36' r='14' fill='%23f08a3a' opacity='0.85'/><circle cx='44' cy='36' r='14' fill='%23f08a3a' opacity='0.85'/></svg>" />
+    <style>
+      :root {
+        --bg: #f6efe8;
+        --bg-accent: #f2d6b5;
+        --ink: #2a1b12;
+        --muted: #5b4b41;
+        --pumpkin: #e67c2e;
+        --pumpkin-dark: #b95519;
+        --card: #fff8f2;
+        --line: #e5d6c6;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Iowan Old Style", "Palatino", "Bookman", "Georgia", serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at 12% 12%, rgba(230, 124, 46, 0.14), transparent 40%),
+          linear-gradient(160deg, var(--bg), var(--bg-accent));
+        min-height: 100vh;
+      }
+      header {
+        padding: 28px 24px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .title {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 26px;
+        font-weight: 700;
+      }
+      .pumpkin-icon {
+        width: 24px;
+        height: 24px;
+        flex: 0 0 auto;
+      }
+      .sub { color: var(--muted); }
+      main {
+        padding: 12px 24px 40px;
+        display: grid;
+        gap: 16px;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 16px;
+        box-shadow: 0 12px 32px rgba(50, 33, 22, 0.08);
+      }
+      .row {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      label {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      input[type="text"],
+      input[type="number"] {
+        padding: 8px 10px;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        background: #fffdf9;
+        font-family: inherit;
+      }
+      input[type="checkbox"] {
+        transform: scale(1.1);
+      }
+      button {
+        border: 1px solid var(--line);
+        background: var(--card);
+        color: var(--ink);
+        padding: 8px 12px;
+        border-radius: 10px;
+        cursor: pointer;
+      }
+      .pill {
+        display: inline-block;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: rgba(230, 124, 46, 0.12);
+        color: var(--pumpkin-dark);
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .grid {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      }
+      .event {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 10px;
+        background: #fffdf9;
+        font-size: 13px;
+        display: grid;
+        gap: 6px;
+      }
+      .event strong { font-size: 14px; }
+      .muted { color: var(--muted); font-size: 12px; }
+      .status { font-size: 12px; }
+      .status.ok { color: #2b6a30; }
+      .status.bad { color: #8b2d19; }
+      .mono { font-family: "Courier New", monospace; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="title">
+        <svg class="pumpkin-icon" viewBox="0 0 64 64" aria-hidden="true">
+          <rect x="29" y="10" width="6" height="12" fill="var(--muted)" />
+          <circle cx="32" cy="36" r="20" fill="var(--pumpkin)" />
+          <circle cx="20" cy="36" r="14" fill="#f08a3a" opacity="0.85" />
+          <circle cx="44" cy="36" r="14" fill="#f08a3a" opacity="0.85" />
+        </svg>
+        Voice Mic Desk
+      </div>
+      <div class="sub">
+        View live transcriptions and tune the RTSP mic pipeline.
+        <a href="/ui">Back to dashboard →</a>
+      </div>
+    </header>
+    <main>
+      <section class="card">
+        <div class="row" style="margin-bottom: 10px;">
+          <span class="pill">Settings</span>
+          <span id="config-status" class="muted"></span>
+        </div>
+        <div class="grid">
+          <div>
+            <label>Enabled</label>
+            <div class="row">
+              <input id="enabled" type="checkbox" />
+              <span class="muted">RTSP mic active</span>
+            </div>
+          </div>
+          <div>
+            <label>Camera ID</label>
+            <input id="camera-id" type="text" placeholder="kitchen-cam" />
+          </div>
+          <div>
+            <label>RTSP URL (optional)</label>
+            <input id="rtsp-url" type="text" placeholder="rtsp://..." />
+          </div>
+          <div>
+            <label>Capture Seconds</label>
+            <input id="capture-seconds" type="number" step="0.1" />
+          </div>
+          <div>
+            <label>Threshold dB</label>
+            <input id="threshold-db" type="number" step="0.5" />
+          </div>
+          <div>
+            <label>Min Chars</label>
+            <input id="min-chars" type="number" step="1" />
+          </div>
+          <div>
+            <label>Poll Interval (s)</label>
+            <input id="poll-interval" type="number" step="1" />
+          </div>
+          <div>
+            <label>Cooldown (s)</label>
+            <input id="cooldown" type="number" step="1" />
+          </div>
+          <div>
+            <label>Sample Rate</label>
+            <input id="sample-rate" type="number" step="1000" />
+          </div>
+          <div>
+            <label>Channels</label>
+            <input id="channels" type="number" step="1" />
+          </div>
+          <div>
+            <label>Wake Words (comma separated)</label>
+            <input id="wake-words" type="text" placeholder="pumpkin, hey pumpkin" />
+          </div>
+          <div>
+            <label>Debug</label>
+            <div class="row">
+              <input id="debug" type="checkbox" />
+              <span class="muted">Log mic_debug events</span>
+            </div>
+          </div>
+          <div>
+            <label>Post Async</label>
+            <div class="row">
+              <input id="post-async" type="checkbox" />
+              <span class="muted">Forward without waiting</span>
+            </div>
+          </div>
+        </div>
+        <div class="row" style="margin-top: 12px;">
+          <button id="save-config">Save settings</button>
+          <button id="run-test">Run capture test</button>
+          <button id="refresh">Refresh</button>
+          <span id="save-status" class="muted"></span>
+        </div>
+        <div id="test-output" class="muted" style="margin-top: 10px;"></div>
+      </section>
+      <section class="card">
+        <div class="row" style="margin-bottom: 10px;">
+          <span class="pill">Recent transcriptions</span>
+          <span class="muted">Latest mic_debug events.</span>
+        </div>
+        <div id="event-list" class="grid"></div>
+      </section>
+    </main>
+    <script>
+      const qs = (id) => document.getElementById(id);
+      const state = {
+        config: {},
+      };
+
+      const setStatus = (el, msg, ok = true) => {
+        if (!el) return;
+        el.textContent = msg;
+        el.classList.toggle("status", true);
+        el.classList.toggle("ok", ok);
+        el.classList.toggle("bad", !ok);
+      };
+
+      const loadConfig = async () => {
+        const res = await fetch("/voice/mic/config");
+        if (!res.ok) {
+          setStatus(qs("config-status"), "Failed to load config", false);
+          return;
+        }
+        const data = await res.json();
+        state.config = data.config || {};
+        qs("enabled").checked = !!data.enabled;
+        qs("camera-id").value = state.config.camera_id || "";
+        qs("rtsp-url").value = state.config.rtsp_url || "";
+        qs("capture-seconds").value = state.config.capture_seconds ?? "";
+        qs("threshold-db").value = state.config.threshold_db ?? "";
+        qs("min-chars").value = state.config.min_chars ?? "";
+        qs("poll-interval").value = state.config.poll_interval_seconds ?? "";
+        qs("cooldown").value = state.config.cooldown_seconds ?? "";
+        qs("sample-rate").value = state.config.sample_rate ?? "";
+        qs("channels").value = state.config.channels ?? "";
+        qs("wake-words").value = (state.config.wake_words || []).join(", ");
+        qs("debug").checked = !!state.config.debug;
+        qs("post-async").checked = !!state.config.post_async;
+        setStatus(qs("config-status"), "Loaded");
+      };
+
+      const loadEvents = async () => {
+        const res = await fetch("/voice/mic/events?limit=20");
+        const list = qs("event-list");
+        list.innerHTML = "";
+        if (!res.ok) {
+          list.innerHTML = "<div class='muted'>Failed to load events.</div>";
+          return;
+        }
+        const data = await res.json();
+        if (!data.events || data.events.length === 0) {
+          list.innerHTML = "<div class='muted'>No events yet.</div>";
+          return;
+        }
+        data.events.forEach((ev) => {
+          const payload = ev.payload || {};
+          const div = document.createElement("div");
+          div.className = "event";
+          div.innerHTML = `
+            <strong>${payload.stage || "stage"}</strong>
+            <div class="muted">${new Date(ev.ts).toLocaleString()}</div>
+            <div>Status: ${payload.status || "n/a"}</div>
+            <div class="mono">${payload.text || "(no text)"}</div>
+            <div class="muted">level_db: ${payload.level_db ?? "n/a"} | threshold_db: ${payload.threshold_db ?? "n/a"}</div>
+          `;
+          list.appendChild(div);
+        });
+      };
+
+      const saveConfig = async () => {
+        const payload = {
+          enabled: qs("enabled").checked,
+          camera_id: qs("camera-id").value.trim(),
+          rtsp_url: qs("rtsp-url").value.trim(),
+          capture_seconds: parseFloat(qs("capture-seconds").value),
+          threshold_db: parseFloat(qs("threshold-db").value),
+          min_chars: parseInt(qs("min-chars").value, 10),
+          poll_interval_seconds: parseInt(qs("poll-interval").value, 10),
+          cooldown_seconds: parseInt(qs("cooldown").value, 10),
+          sample_rate: parseInt(qs("sample-rate").value, 10),
+          channels: parseInt(qs("channels").value, 10),
+          wake_words: qs("wake-words").value.trim(),
+          debug: qs("debug").checked,
+          post_async: qs("post-async").checked,
+        };
+        Object.keys(payload).forEach((key) => {
+          if (payload[key] === "" || Number.isNaN(payload[key])) {
+            delete payload[key];
+          }
+        });
+        const res = await fetch("/voice/mic/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          setStatus(qs("save-status"), "Save failed", false);
+          return;
+        }
+        setStatus(qs("save-status"), "Saved");
+        await loadConfig();
+      };
+
+      qs("save-config").addEventListener("click", saveConfig);
+      qs("run-test").addEventListener("click", async () => {
+        setStatus(qs("test-output"), "Running test...");
+        const res = await fetch("/voice/mic/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
+        if (!res.ok) {
+          setStatus(qs("test-output"), "Test failed", false);
+          return;
+        }
+        const data = await res.json();
+        const transcript = data.transcript ? data.transcript : "(empty)";
+        const level = data.level_db !== undefined ? data.level_db : "n/a";
+        const error = data.error ? ` | error: ${data.error}` : "";
+        qs("test-output").textContent = `level_db: ${level}${error} | transcript: ${transcript}`;
+        qs("test-output").classList.add("mono");
+      });
+      qs("refresh").addEventListener("click", async () => {
+        await loadConfig();
+        await loadEvents();
+      });
+
+      loadConfig();
+      loadEvents();
+      setInterval(loadEvents, 5000);
+    </script>
+  </body>
+</html>

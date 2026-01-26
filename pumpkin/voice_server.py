@@ -12,6 +12,8 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+import yaml
+import subprocess
 from ipaddress import ip_address
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -37,6 +39,7 @@ from . import propose
 from . import act
 from . import vision
 from . import telemetry
+from . import rtsp_mic
 from .audit import append_jsonl
 from .db import init_db, utc_now_iso
 
@@ -3993,6 +3996,19 @@ def _load_car_baseline_config() -> Dict[str, Any]:
     return baseline if isinstance(baseline, dict) else {}
 
 
+def _load_smart_alerts_cfg() -> Dict[str, Any]:
+    config_path = settings.modules_config_path()
+    if not config_path.exists():
+        return {}
+    try:
+        config = module_config.load_config(str(config_path))
+    except Exception:
+        return {}
+    modules_cfg = config.get("modules", {}) if isinstance(config, dict) else {}
+    cfg = modules_cfg.get("smart_alerts") if isinstance(modules_cfg, dict) else {}
+    return cfg if isinstance(cfg, dict) else {}
+
+
 def _percentile(values: list[float], pct: float) -> float | None:
     if not values:
         return None
@@ -4446,6 +4462,17 @@ def _format_car_alert_message(summary: Dict[str, Any]) -> tuple[str, list[str], 
 
 def _maybe_emit_car_alert(conn) -> None:
     summary = _car_telemetry_summary(conn)
+    smart_cfg = _load_smart_alerts_cfg()
+    if smart_cfg.get("enabled", True) and smart_cfg.get("car_anomalies_when_recent", True):
+        last_ts = _parse_iso_ts(summary.get("last", {}).get("ts"))
+        if not last_ts:
+            return
+        try:
+            max_minutes = int(smart_cfg.get("car_recent_minutes", 30))
+        except (TypeError, ValueError):
+            max_minutes = 30
+        if (datetime.now(timezone.utc) - last_ts).total_seconds() > max_minutes * 60:
+            return
     message, concerns, anomalies = _format_car_alert_message(summary)
     if not concerns and not anomalies:
         return
@@ -4833,6 +4860,12 @@ class VoiceHandler(BaseHTTPRequestHandler):
             if self.path == "/llm/config":
                 self._handle_llm_config()
                 return
+            if self.path == "/voice/mic/config":
+                self._handle_mic_config()
+                return
+            if self.path == "/voice/mic/test":
+                self._handle_mic_test()
+                return
             if self.path == "/network/mark":
                 self._handle_network_mark()
                 return
@@ -4850,6 +4883,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 return
             if self.path == "/vision/enroll":
                 self._handle_vision_enroll()
+                return
+            if self.path == "/vision/relabel":
+                self._handle_vision_relabel()
                 return
             if self.path == "/vision/false_positive":
                 self._handle_vision_false_positive()
@@ -4999,6 +5035,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "GET /ui/alerts",
                             "GET /ui/inventory",
                             "GET /ui/vision",
+                            "GET /ui/mic",
                             "GET /config",
                             "GET /catalog",
                             "GET /capabilities",
@@ -5015,6 +5052,8 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "GET /vision/unknown",
                             "GET /vision/snapshot",
                             "GET /vision/false_positives",
+                            "GET /voice/mic/events",
+                            "GET /voice/mic/config",
                             "GET /errors",
                             "GET /llm/config",
                             "POST /ask",
@@ -5036,6 +5075,8 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "POST /ha/webhook",
                             "POST /voice",
                             "POST /satellite/voice",
+                            "POST /voice/mic/config",
+                            "POST /voice/mic/test",
                         ],
                     },
                 )
@@ -5111,6 +5152,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
             if path == "/ui/shopping":
                 _send_html(self, 200, _load_voice_ui_asset("voice_ui_shopping.html"))
                 return
+            if path == "/ui/mic":
+                _send_html(self, 200, _load_voice_ui_asset("voice_ui_mic.html"))
+                return
             if path == "/car/telemetry":
                 conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
                 _send_json(self, 200, {"status": "ok", "car_telemetry": _car_telemetry_summary(conn)})
@@ -5159,6 +5203,51 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 if not isinstance(disabled, list):
                     disabled = []
                 _send_json(self, 200, {"items": disabled})
+                return
+            if path == "/voice/mic/events":
+                limit = _parse_limit(params.get("limit", [None])[0], default=20, max_limit=200)
+                conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+                rows = store.list_events(
+                    conn,
+                    limit=limit,
+                    source="voice",
+                    event_type="voice.mic_debug",
+                )
+                events = []
+                for row in rows:
+                    try:
+                        payload = json.loads(row["payload_json"])
+                    except Exception:
+                        payload = {}
+                    events.append(
+                        {
+                            "id": row["id"],
+                            "ts": row["ts"],
+                            "payload": payload,
+                            "severity": row["severity"],
+                        }
+                    )
+                _send_json(self, 200, {"count": len(events), "events": events})
+                return
+            if path == "/voice/mic/config":
+                config_path = settings.modules_config_path()
+                if not config_path.exists():
+                    _send_json(self, 404, {"error": "modules_config_missing"})
+                    return
+                config = module_config.load_config(str(config_path))
+                enabled = set(config.get("enabled", []))
+                modules_cfg = config.get("modules", {})
+                mic_cfg = modules_cfg.get("voice.mic_rtsp", {}) if isinstance(modules_cfg, dict) else {}
+                if not isinstance(mic_cfg, dict):
+                    mic_cfg = {}
+                _send_json(
+                    self,
+                    200,
+                    {
+                        "enabled": "voice.mic_rtsp" in enabled,
+                        "config": mic_cfg,
+                    },
+                )
                 return
             if path == "/vision/snapshot":
                 raw_path = params.get("path", [None])[0]
@@ -5805,6 +5894,26 @@ class VoiceHandler(BaseHTTPRequestHandler):
                                     },
                                 }
                             },
+                            "/vision/relabel": {
+                                "post": {
+                                    "summary": "Correct a recognized face by enrolling the snapshot to the right subject",
+                                    "requestBody": {
+                                        "content": {
+                                            "application/json": {
+                                                "schema": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "subject": {"type": "string"},
+                                                        "snapshot_path": {"type": "string"},
+                                                        "recognized_id": {"type": "integer"},
+                                                    },
+                                                    "required": ["subject", "snapshot_path"],
+                                                }
+                                            }
+                                        }
+                                    },
+                                }
+                            },
                             "/vision/false_positive": {
                                 "post": {
                                     "summary": "Mark a snapshot hash as false positive",
@@ -5859,6 +5968,13 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "/ui/inventory": {"get": {"summary": "Inventory dashboard"}},
                             "/ui/audit": {"get": {"summary": "Audit trail dashboard"}},
                             "/ui/shopping": {"get": {"summary": "Shopping list dashboard"}},
+                            "/ui/mic": {"get": {"summary": "RTSP mic dashboard"}},
+                            "/voice/mic/events": {"get": {"summary": "Recent RTSP mic transcriptions"}},
+                            "/voice/mic/config": {
+                                "get": {"summary": "RTSP mic config"},
+                                "post": {"summary": "Update RTSP mic config"},
+                            },
+                            "/voice/mic/test": {"post": {"summary": "Run RTSP mic capture test"}},
                             "/memory": {"get": {"summary": "Memory snapshot"}},
                             "/summary": {
                                 "get": {
@@ -6683,6 +6799,220 @@ class VoiceHandler(BaseHTTPRequestHandler):
             },
         )
 
+    def _handle_mic_config(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+        try:
+            data = _parse_json(body)
+        except ValueError:
+            _bad_request(self, "invalid JSON")
+            return
+        if not isinstance(data, dict):
+            _bad_request(self, "JSON body must be an object")
+            return
+        config_path = settings.modules_config_path()
+        if not config_path.exists():
+            _send_json(self, 404, {"error": "modules_config_missing"})
+            return
+        try:
+            config = module_config.load_config(str(config_path))
+        except Exception:
+            _send_json(self, 500, {"error": "modules_config_invalid"})
+            return
+        modules_cfg = config.get("modules", {})
+        if not isinstance(modules_cfg, dict):
+            modules_cfg = {}
+        mic_cfg = modules_cfg.get("voice.mic_rtsp", {})
+        if not isinstance(mic_cfg, dict):
+            mic_cfg = {}
+
+        enabled_list = config.get("enabled", [])
+        if not isinstance(enabled_list, list):
+            enabled_list = []
+        enabled_set = {str(item) for item in enabled_list}
+        if "enabled" in data:
+            if not isinstance(data["enabled"], bool):
+                _bad_request(self, "enabled must be boolean")
+                return
+            if data["enabled"]:
+                enabled_set.add("voice.mic_rtsp")
+            else:
+                enabled_set.discard("voice.mic_rtsp")
+
+        def _coerce_int(key: str) -> None:
+            if key not in data:
+                return
+            try:
+                mic_cfg[key] = int(data[key])
+            except (TypeError, ValueError):
+                _bad_request(self, f"{key} must be integer")
+                raise
+
+        def _coerce_float(key: str) -> None:
+            if key not in data:
+                return
+            try:
+                mic_cfg[key] = float(data[key])
+            except (TypeError, ValueError):
+                _bad_request(self, f"{key} must be number")
+                raise
+
+        def _coerce_str(key: str) -> None:
+            if key not in data:
+                return
+            if not isinstance(data[key], str):
+                _bad_request(self, f"{key} must be string")
+                raise ValueError
+            mic_cfg[key] = data[key]
+
+        try:
+            _coerce_str("camera_id")
+            _coerce_str("rtsp_url")
+            _coerce_str("ffmpeg_path")
+            _coerce_int("poll_interval_seconds")
+            _coerce_int("cooldown_seconds")
+            _coerce_int("sample_rate")
+            _coerce_int("channels")
+            _coerce_int("min_chars")
+            _coerce_float("capture_seconds")
+            _coerce_float("threshold_db")
+        except ValueError:
+            return
+
+        if "debug" in data:
+            if not isinstance(data["debug"], bool):
+                _bad_request(self, "debug must be boolean")
+                return
+            mic_cfg["debug"] = data["debug"]
+        if "post_async" in data:
+            if not isinstance(data["post_async"], bool):
+                _bad_request(self, "post_async must be boolean")
+                return
+            mic_cfg["post_async"] = data["post_async"]
+
+        if "wake_words" in data:
+            wake_words = data["wake_words"]
+            if isinstance(wake_words, str):
+                wake_words = [item.strip() for item in wake_words.split(",") if item.strip()]
+            if not isinstance(wake_words, list) or not all(isinstance(item, str) for item in wake_words):
+                _bad_request(self, "wake_words must be list or comma string")
+                return
+            mic_cfg["wake_words"] = wake_words
+
+        if "wake_beep" in data:
+            wake_beep = data["wake_beep"]
+            if not isinstance(wake_beep, dict):
+                _bad_request(self, "wake_beep must be object")
+                return
+            current = mic_cfg.get("wake_beep", {})
+            if not isinstance(current, dict):
+                current = {}
+            if "enabled" in wake_beep:
+                if not isinstance(wake_beep["enabled"], bool):
+                    _bad_request(self, "wake_beep.enabled must be boolean")
+                    return
+                current["enabled"] = wake_beep["enabled"]
+            for key in ("frequency_hz", "volume"):
+                if key in wake_beep:
+                    try:
+                        current[key] = float(wake_beep[key])
+                    except (TypeError, ValueError):
+                        _bad_request(self, f"wake_beep.{key} must be number")
+                        return
+            for key in ("duration_ms",):
+                if key in wake_beep:
+                    try:
+                        current[key] = int(wake_beep[key])
+                    except (TypeError, ValueError):
+                        _bad_request(self, f"wake_beep.{key} must be integer")
+                        return
+            if "aplay_path" in wake_beep:
+                if not isinstance(wake_beep["aplay_path"], str):
+                    _bad_request(self, "wake_beep.aplay_path must be string")
+                    return
+                current["aplay_path"] = wake_beep["aplay_path"]
+            mic_cfg["wake_beep"] = current
+
+        modules_cfg["voice.mic_rtsp"] = mic_cfg
+        config["modules"] = modules_cfg
+        config["enabled"] = sorted(enabled_set)
+        with open(config_path, "w", encoding="utf-8") as handle:
+            yaml.safe_dump(config, handle, sort_keys=False)
+
+        append_jsonl(
+            str(settings.audit_path()),
+            {
+                "kind": "voice.mic_config_updated",
+                "config": mic_cfg,
+                "enabled": "voice.mic_rtsp" in enabled_set,
+            },
+        )
+        _send_json(self, 200, {"status": "ok", "enabled": "voice.mic_rtsp" in enabled_set, "config": mic_cfg})
+
+    def _handle_mic_test(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+        try:
+            data = _parse_json(body) if body else {}
+        except ValueError:
+            _bad_request(self, "invalid JSON")
+            return
+        if not isinstance(data, dict):
+            _bad_request(self, "JSON body must be an object")
+            return
+        config_path = settings.modules_config_path()
+        if not config_path.exists():
+            _send_json(self, 404, {"error": "modules_config_missing"})
+            return
+        try:
+            config = module_config.load_config(str(config_path))
+        except Exception:
+            _send_json(self, 500, {"error": "modules_config_invalid"})
+            return
+        modules_cfg = config.get("modules", {})
+        mic_cfg = modules_cfg.get("voice.mic_rtsp", {}) if isinstance(modules_cfg, dict) else {}
+        if not isinstance(mic_cfg, dict):
+            mic_cfg = {}
+
+        camera_id = data.get("camera_id") or mic_cfg.get("camera_id")
+        rtsp_url = data.get("rtsp_url") or mic_cfg.get("rtsp_url")
+        if not rtsp_url:
+            rtsp_url = rtsp_mic._find_camera_url(init_db(str(settings.db_path()), str(settings.repo_root() / "migrations")), camera_id)
+        if not rtsp_url:
+            _send_json(self, 400, {"error": "rtsp_url_missing"})
+            return
+
+        capture_seconds = float(data.get("capture_seconds", mic_cfg.get("capture_seconds", 3.0)))
+        sample_rate = int(mic_cfg.get("sample_rate", 16000))
+        channels = int(mic_cfg.get("channels", 1))
+        ffmpeg_path = str(mic_cfg.get("ffmpeg_path", "ffmpeg"))
+
+        pcm = rtsp_mic._capture_audio_pcm(rtsp_url, capture_seconds, ffmpeg_path, sample_rate, channels)
+        if not pcm:
+            _send_json(self, 200, {"status": "ok", "level_db": None, "transcript": "", "error": "no_audio"})
+            return
+        level_db = rtsp_mic._pcm_rms_db(pcm)
+
+        conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+        llm_cfg = _load_llm_config(conn)
+        api_key = llm_cfg.get("api_key")
+        if not isinstance(api_key, str) or not api_key.strip():
+            _send_json(self, 200, {"status": "ok", "level_db": level_db, "transcript": "", "error": "openai_api_key_missing"})
+            return
+        wav_bytes = rtsp_mic._pcm_to_wav_bytes(pcm, sample_rate, channels)
+        transcript = rtsp_mic._openai_transcribe_audio(wav_bytes, llm_cfg.get("model", "whisper-1"), api_key) or ""
+        _send_json(
+            self,
+            200,
+            {
+                "status": "ok",
+                "level_db": level_db,
+                "transcript": transcript,
+                "camera_id": camera_id,
+                "capture_seconds": capture_seconds,
+            },
+        )
+
     def _handle_network_mark(self) -> None:
         length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(length)
@@ -6997,6 +7327,63 @@ class VoiceHandler(BaseHTTPRequestHandler):
             return
         _send_json(self, 200, {"status": "ok", "subject": subject.strip(), "response": result.get("response")})
 
+    def _handle_vision_relabel(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+        try:
+            data = _parse_json(body)
+        except ValueError:
+            _bad_request(self, "invalid JSON")
+            return
+        if not isinstance(data, dict):
+            _bad_request(self, "JSON body must be an object")
+            return
+        subject = data.get("subject")
+        snapshot_path = data.get("snapshot_path")
+        recognized_id = data.get("recognized_id")
+        if not isinstance(subject, str) or not subject.strip():
+            _bad_request(self, "subject must be a string")
+            return
+        if not isinstance(snapshot_path, str) or not snapshot_path.strip():
+            _bad_request(self, "snapshot_path must be a string")
+            return
+        safe_path = _safe_snapshot_path(snapshot_path.strip())
+        if not safe_path:
+            _bad_request(self, "snapshot_path_invalid")
+            return
+        payload = safe_path.read_bytes()
+        config_path = settings.modules_config_path()
+        if not config_path.exists():
+            _send_json(self, 400, {"status": "error", "error": "modules_config_missing"})
+            return
+        config = module_config.load_config(str(config_path))
+        module_cfg = config.get("modules", {}).get("face.recognition", {})
+        provider = module_cfg.get("provider", {}) if isinstance(module_cfg, dict) else {}
+        result = vision._compreface_enroll(payload, subject.strip(), provider if isinstance(provider, dict) else {})
+        if not result.get("ok"):
+            _send_json(self, 400, {"status": "error", "detail": result})
+            return
+        conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+        append_jsonl(
+            str(settings.audit_path()),
+            {
+                "kind": "vision.relabel",
+                "recognized_id": recognized_id,
+                "subject": subject.strip(),
+                "snapshot_path": snapshot_path.strip(),
+            },
+        )
+        _send_json(
+            self,
+            200,
+            {
+                "status": "ok",
+                "recognized_id": recognized_id,
+                "subject": subject.strip(),
+                "response": result.get("response"),
+            },
+        )
+
     def _handle_vision_false_positive(self) -> None:
         length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(length)
@@ -7251,12 +7638,88 @@ def _timer_announcement_loop(stop_event: threading.Event, interval_seconds: int 
             )
 
 
+def _load_selfheal_cfg() -> Dict[str, Any]:
+    config_path = settings.modules_config_path()
+    if not config_path.exists():
+        return {}
+    try:
+        cfg = module_config.load_config(str(config_path))
+    except Exception:
+        return {}
+    modules_cfg = cfg.get("modules", {})
+    if not isinstance(modules_cfg, dict):
+        return {}
+    module_cfg = modules_cfg.get("selfheal", {})
+    return module_cfg if isinstance(module_cfg, dict) else {}
+
+
+def _restart_service(service: str) -> tuple[bool, str]:
+    if not service:
+        return False, "missing_service"
+    cmd = ["systemctl", "restart", service]
+    try:
+        if os.geteuid() == 0:
+            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True, "systemctl"
+        try:
+            subprocess.run(["sudo", "-n", *cmd], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True, "sudo"
+        except Exception:
+            return False, "insufficient_permissions"
+    except Exception as exc:
+        return False, f"restart_failed:{type(exc).__name__}"
+
+
+def _core_watchdog_loop(stop_event: threading.Event) -> None:
+    while not stop_event.is_set():
+        cfg = _load_selfheal_cfg()
+        interval_seconds = int(cfg.get("core_watchdog_interval_seconds", 60))
+        if stop_event.wait(interval_seconds):
+            break
+        if cfg.get("core_watchdog_enabled", True) is not True:
+            continue
+        stale_seconds = int(cfg.get("core_watchdog_stale_seconds", 180))
+        cooldown_seconds = int(cfg.get("core_watchdog_cooldown_seconds", 300))
+        conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+        last_action = store.get_memory(conn, "selfheal.last_core_restart_ts") or 0
+        try:
+            last_action = float(last_action)
+        except (TypeError, ValueError):
+            last_action = 0.0
+        now = time.time()
+        if now - last_action < cooldown_seconds:
+            continue
+        row = store.latest_heartbeat(conn)
+        if not row:
+            continue
+        try:
+            ts = datetime.fromisoformat(row["ts"])
+        except Exception:
+            continue
+        age = (datetime.now(timezone.utc) - ts).total_seconds()
+        if age <= stale_seconds:
+            continue
+        ok, detail = _restart_service("pumpkin.service")
+        store.insert_event(
+            conn,
+            source="selfheal",
+            event_type="selfheal.action",
+            payload={"action": "restart_service", "service": "pumpkin.service", "ok": ok, "detail": detail},
+            severity="info" if ok else "warn",
+        )
+        store.set_memory(conn, "selfheal.last_core_restart_ts", now)
+
+
 def run_server(host: str | None = None, port: int | None = None) -> None:
     stop_event = threading.Event()
     executor_thread = threading.Thread(
         target=_executor_loop, args=(stop_event,), daemon=True
     )
     executor_thread.start()
+    watchdog_thread = threading.Thread(
+        target=_core_watchdog_loop, args=(stop_event,), daemon=True
+    )
+    watchdog_thread.start()
     timer_thread = threading.Thread(
         target=_timer_announcement_loop, args=(stop_event,), daemon=True
     )

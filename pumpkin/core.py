@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.request
 import urllib.parse
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List
 
 from . import audit
@@ -25,7 +26,7 @@ from . import inventory as inventory_mod
 from . import selfcheck
 from .db import init_db
 from . import act
-from .act import execute_action
+from .act import execute_action, PatchApplyError
 
 
 def _append_recent_memory(conn, key: str, item: Dict[str, Any], limit: int = 25) -> None:
@@ -355,6 +356,21 @@ def _ensure_execution_plan(conn, policy: policy_mod.Policy, row: Any) -> bool:
         details["execution_plan_confirmed"] = False
         store.update_proposal_details(conn, row["id"], details)
 
+    autonomy_cfg = _load_autonomy_config()
+    if autonomy_cfg.get("auto_confirm_execution_plan") is True:
+        details["execution_plan_confirmed"] = True
+        store.update_proposal_details(conn, row["id"], details)
+        audit.append_jsonl(
+            str(settings.audit_path()),
+            {
+                "kind": "proposal.execution_plan_auto_confirmed",
+                "proposal_id": row["id"],
+                "action_type": action_type,
+                "policy_hash": policy.policy_hash,
+            },
+        )
+        return True
+
     summary = f"Confirm execution plan for proposal #{row['id']}: {row['summary']}"
     if not store.proposal_exists(conn, summary, statuses=["pending", "approved"]):
         store.insert_proposal(
@@ -390,6 +406,91 @@ def _ensure_execution_plan(conn, policy: policy_mod.Policy, row: Any) -> bool:
     return False
 
 
+def _cleanup_confirm_plan_proposals(conn, autonomy_cfg: Dict[str, Any]) -> int:
+    if autonomy_cfg.get("auto_confirm_execution_plan") is not True:
+        return 0
+    rows = store.list_proposals(conn, status="pending", limit=200)
+    cleaned = 0
+    for row in rows:
+        try:
+            summary = row["summary"]
+        except Exception:
+            summary = None
+        if not isinstance(summary, str):
+            continue
+        if not summary.startswith("Confirm execution plan for proposal #"):
+            continue
+        policy_hash = row["policy_hash"]
+        store.insert_approval(
+            conn,
+            proposal_id=row["id"],
+            actor="selfheal.auto",
+            decision="rejected",
+            reason="auto_confirm_execution_plan_enabled",
+            policy_hash=policy_hash,
+        )
+        store.update_proposal_status(conn, row["id"], "rejected")
+        audit.append_jsonl(
+            str(settings.audit_path()),
+            {
+                "kind": "proposal.auto_rejected_confirm_plan",
+                "proposal_id": row["id"],
+                "policy_hash": policy_hash,
+            },
+        )
+        cleaned += 1
+    return cleaned
+
+
+def _auto_approve_pending_repaired_patches(conn, autonomy_cfg: Dict[str, Any]) -> int:
+    if autonomy_cfg.get("auto_apply_repaired_patches") is not True:
+        return 0
+    rows = store.list_proposals(conn, status="pending", limit=200)
+    approved = 0
+    for row in rows:
+        try:
+            summary = row["summary"]
+        except Exception:
+            summary = None
+        if not isinstance(summary, str):
+            continue
+        if not summary.startswith("Repair failed patch for proposal #"):
+            continue
+        try:
+            details = json.loads(row["details_json"])
+        except Exception:
+            details = {}
+        details["execution_plan_confirmed"] = True
+        if "execution_plan" not in details:
+            details["execution_plan"] = {
+                "owner": "pumpkin",
+                "dependencies": [],
+                "commands": _infer_action_commands(details),
+                "notes": "Auto-confirmed for repaired patch.",
+            }
+        store.update_proposal_details(conn, row["id"], details)
+        policy_hash = row["policy_hash"]
+        store.insert_approval(
+            conn,
+            proposal_id=row["id"],
+            actor="selfheal.auto",
+            decision="approved",
+            reason="auto_apply_repaired_patch",
+            policy_hash=policy_hash,
+        )
+        store.update_proposal_status(conn, row["id"], "approved")
+        audit.append_jsonl(
+            str(settings.audit_path()),
+            {
+                "kind": "proposal.auto_approved_repair_patch",
+                "proposal_id": row["id"],
+                "policy_hash": policy_hash,
+            },
+        )
+        approved += 1
+    return approved
+
+
 def _watchdog_stalled_actions(conn, policy: policy_mod.Policy, autonomy_cfg: Dict[str, Any]) -> None:
     try:
         stall_minutes = int(autonomy_cfg.get("action_stall_minutes", 10))
@@ -409,7 +510,10 @@ def _watchdog_stalled_actions(conn, policy: policy_mod.Policy, autonomy_cfg: Dic
             continue
         if details.get("execution_plan_confirmed") is not True:
             continue
-        ts_created = row.get("ts_created")
+        try:
+            ts_created = row["ts_created"]
+        except Exception:
+            ts_created = None
         if not isinstance(ts_created, str):
             continue
         try:
@@ -574,12 +678,22 @@ def _load_llm_config(conn) -> Dict[str, Any]:
 
 
 def _repair_patch_with_llm(
-    api_key: str, model: str, base_url: str, patch: str, error: str
+    api_key: str,
+    model: str,
+    base_url: str,
+    patch: str,
+    error: str,
+    stderr: str | None,
+    context: str,
 ) -> str | None:
+    stderr_block = f"\nPatch stderr:\n{stderr}\n" if isinstance(stderr, str) and stderr.strip() else ""
     prompt = (
         "You are a senior software engineer. Fix the unified diff patch below so it applies cleanly. "
-        "Return ONLY a valid unified diff patch with file headers. No explanations.\n\n"
-        f"Patch error: {error}\n\nPATCH:\n{patch}\n"
+        "Return ONLY a valid unified diff patch with file headers. No explanations.\n"
+        "If hunks are offset, adjust line numbers/contexts. Keep changes minimal and consistent.\n\n"
+        f"Patch error: {error}\n"
+        f"{stderr_block}\n"
+        f"FILE CONTEXT:\n{context}\n\nPATCH:\n{patch}\n"
     )
     payload = {
         "model": model,
@@ -611,6 +725,23 @@ def _repair_failed_patches(conn) -> None:
     last_ts = store.get_memory(conn, "actions.last_repair_ts")
     if not isinstance(last_ts, str):
         last_ts = "1970-01-01T00:00:00+00:00"
+    autonomy_cfg = _load_autonomy_config()
+    try:
+        max_attempts = int(autonomy_cfg.get("max_patch_repair_attempts", 2))
+    except (TypeError, ValueError):
+        max_attempts = 2
+    try:
+        cooldown_hours = int(autonomy_cfg.get("patch_repair_cooldown_hours", 24))
+    except (TypeError, ValueError):
+        cooldown_hours = 24
+    auto_apply = autonomy_cfg.get("auto_apply_repaired_patches") is True
+    attempt_map = store.get_memory(conn, "patch.repair.attempts") or {}
+    if not isinstance(attempt_map, dict):
+        attempt_map = {}
+    blocked_map = store.get_memory(conn, "patch.repair.blocked_until") or {}
+    if not isinstance(blocked_map, dict):
+        blocked_map = {}
+    now_ts = datetime.now(timezone.utc)
     rows = conn.execute(
         "SELECT id, proposal_id, ts_finished, action_type, status, result_json, params_json "
         "FROM actions WHERE action_type = 'code.apply_patch' AND status = 'failed' "
@@ -622,13 +753,71 @@ def _repair_failed_patches(conn) -> None:
     llm = _load_llm_config(conn)
     api_key = llm.get("api_key")
     if not isinstance(api_key, str) or not api_key.strip():
-        append_jsonl(
+        audit.append_jsonl(
             str(settings.audit_path()),
             {"kind": "patch.repair_skipped", "reason": "missing_api_key"},
         )
         return
     model = str(llm.get("model") or "gpt-4o-mini")
     base_url = str(llm.get("base_url") or "https://api.openai.com/v1/chat/completions")
+    def _parse_patch_hunks(patch_text: str) -> Dict[str, List[int]]:
+        hunks: Dict[str, List[int]] = {}
+        current_file: str | None = None
+        for line in patch_text.splitlines():
+            if line.startswith("+++ "):
+                path = line[4:].split("\t")[0].strip()
+                if path == "/dev/null":
+                    current_file = None
+                    continue
+                if path.startswith("a/") or path.startswith("b/"):
+                    path = path[2:]
+                current_file = path
+                hunks.setdefault(current_file, [])
+                continue
+            if current_file and line.startswith("@@"):
+                match = re.search(r"\\+(\\d+)(?:,(\\d+))?", line)
+                if match:
+                    hunks[current_file].append(int(match.group(1)))
+        return hunks
+
+    def _format_snippet(lines: List[str], start: int, end: int) -> str:
+        formatted = []
+        for idx in range(start, end + 1):
+            if 1 <= idx <= len(lines):
+                formatted.append(f"{idx:>4}│{lines[idx - 1].rstrip()}")
+        return "\n".join(formatted)
+
+    def _build_patch_context(patch_text: str, repo_root: str) -> str:
+        files = act._patch_files(patch_text) if hasattr(act, "_patch_files") else []
+        hunks = _parse_patch_hunks(patch_text)
+        repo_root_real = os.path.realpath(repo_root)
+        entries = []
+        for path in files[:4]:
+            safe_path = str(path)
+            full = os.path.realpath(os.path.join(repo_root_real, safe_path))
+            if not full.startswith(repo_root_real + os.sep):
+                continue
+            if not os.path.exists(full):
+                entries.append(f"FILE {safe_path}: missing")
+                continue
+            try:
+                with open(full, "r", encoding="utf-8") as handle:
+                    lines = handle.readlines()
+            except Exception:
+                entries.append(f"FILE {safe_path}: unreadable")
+                continue
+            if safe_path in hunks and hunks[safe_path]:
+                for start_line in hunks[safe_path][:2]:
+                    start = max(1, start_line - 12)
+                    end = min(len(lines), start_line + 12)
+                    snippet = _format_snippet(lines, start, end)
+                    entries.append(
+                        f"FILE {safe_path} (around line {start_line}):\n{snippet}"
+                    )
+            else:
+                head = _format_snippet(lines, 1, min(len(lines), 40))
+                entries.append(f"FILE {safe_path} (head):\n{head}")
+        return "\n\n".join(entries) if entries else "No file context available."
     for row in rows:
         action_id, proposal_id, ts_finished, _, _, result_json, params_json = row
         if isinstance(ts_finished, str):
@@ -638,6 +827,7 @@ def _repair_failed_patches(conn) -> None:
         except Exception:
             result = {}
         error = str(result.get("error") or "patch_failed")
+        stderr = result.get("stderr") or result.get("error_message")
         try:
             params = json.loads(params_json or "{}")
         except Exception:
@@ -648,11 +838,43 @@ def _repair_failed_patches(conn) -> None:
             continue
         target_id = proposal_id or action_id
         summary = f"Repair failed patch for proposal #{target_id}"
+        blocked_until = blocked_map.get(str(target_id))
+        if isinstance(blocked_until, str):
+            try:
+                blocked_until_ts = datetime.fromisoformat(blocked_until)
+            except Exception:
+                blocked_until_ts = None
+            if blocked_until_ts and blocked_until_ts > now_ts:
+                continue
+        attempts = int(attempt_map.get(str(target_id), 0) or 0)
+        if attempts >= max_attempts:
+            blocked_map[str(target_id)] = (now_ts + timedelta(hours=cooldown_hours)).isoformat()
+            store.snooze_proposal_summary(conn, summary, reason="repair_attempts_exceeded")
+            audit.append_jsonl(
+                str(settings.audit_path()),
+                {
+                    "kind": "patch.repair_blocked",
+                    "action_id": action_id,
+                    "proposal_id": proposal_id,
+                    "attempts": attempts,
+                },
+            )
+            continue
+        attempt_map[str(target_id)] = attempts + 1
         if store.proposal_exists(conn, summary, statuses=["pending", "approved"]):
             continue
-        repaired = _repair_patch_with_llm(api_key.strip(), model, base_url, patch, error)
+        context = _build_patch_context(patch, repo_root)
+        repaired = _repair_patch_with_llm(
+            api_key.strip(),
+            model,
+            base_url,
+            patch,
+            error,
+            stderr if isinstance(stderr, str) else None,
+            context,
+        )
         if not isinstance(repaired, str) or not repaired.strip():
-            append_jsonl(
+            audit.append_jsonl(
                 str(settings.audit_path()),
                 {
                     "kind": "patch.repair_failed",
@@ -671,8 +893,16 @@ def _repair_failed_patches(conn) -> None:
             "original_action_id": action_id,
             "original_proposal_id": proposal_id,
             "original_error": error,
+            "execution_plan_confirmed": True,
+            "execution_plan": {
+                "owner": "pumpkin",
+                "dependencies": [],
+                "commands": [f"apply patch to {repo_root}"],
+                "notes": "Auto-confirmed for repaired patch.",
+            },
         }
-        store.insert_proposal(
+        status = "approved" if auto_apply else "pending"
+        proposal_id = store.insert_proposal(
             conn,
             kind="action.request",
             summary=summary,
@@ -684,13 +914,23 @@ def _repair_failed_patches(conn) -> None:
             ],
             risk=0.4,
             expected_outcome="Patch applied cleanly after review.",
+            status=status,
             policy_hash=policy_mod.load_policy(str(settings.policy_path())).policy_hash,
             needs_new_capability=False,
             capability_request=None,
             ai_context_hash=None,
             ai_context_excerpt=None,
         )
-        append_jsonl(
+        if auto_apply:
+            store.insert_approval(
+                conn,
+                proposal_id=proposal_id,
+                actor="selfheal.auto",
+                decision="approved",
+                reason="auto_apply_repaired_patch",
+                policy_hash=policy_mod.load_policy(str(settings.policy_path())).policy_hash,
+            )
+        audit.append_jsonl(
             str(settings.audit_path()),
             {
                 "kind": "patch.repair_proposal_created",
@@ -699,6 +939,8 @@ def _repair_failed_patches(conn) -> None:
             },
         )
     store.set_memory(conn, "actions.last_repair_ts", last_ts)
+    store.set_memory(conn, "patch.repair.attempts", attempt_map)
+    store.set_memory(conn, "patch.repair.blocked_until", blocked_map)
 
 
 def _load_autonomy_config() -> Dict[str, Any]:
@@ -740,6 +982,88 @@ def _parse_ts(value: str) -> datetime | None:
         return datetime.fromisoformat(cleaned)
     except ValueError:
         return None
+
+
+def _load_house_empty_cfg() -> Dict[str, Any]:
+    config_path = settings.modules_config_path()
+    if not config_path.exists():
+        return {}
+    try:
+        config = module_config.load_config(str(config_path))
+    except Exception:
+        return {}
+    modules_cfg = config.get("modules", {}) if isinstance(config, dict) else {}
+    if not isinstance(modules_cfg, dict):
+        return {}
+    cfg = modules_cfg.get("house.empty")
+    if not isinstance(cfg, dict):
+        cfg = modules_cfg.get("house_empty")
+    return cfg if isinstance(cfg, dict) else {}
+
+
+def _update_house_empty_mode(conn, ha_summary: Dict[str, Any]) -> List[Dict[str, Any]]:
+    cfg = _load_house_empty_cfg()
+    if not cfg or not cfg.get("enabled", False):
+        return []
+    people_home = ha_summary.get("people_home") if isinstance(ha_summary, dict) else []
+    is_empty = not bool(people_home)
+    target_state = "empty" if is_empty else "occupied"
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+
+    state = store.get_memory(conn, "house.empty_state")
+    if not isinstance(state, dict):
+        state = {}
+    current_state = state.get("state") if isinstance(state.get("state"), str) else "occupied"
+
+    pending = store.get_memory(conn, "house.empty_pending")
+    if not isinstance(pending, dict):
+        pending = {}
+    pending_state = pending.get("state")
+    pending_since = _parse_ts(pending.get("since")) if isinstance(pending.get("since"), str) else None
+
+    if current_state == target_state:
+        if pending_state:
+            store.set_memory(conn, "house.empty_pending", {})
+        return []
+
+    if pending_state != target_state or not pending_since:
+        store.set_memory(conn, "house.empty_pending", {"state": target_state, "since": now_iso})
+        return []
+
+    min_key = "min_empty_minutes" if target_state == "empty" else "min_occupied_minutes"
+    try:
+        min_minutes = int(cfg.get(min_key, 5 if target_state == "empty" else 2))
+    except (TypeError, ValueError):
+        min_minutes = 5 if target_state == "empty" else 2
+    if (now - pending_since).total_seconds() < min_minutes * 60:
+        return []
+
+    store.set_memory(
+        conn,
+        "house.empty_state",
+        {
+            "state": target_state,
+            "since": now_iso,
+            "people_home": list(people_home) if isinstance(people_home, list) else [],
+        },
+    )
+    store.set_memory(conn, "house.empty_pending", {})
+
+    event_type = "house.empty_mode" if target_state == "empty" else "house.occupied_mode"
+    payload = {
+        "state": target_state,
+        "since": now_iso,
+        "people_home": list(people_home) if isinstance(people_home, list) else [],
+    }
+    return [
+        {
+            "source": "house",
+            "type": event_type,
+            "payload": payload,
+            "severity": "info",
+        }
+    ]
 
 
 def _load_events_since_last(conn) -> List[Any]:
@@ -883,7 +1207,12 @@ def _record_proposals(conn, policy: policy_mod.Policy, proposals: List[Dict[str,
     ordered = sorted(
         proposals, key=lambda p: 0 if p.get("kind") == "module.install" else 1
     )
-    snoozed = _load_snoozed_summaries(conn)
+    autonomy_cfg = _load_autonomy_config()
+    try:
+        snooze_days = int(autonomy_cfg.get("proposal_snooze_days", 30))
+    except (TypeError, ValueError):
+        snooze_days = 30
+    snoozed = _load_snoozed_summaries(conn, days=snooze_days)
     for proposal in ordered:
         details = proposal["details"]
         link_key = proposal.get("link_key")
@@ -1273,7 +1602,12 @@ def _execute_approved(conn, policy: policy_mod.Policy, autonomy_cfg: Dict[str, A
             )
             executed_count += 1
         except Exception as exc:
-            store.finish_action(conn, action_id, "failed", result={"error": str(exc)})
+            if isinstance(exc, PatchApplyError):
+                result = dict(exc.details)
+                result["error_message"] = str(exc)
+            else:
+                result = {"error": str(exc)}
+            store.finish_action(conn, action_id, "failed", result=result)
             store.update_proposal_status(conn, proposal_id, "failed")
             if force_execute:
                 details.pop("force_execute", None)
@@ -1400,6 +1734,9 @@ def run_once() -> Dict[str, Any]:
     ha_entities = store.get_memory(conn, "homeassistant.entities") or {}
     ha_summary = store.get_memory(conn, "homeassistant.summary") or {}
     network_snapshot = store.get_memory(conn, "network.discovery.snapshot") or {}
+    house_events = _update_house_empty_mode(conn, ha_summary if isinstance(ha_summary, dict) else {})
+    if house_events:
+        _insert_events(conn, house_events)
     insight_items = insights.build_insights(
         system_snapshot=system_snapshot,
         ha_entities=ha_entities if isinstance(ha_entities, dict) else {},
@@ -1465,6 +1802,8 @@ def run_once() -> Dict[str, Any]:
         store.set_memory(conn, "selfcheck.last_ts", now)
 
     _requeue_orphaned_suggestions(conn, policy.policy_hash)
+    _cleanup_confirm_plan_proposals(conn, autonomy_cfg)
+    _auto_approve_pending_repaired_patches(conn, autonomy_cfg)
     executed_actions = _execute_approved(conn, policy, autonomy_cfg)
     _watchdog_stalled_actions(conn, policy, autonomy_cfg)
     _repair_failed_patches(conn)

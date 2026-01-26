@@ -20,6 +20,7 @@ from . import retrieval
 from . import settings
 from . import store
 from . import inventory as inventory_mod
+from . import module_config
 from .audit import append_jsonl
 
 MAX_PROPOSALS_PER_LOOP = settings.max_proposals_per_loop()
@@ -778,6 +779,76 @@ def _rule_based_proposals(events: List[Any], conn) -> List[Dict[str, Any]]:
     proposals: List[Dict[str, Any]] = []
 
     for row in events:
+        if row["type"] in {"house.empty_mode", "house.occupied_mode"}:
+            payload = json.loads(row["payload_json"])
+            cfg = _load_house_empty_cfg()
+            if cfg.get("enabled", False):
+                people_home = payload.get("people_home") if isinstance(payload, dict) else []
+                summary_suffix = "House empty mode" if row["type"] == "house.empty_mode" else "House occupied mode"
+                notify_on_change = cfg.get("notify_on_change", True)
+                if notify_on_change:
+                    summary = f"{summary_suffix}: notify"
+                    if not store.proposal_exists(conn, summary, {"pending", "approved", "executed", "rejected"}):
+                        proposals.append(
+                            {
+                                "kind": "action.request",
+                                "summary": summary,
+                                "details": {
+                                    "rationale": "Presence changed; alert the household mode.",
+                                    "action_type": "notify.local",
+                                    "action_params": {
+                                        "message": (
+                                            f"{summary_suffix} active. "
+                                            f"{'Nobody is home.' if row['type'] == 'house.empty_mode' else 'People home: ' + ', '.join(people_home) if people_home else 'Occupancy detected.'}"
+                                        )
+                                    },
+                                },
+                                "risk": 0.2,
+                                "expected_outcome": "Household mode change is surfaced.",
+                                "source_event_ids": [row["id"]],
+                                "needs_new_capability": False,
+                                "capability_request": None,
+                                "steps": ["Notify about occupancy mode change"],
+                            }
+                        )
+                if row["type"] == "house.empty_mode":
+                    energy_cfg = cfg.get("energy_saving", {}) if isinstance(cfg.get("energy_saving"), dict) else {}
+                    light_entities = _normalize_entity_list(energy_cfg.get("light_entities"))
+                    switch_entities = _normalize_entity_list(energy_cfg.get("switch_entities"))
+                    climate_entities = _normalize_entity_list(energy_cfg.get("climate_entities"))
+                    if energy_cfg.get("lights_off", True):
+                        _append_house_action(
+                            proposals,
+                            conn,
+                            summary="House empty: turn off lights",
+                            domain="light",
+                            service="turn_off",
+                            entity_ids=light_entities,
+                            event_id=row["id"],
+                        )
+                    if energy_cfg.get("switches_off", False):
+                        _append_house_action(
+                            proposals,
+                            conn,
+                            summary="House empty: turn off switches",
+                            domain="switch",
+                            service="turn_off",
+                            entity_ids=switch_entities,
+                            event_id=row["id"],
+                        )
+                    climate_preset = energy_cfg.get("climate_preset")
+                    if isinstance(climate_preset, str) and climate_preset.strip():
+                        _append_house_action(
+                            proposals,
+                            conn,
+                            summary=f"House empty: set climate preset {climate_preset}",
+                            domain="climate",
+                            service="set_preset_mode",
+                            entity_ids=climate_entities,
+                            event_id=row["id"],
+                            extra_payload={"preset_mode": climate_preset.strip()},
+                        )
+            continue
         if row["type"].startswith("insight."):
             payload = json.loads(row["payload_json"])
             if not isinstance(payload, dict):
@@ -1898,6 +1969,71 @@ def _rule_based_proposals(events: List[Any], conn) -> List[Dict[str, Any]]:
     store.set_memory(conn, "network.discovery.auto_proposed", auto_state)
 
     return proposals
+
+
+def _load_house_empty_cfg() -> Dict[str, Any]:
+    config_path = settings.modules_config_path()
+    if not config_path.exists():
+        return {}
+    try:
+        config = module_config.load_config(str(config_path))
+    except Exception:
+        return {}
+    modules_cfg = config.get("modules", {}) if isinstance(config, dict) else {}
+    if not isinstance(modules_cfg, dict):
+        return {}
+    cfg = modules_cfg.get("house.empty")
+    if not isinstance(cfg, dict):
+        cfg = modules_cfg.get("house_empty")
+    return cfg if isinstance(cfg, dict) else {}
+
+
+def _normalize_entity_list(value: Any) -> List[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value if isinstance(item, (str, int)) and str(item).strip()]
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []
+
+
+def _append_house_action(
+    proposals: List[Dict[str, Any]],
+    conn,
+    summary: str,
+    domain: str,
+    service: str,
+    entity_ids: List[str],
+    event_id: int,
+    extra_payload: Optional[Dict[str, Any]] = None,
+) -> None:
+    if store.proposal_exists(conn, summary, {"pending", "approved", "executed", "rejected"}):
+        return
+    payload: Dict[str, Any] = {}
+    if entity_ids:
+        payload["entity_id"] = entity_ids
+    if extra_payload:
+        payload.update(extra_payload)
+    proposals.append(
+        {
+            "kind": "action.request",
+            "summary": summary,
+            "details": {
+                "rationale": "House empty mode energy-saving action.",
+                "action_type": "homeassistant.service",
+                "action_params": {
+                    "domain": domain,
+                    "service": service,
+                    "payload": payload,
+                },
+            },
+            "risk": 0.3,
+            "expected_outcome": "Home Assistant service executed for empty-house energy savings.",
+            "source_event_ids": [event_id],
+            "needs_new_capability": False,
+            "capability_request": None,
+            "steps": ["Execute Home Assistant service call"],
+        }
+    )
 
 
 def build_context_pack(conn, event_limit: int = 20) -> Tuple[Dict[str, Any], str, str]:

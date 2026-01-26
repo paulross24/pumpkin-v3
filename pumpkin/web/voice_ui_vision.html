@@ -378,12 +378,20 @@
                 <div class="meta">${label}</div>
                 <div class="meta">${time}</div>
                 <div class="meta">confidence: ${confidence}</div>
+                <div class="row" style="margin-top: 8px;">
+                  <input type="text" placeholder="Correct subject" />
+                  <button class="secondary correct-btn">Correct</button>
+                </div>
+                <div class="meta status" style="margin-top: 6px;"></div>
               </div>
             </div>
           `;
           const img = card.querySelector("img");
           const thumb = card.querySelector(".thumb");
           const boxNode = card.querySelector(".face-box");
+          const correctInput = card.querySelector("input");
+          const correctButton = card.querySelector(".correct-btn");
+          const status = card.querySelector(".status");
           if (thumb && boxNode && item.face_box) {
             const box = item.face_box;
             const applyBox = () => {
@@ -418,6 +426,44 @@
               currentLightboxBox = item.face_box || null;
               lightbox.classList.add("open");
               lightbox.setAttribute("aria-hidden", "false");
+            });
+          }
+          if (correctButton) {
+            correctButton.addEventListener("click", async () => {
+              const subject = (correctInput?.value || "").trim();
+              if (!subject) {
+                status.textContent = "Enter the correct subject.";
+                return;
+              }
+              if (!item.snapshot_path) {
+                status.textContent = "Missing snapshot path.";
+                return;
+              }
+              correctButton.textContent = "Saving...";
+              status.textContent = "";
+              try {
+                const res = await fetch("/vision/relabel", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    subject,
+                    snapshot_path: item.snapshot_path,
+                    recognized_id: item.id,
+                  }),
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                  status.textContent = data.error || data.detail?.error || "Correction failed.";
+                  correctButton.textContent = "Correct";
+                  return;
+                }
+                status.textContent = `Saved as ${subject}.`;
+                correctButton.textContent = "Saved";
+                setTimeout(loadRecognized, 400);
+              } catch (err) {
+                status.textContent = "Correction failed.";
+                correctButton.textContent = "Correct";
+              }
             });
           }
           recognizedListNode.appendChild(card);

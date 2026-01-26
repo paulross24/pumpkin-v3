@@ -1,82 +1,107 @@
 version: 1
 enabled:
-  - homeassistant.observer
-  - code.assistant
-  - network.discovery
-  - face.recognition
-  - voice.mic_rtsp
-  - insights
-  - selfheal
+- code.assistant
+- face.recognition
+- homeassistant.observer
+- insights
+- network.discovery
+- selfheal
+- voice.mic_rtsp
 modules:
   homeassistant.observer:
-    base_url: "http://192.168.1.140:8123"
-    token_env: "PUMPKIN_HA_TOKEN"
+    base_url: http://192.168.1.140:8123
+    token_env: PUMPKIN_HA_TOKEN
     include_domains:
-      - "*"
+    - '*'
     calendar_enabled: true
     calendar_days_ahead: 7
     calendar_limit: 10
     calendar_shared:
-      - calendar.ross_family_calendar
+    - calendar.ross_family_calendar
     calendar_people:
       person.paul_ross: calendar.ross_family_calendar
     attribute_allowlist:
-      - friendly_name
-      - device_class
-      - unit_of_measurement
-      - icon
-      - battery_level
-      - temperature
-      - current_temperature
-      - humidity
-      - brightness
-      - hvac_mode
-      - hvac_action
-      - preset_mode
+    - friendly_name
+    - device_class
+    - unit_of_measurement
+    - icon
+    - battery_level
+    - temperature
+    - current_temperature
+    - humidity
+    - brightness
+    - hvac_mode
+    - hvac_action
+    - preset_mode
     presence_map:
       device_trackers: {}
       macs: {}
+  house.empty:
+    enabled: true
+    min_empty_minutes: 5
+    min_occupied_minutes: 2
+    notify_on_change: true
+    energy_saving:
+      lights_off: true
+      switches_off: false
+      climate_preset: eco
+      light_entities: []
+      switch_entities: []
+      climate_entities: []
+  smart_alerts:
+    enabled: true
+    unknown_faces_when_empty: true
+    dog_behavior_when_empty: true
+    car_anomalies_when_recent: true
+    car_recent_minutes: 30
   code.assistant:
-    repo_root: "/home/rossp"
+    repo_root: /home/rossp
     require_approval: true
   autonomy:
     max_actions_per_loop: 3
     default_action_cooldown_seconds: 30
+    auto_confirm_execution_plan: false
+    auto_apply_repaired_patches: false
+    protected_patch_paths:
+      - pumpkin/telemetry.py
+    max_patch_repair_attempts: 2
+    patch_repair_cooldown_hours: 24
+    proposal_snooze_days: 14
     action_cooldowns_seconds:
       homeassistant.service: 20
       network.discovery: 120
     pulse_interval_seconds: 60
   network.discovery:
-    subnet: "auto"
+    subnet: auto
     tcp_ports:
-      - 22
-      - 80
-      - 81
-      - 443
-      - 554
-      - 8000
-      - 8008
-      - 8009
-      - 8080
-      - 8123
-      - 8443
-      - 8554
-      - 8899
-      - 9000
-      - 9100
-      - 9443
-      - 1400
-      - 37777
-      - 62078
+    - 22
+    - 80
+    - 81
+    - 443
+    - 554
+    - 8000
+    - 8008
+    - 8009
+    - 8080
+    - 8123
+    - 8443
+    - 8554
+    - 8899
+    - 9000
+    - 9100
+    - 9443
+    - 1400
+    - 37777
+    - 62078
     timeout_seconds: 1.0
     fast_ports:
-      - 22
-      - 80
-      - 443
-      - 554
-      - 8000
-      - 8554
-      - 8123
+    - 22
+    - 80
+    - 443
+    - 554
+    - 8000
+    - 8554
+    - 8123
     fast_timeout_seconds: 0.2
     max_hosts: 254
     max_scan_seconds: 60
@@ -97,47 +122,47 @@ modules:
     scan_interval_seconds: 300
     max_cameras_per_run: 2
     timeout_seconds: 10
-    ffmpeg_path: "ffmpeg"
+    ffmpeg_path: ffmpeg
     provider:
-      type: "compreface"
-      endpoint: "http://127.0.0.1:8000/api/v1/recognition/recognize"
-      api_key_env: "PUMPKIN_FACE_API_KEY"
+      type: compreface
+      endpoint: http://127.0.0.1:8000/api/v1/recognition/recognize
+      api_key_env: PUMPKIN_FACE_API_KEY
       min_confidence: 0.45
       timeout_seconds: 6
     cameras:
-      - id: ring-doorbell
-        label: "front door"
-        source: "rtsp"
-        rtsp_url: "rtsp://192.168.1.157:37153/573b5ae1a0487989"
-        enabled: true
-      - id: kitchen-cam
-        label: "kitchen"
-        source: "onvif"
-        ip: "192.168.1.127"
-        rtsp_port: 8554
-        rtsp_url: "rtsp://{user}:{password}@192.168.1.127:8554/Streaming/Channels/102"
-        rtsp_paths:
-          - /Streaming/Channels/102
-          - /Streaming/Channels/101
-          - /live
-          - /h264
-        auth_env:
-          user: "PUMPKIN_KITCHEN_CAM_USER"
-          pass: "PUMPKIN_KITCHEN_CAM_PASS"
-        auto_probe: true
-        enabled: true
+    - id: ring-doorbell
+      label: front door
+      source: rtsp
+      rtsp_url: rtsp://192.168.1.157:37153/573b5ae1a0487989
+      enabled: true
+    - id: kitchen-cam
+      label: kitchen
+      source: onvif
+      ip: 192.168.1.127
+      rtsp_port: 8554
+      rtsp_url: rtsp://{user}:{password}@192.168.1.127:8554/Streaming/Channels/102
+      rtsp_paths:
+      - /Streaming/Channels/102
+      - /Streaming/Channels/101
+      - /live
+      - /h264
+      auth_env:
+        user: PUMPKIN_KITCHEN_CAM_USER
+        pass: PUMPKIN_KITCHEN_CAM_PASS
+      auto_probe: true
+      enabled: true
     behavior:
       enabled: true
       camera_ids:
-        - kitchen-cam
+      - kitchen-cam
       alert_cooldown_minutes: 30
       dog_names:
-        - Roary
-        - Ozzy
+      - Roary
+      - Ozzy
       forbidden_objects:
-        - spray bottle
-        - spray cleaner
-        - bottle
+      - spray bottle
+      - spray cleaner
+      - bottle
       countertop_watch: true
       visual:
         enabled: true
@@ -147,25 +172,31 @@ modules:
         threshold_db: -20
   voice.mic_rtsp:
     enabled: true
-    camera_id: "kitchen-cam"
-    capture_seconds: 2.5
+    camera_id: kitchen-cam
+    capture_seconds: 10.0
     poll_interval_seconds: 10
-    cooldown_seconds: 15
-    threshold_db: -50
+    cooldown_seconds: 10
+    threshold_db: -90.0
     debug: true
-    sample_rate: 16000
+    sample_rate: 44000
     channels: 1
     wake_words:
-      - "pumpkin"
-      - "hey pumpkin"
-    min_chars: 4
-    ffmpeg_path: "ffmpeg"
+    - pumpkin
+    - hey pumpkin
+    min_chars: 2
+    ffmpeg_path: ffmpeg
     post_async: true
+    wake_beep:
+      enabled: true
+      frequency_hz: 880
+      duration_ms: 120
+      volume: 0.2
+      aplay_path: aplay
   car.telemetry:
     baseline:
-      mode: "auto"
+      mode: auto
       window_days: 90
-      label: "generic"
+      label: generic
       speed_mph_max: 90
       rpm_max: 4000
       coolant_c_max: 105
@@ -177,20 +208,24 @@ modules:
     restart_voice: true
     reset_ha_cooldown: true
     rescan_network: true
+    core_watchdog_enabled: true
+    core_watchdog_interval_seconds: 60
+    core_watchdog_stale_seconds: 180
+    core_watchdog_cooldown_seconds: 300
   insights:
     door_open_warn_minutes: 10
     lights_on_warn_minutes: 30
     motion_recent_minutes: 5
     briefing_times:
-      - "08:00"
-      - "20:00"
+    - 08:00
+    - '20:00'
     event_briefing_min_minutes: 30
     auto_notify_min_minutes: 30
     auto_notify_types:
-      - "insight.new_device"
-      - "insight.inventory_change"
-      - "insight.face_alert"
-      - "insight.camera_issue"
+    - insight.new_device
+    - insight.inventory_change
+    - insight.face_alert
+    - insight.camera_issue
   voice:
     confirmations_enabled: false
     confirm_llm_low_confidence: false

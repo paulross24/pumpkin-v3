@@ -13,6 +13,7 @@ from . import settings
 from . import store
 from . import module_config
 from . import observe
+from . import ha_client
 from .db import init_db, utc_now_iso
 
 from .audit import append_jsonl
@@ -49,6 +50,11 @@ ACTION_METADATA = {
         "verification": "Confirm an action is created and proposal executes or fails.",
         "rollback": "Clear the force_execute flag on the proposal.",
     },
+    "homeassistant.service": {
+        "description": "Call a Home Assistant service with a payload.",
+        "verification": "Confirm the Home Assistant service call succeeds.",
+        "rollback": "Call the opposite service if needed (manual).",
+    },
 }
 
 
@@ -77,23 +83,67 @@ def execute_action(
         return confirm_plan_action(params, audit_path)
     if action_type == "proposal.retry_execute":
         return retry_execute_action(params, audit_path)
+    if action_type == "homeassistant.service":
+        return homeassistant_service_action(params, audit_path)
     raise ValueError(f"unsupported action_type: {action_type}")
+
+
+class PatchApplyError(RuntimeError):
+    def __init__(self, message: str, details: Dict[str, Any]) -> None:
+        super().__init__(message)
+        self.details = details
 
 
 def apply_patch_action(params: Dict[str, Any], audit_path: str) -> Dict[str, Any]:
     patch_text = params.get("patch")
     repo_root = params.get("repo_root")
     if not isinstance(patch_text, str) or not patch_text.strip():
-        raise ValueError("patch_missing")
+        raise PatchApplyError("patch_missing", {"error": "patch_missing"})
     if not isinstance(repo_root, str) or not repo_root.strip():
-        raise ValueError("repo_root_missing")
+        raise PatchApplyError("repo_root_missing", {"error": "repo_root_missing"})
 
     allowed_roots = _allowed_roots()
     if not _path_allowed(repo_root, allowed_roots):
-        raise ValueError("repo_root_not_allowed")
+        raise PatchApplyError(
+            "repo_root_not_allowed",
+            {"error": "repo_root_not_allowed", "repo_root": repo_root},
+        )
 
     _validate_patch_paths(patch_text, repo_root, allowed_roots)
+    _validate_protected_patch_paths(patch_text, repo_root)
+    file_pairs = _patch_file_pairs(patch_text)
+    missing = _find_missing_patch_files(repo_root, file_pairs)
+    if missing:
+        raise PatchApplyError(
+            "patch_missing_files",
+            {"error": "patch_missing_files", "files": missing, "repo_root": repo_root},
+        )
+
+    if not _looks_like_unified_diff(patch_text):
+        raise PatchApplyError(
+            "patch_invalid_format",
+            {"error": "patch_invalid_format", "repo_root": repo_root},
+        )
     strip_level = 1 if _patch_uses_prefixes(patch_text) else 0
+    dry_run = subprocess.run(
+        ["patch", "--dry-run", f"-p{strip_level}", "-N", "-r", "-"],
+        input=patch_text.encode("utf-8"),
+        cwd=repo_root,
+        capture_output=True,
+        check=False,
+    )
+    if dry_run.returncode != 0:
+        stderr = dry_run.stderr.decode("utf-8", "ignore")
+        raise PatchApplyError(
+            "patch_dry_run_failed",
+            {
+                "error": "patch_dry_run_failed",
+                "stderr": stderr.strip(),
+                "repo_root": repo_root,
+                "strip_level": strip_level,
+                "files": _patch_files(patch_text),
+            },
+        )
     result = subprocess.run(
         ["patch", f"-p{strip_level}", "-N", "-r", "-"],
         input=patch_text.encode("utf-8"),
@@ -102,7 +152,17 @@ def apply_patch_action(params: Dict[str, Any], audit_path: str) -> Dict[str, Any
         check=False,
     )
     if result.returncode != 0:
-        raise ValueError(f"patch_failed: {result.stderr.decode('utf-8', 'ignore')}")
+        stderr = result.stderr.decode("utf-8", "ignore")
+        raise PatchApplyError(
+            "patch_failed",
+            {
+                "error": "patch_failed",
+                "stderr": stderr.strip(),
+                "repo_root": repo_root,
+                "strip_level": strip_level,
+                "files": _patch_files(patch_text),
+            },
+        )
     append_jsonl(
         audit_path,
         {
@@ -124,6 +184,100 @@ def _load_network_module_cfg() -> Dict[str, Any]:
         return {}
     module_cfg = config.get("modules", {}).get("network.discovery", {})
     return module_cfg if isinstance(module_cfg, dict) else {}
+
+
+def _load_homeassistant_module_cfg() -> Dict[str, Any]:
+    config_path = settings.modules_config_path()
+    if not config_path.exists():
+        return {}
+    try:
+        config = module_config.load_config(str(config_path))
+    except Exception:
+        return {}
+    modules_cfg = config.get("modules", {}) if isinstance(config, dict) else {}
+    module_cfg = modules_cfg.get("homeassistant.observer", {})
+    if not isinstance(module_cfg, dict):
+        module_cfg = modules_cfg.get("homeassistant", {})
+    return module_cfg if isinstance(module_cfg, dict) else {}
+
+
+def _load_autonomy_cfg() -> Dict[str, Any]:
+    config_path = settings.modules_config_path()
+    if not config_path.exists():
+        return {}
+    try:
+        config = module_config.load_config(str(config_path))
+    except Exception:
+        return {}
+    module_cfg = config.get("modules", {}).get("autonomy", {})
+    return module_cfg if isinstance(module_cfg, dict) else {}
+
+
+def _normalize_path(path: str) -> str:
+    return os.path.normpath(os.path.abspath(path))
+
+
+def _validate_protected_patch_paths(patch_text: str, repo_root: str) -> None:
+    cfg = _load_autonomy_cfg()
+    protected = cfg.get("protected_patch_paths", [])
+    if not isinstance(protected, list) or not protected:
+        return
+    protected_paths = []
+    for entry in protected:
+        if isinstance(entry, str) and entry.strip():
+            protected_paths.append(_normalize_path(os.path.join(repo_root, entry)))
+    if not protected_paths:
+        return
+    for rel_path in _patch_files(patch_text):
+        abs_path = _normalize_path(os.path.join(repo_root, rel_path))
+        for protected_path in protected_paths:
+            if abs_path == protected_path or abs_path.startswith(protected_path + os.sep):
+                raise PatchApplyError(
+                    "patch_protected_path",
+                    {
+                        "error": "patch_protected_path",
+                        "path": rel_path,
+                        "repo_root": repo_root,
+                    },
+                )
+
+
+def homeassistant_service_action(params: Dict[str, Any], audit_path: str) -> Dict[str, Any]:
+    domain = params.get("domain")
+    service = params.get("service")
+    payload = params.get("payload") if isinstance(params.get("payload"), dict) else {}
+    if not isinstance(domain, str) or not domain.strip():
+        raise ValueError("domain_missing")
+    if not isinstance(service, str) or not service.strip():
+        raise ValueError("service_missing")
+    cfg = _load_homeassistant_module_cfg()
+    base_url = cfg.get("base_url")
+    token_env = cfg.get("token_env", "PUMPKIN_HA_TOKEN")
+    token = os.getenv(token_env)
+    if not isinstance(base_url, str) or not base_url.strip():
+        raise ValueError("ha_base_url_missing")
+    if not isinstance(token, str) or not token.strip():
+        raise ValueError("ha_token_missing")
+    result = ha_client.call_service(
+        base_url=base_url,
+        token=token,
+        domain=str(domain).strip(),
+        service=str(service).strip(),
+        payload=payload,
+        timeout=settings.ha_request_timeout_seconds(),
+    )
+    if not result.get("ok"):
+        raise ValueError(f"ha_service_failed:{result.get('error')}")
+    append_jsonl(
+        audit_path,
+        {
+            "kind": "homeassistant.service",
+            "domain": str(domain).strip(),
+            "service": str(service).strip(),
+            "payload": payload,
+        },
+    )
+    return {"ok": True, "result": result.get("result")}
 
 
 def network_deep_scan(params: Dict[str, Any], audit_path: str) -> Dict[str, Any]:
@@ -369,6 +523,51 @@ def _patch_files(patch_text: str) -> List[str]:
                 path = path[2:]
             files.append(path)
     return files
+
+
+def _patch_file_pairs(patch_text: str) -> List[Dict[str, str]]:
+    pairs: List[Dict[str, str]] = []
+    old_path = None
+    for line in patch_text.splitlines():
+        if line.startswith("--- "):
+            old_path = line[4:].split("\t")[0].strip()
+        elif line.startswith("+++ "):
+            new_path = line[4:].split("\t")[0].strip()
+            pairs.append({"old": old_path or "", "new": new_path})
+            old_path = None
+    return pairs
+
+
+def _find_missing_patch_files(repo_root: str, pairs: List[Dict[str, str]]) -> List[str]:
+    missing: List[str] = []
+    root = os.path.realpath(repo_root)
+    for pair in pairs:
+        old_path = pair.get("old", "")
+        new_path = pair.get("new", "")
+        if old_path == "/dev/null":
+            continue
+        target = old_path
+        if target.startswith("a/") or target.startswith("b/"):
+            target = target[2:]
+        if not target:
+            continue
+        real_path = os.path.realpath(os.path.join(root, target))
+        if not os.path.exists(real_path):
+            missing.append(target)
+    return missing
+
+
+def _looks_like_unified_diff(patch_text: str) -> bool:
+    has_old = False
+    has_new = False
+    for line in patch_text.splitlines():
+        if line.startswith("--- "):
+            has_old = True
+        if line.startswith("+++ "):
+            has_new = True
+        if has_old and has_new:
+            return True
+    return False
 
 
 def _validate_patch_paths(patch_text: str, repo_root: str, allowed_roots: List[str]) -> None:

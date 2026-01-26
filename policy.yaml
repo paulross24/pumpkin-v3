@@ -62,3 +62,18 @@ actions:
           maxLength: 200
       required:
         - ip
+  - action_type: homeassistant.service
+    params_schema:
+      type: object
+      properties:
+        domain:
+          type: string
+          maxLength: 64
+        service:
+          type: string
+          maxLength: 64
+        payload:
+          type: object
+      required:
+        - domain
+        - service

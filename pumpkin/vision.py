@@ -18,6 +18,8 @@ from urllib.parse import quote
 from . import act
 from . import cameras as cameras_mod
 from . import settings, store
+from . import module_config
+from . import presence
 
 
 def _load_ha_people(conn) -> List[Dict[str, Any]]:
@@ -51,6 +53,35 @@ def _match_ha_person(name: str, people: List[Dict[str, Any]]) -> Optional[Dict[s
         if needle == pname or needle == entity_id.lower() or needle == entity_tail:
             return person
     return None
+
+
+def _load_smart_alerts_cfg() -> Dict[str, Any]:
+    config_path = settings.modules_config_path()
+    if not config_path.exists():
+        return {}
+    try:
+        config = module_config.load_config(str(config_path))
+    except Exception:
+        return {}
+    modules_cfg = config.get("modules", {}) if isinstance(config, dict) else {}
+    cfg = modules_cfg.get("smart_alerts") if isinstance(modules_cfg, dict) else {}
+    return cfg if isinstance(cfg, dict) else {}
+
+
+def _alert_requires_empty(kind: str, cfg: Dict[str, Any]) -> bool:
+    if not cfg or not cfg.get("enabled", True):
+        return False
+    if kind == "unknown_face":
+        return bool(cfg.get("unknown_faces_when_empty", True))
+    if kind == "dog_behavior":
+        return bool(cfg.get("dog_behavior_when_empty", True))
+    return False
+
+
+def _alert_allowed(conn, kind: str, cfg: Dict[str, Any]) -> bool:
+    if not _alert_requires_empty(kind, cfg):
+        return True
+    return presence.is_house_empty(conn)
 
 
 def _now_iso() -> str:
@@ -424,6 +455,8 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
     ) -> None:
         if not enabled:
             return
+        if not _alert_allowed(conn, "unknown_face", smart_cfg):
+            return
         message = f"Unknown face detected"
         if label:
             message = f"Unknown face detected at {label}"
@@ -454,6 +487,7 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
         subject_map = {}
     ha_people = _load_ha_people(conn)
     llm_cfg = _load_llm_config(conn) if behavior_enabled else {}
+    smart_cfg = _load_smart_alerts_cfg()
     alert_cooldown = int(behavior_cfg.get("alert_cooldown_minutes", 30))
     behavior_camera_ids = behavior_cfg.get("camera_ids") or []
     if not isinstance(behavior_camera_ids, list):
@@ -474,6 +508,7 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
     audio_cfg = behavior_cfg.get("bark_audio") or {}
     if not isinstance(audio_cfg, dict):
         audio_cfg = {}
+    behavior_alert_allowed = _alert_allowed(conn, "dog_behavior", smart_cfg)
     for cam in cameras:
         if processed >= max_cameras:
             break
@@ -636,6 +671,10 @@ def run_face_recognition(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any
             else:
                 stats["no_faces"] += 1
         if behavior_enabled:
+            if not behavior_alert_allowed:
+                stats["cameras_processed"] = processed + 1
+                processed += 1
+                continue
             allowed = True
             if behavior_camera_ids and str(camera_id) not in behavior_camera_ids:
                 allowed = False

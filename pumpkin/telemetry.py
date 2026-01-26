@@ -60,9 +60,3 @@ def collect_health_metrics() -> Dict[str, Any]:
 
 def log_health_metrics(metrics: Dict[str, Any]) -> None:
     logging.info("Health Metrics: %s", metrics)
-
-
-def collect_and_log() -> Dict[str, Any]:
-    metrics = collect_health_metrics()
-    log_health_metrics(metrics)
-    return metrics
