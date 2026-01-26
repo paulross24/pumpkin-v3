@@ -84,7 +84,7 @@ def _record_segment(
             ]
             subprocess.run(args, check=True, timeout=duration_seconds + 25)
         except Exception as exc2:
-            return {"status": "failed", "error": "ffmpeg_failed", "detail": f\"{exc} | fallback: {exc2}\"}
+            return {"status": "failed", "error": "ffmpeg_failed", "detail": f"{exc} | fallback: {exc2}"}
     return {"status": "ok"}
 
 
