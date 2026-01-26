@@ -1,6 +1,7 @@
 version: 1
 enabled:
   - code.assistant
+  - camera.live
   - camera.recording
   - face.recognition
   - homeassistant.observer
@@ -224,6 +225,14 @@ modules:
     segment_seconds: 60
     cooldown_seconds: 60
     retention_hours: 24
+    ffmpeg_path: ffmpeg
+  camera.live:
+    enabled: true
+    camera_id: kitchen-cam
+    segment_seconds: 2
+    list_size: 6
+    stale_seconds: 10
+    poll_interval_seconds: 10
     ffmpeg_path: ffmpeg
   car.telemetry:
     baseline:

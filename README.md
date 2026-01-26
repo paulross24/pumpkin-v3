@@ -26,6 +26,7 @@ Pumpkin v3 is a persistent, context-aware digital steward that observes, decides
 - Network discovery + deep scan + RTSP probe
 - Vision pipeline: snapshots, unknowns, recognition, CompreFace enroll, auto-tuned thresholds
 - Camera recordings: rolling RTSP segments with retention and playback
+- Live camera HLS: low-latency stream at `/camera/live`
 - Car telemetry ingestion and reporting
 - Dog watch alerts (camera-based behavior alerts)
 - Shopping list for suggested hardware, with mark acquired

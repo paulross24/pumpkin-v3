@@ -4645,6 +4645,24 @@ def _safe_recording_path(raw_path: str) -> Path | None:
     return path
 
 
+def _safe_live_path(camera_id: str, filename: str) -> Path | None:
+    if not camera_id or not filename:
+        return None
+    base_dir = (settings.data_dir() / "camera_live").resolve()
+    camera_dir = (base_dir / camera_id).resolve()
+    path = (camera_dir / filename).resolve()
+    try:
+        path.relative_to(camera_dir)
+    except ValueError:
+        return None
+    if not path.exists() or not path.is_file():
+        return None
+    suffix = path.suffix.lower()
+    if suffix not in {".m3u8", ".ts"}:
+        return None
+    return path
+
+
 def _list_unknown_faces(conn, limit: int = 50) -> list[Dict[str, Any]]:
     false_positives = store.get_memory(conn, "vision.false_positives") or []
     if not isinstance(false_positives, list):
@@ -5145,8 +5163,11 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "GET /ui/inventory",
                             "GET /ui/vision",
                             "GET /ui/mic",
+                            "GET /ui/assets/hls.min.js",
                             "GET /camera/recordings",
                             "GET /camera/recording",
+                            "GET /camera/live",
+                            "GET /camera/live/segment",
                             "GET /config",
                             "GET /catalog",
                             "GET /capabilities",
@@ -5254,6 +5275,19 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 return
             if path == "/ui/recordings":
                 _send_html(self, 200, _load_voice_ui_asset("voice_ui_recordings.html"))
+                return
+            if path == "/ui/assets/hls.min.js":
+                asset_path = settings.repo_root() / "pumpkin" / "web" / "assets" / "hls.min.js"
+                if not asset_path.exists():
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                payload = asset_path.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/javascript")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
                 return
             if path == "/ui/network":
                 _send_html(self, 200, _load_voice_ui_asset("voice_ui_network.html"))
@@ -5411,6 +5445,35 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 payload = recording_path.read_bytes()
                 self.send_response(200)
                 self.send_header("Content-Type", "video/mp4")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
+            if path == "/camera/live":
+                camera_id = params.get("camera_id", [None])[0] or "kitchen-cam"
+                playlist = _safe_live_path(str(camera_id), "index.m3u8")
+                if not playlist:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                payload = playlist.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/vnd.apple.mpegurl")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
+            if path == "/camera/live/segment":
+                camera_id = params.get("camera_id", [None])[0]
+                filename = params.get("file", [None])[0]
+                safe_path = _safe_live_path(str(camera_id or ""), str(filename or ""))
+                if not safe_path:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                payload = safe_path.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "video/mp2t")
                 self.send_header("Content-Length", str(len(payload)))
                 self.end_headers()
                 self.wfile.write(payload)
@@ -6143,6 +6206,45 @@ class VoiceHandler(BaseHTTPRequestHandler):
                                             "content": {"video/mp4": {"schema": {"type": "string"}}},
                                         }
                                     },
+                                }
+                            },
+                            "/camera/live": {
+                                "get": {
+                                    "summary": "Fetch live HLS playlist",
+                                    "parameters": [
+                                        {
+                                            "name": "camera_id",
+                                            "in": "query",
+                                            "schema": {"type": "string"},
+                                        }
+                                    ],
+                                    "responses": {
+                                        "200": {
+                                            "description": "HLS playlist",
+                                            "content": {
+                                                "application/vnd.apple.mpegurl": {
+                                                    "schema": {"type": "string"}
+                                                }
+                                            },
+                                        }
+                                    },
+                                }
+                            },
+                            "/camera/live/segment": {
+                                "get": {
+                                    "summary": "Fetch live HLS segment",
+                                    "parameters": [
+                                        {
+                                            "name": "camera_id",
+                                            "in": "query",
+                                            "schema": {"type": "string"},
+                                        },
+                                        {
+                                            "name": "file",
+                                            "in": "query",
+                                            "schema": {"type": "string"},
+                                        },
+                                    ],
                                 }
                             },
                             "/vision/false_positives": {"get": {"summary": "List false positive hashes"}},

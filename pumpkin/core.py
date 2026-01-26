@@ -20,6 +20,7 @@ from . import settings
 from . import observe
 from . import vision
 from . import rtsp_mic
+from . import camera_live
 from . import camera_recording
 from . import propose
 from . import store
@@ -455,6 +456,13 @@ def _collect_module_events(conn) -> List[Dict[str, Any]]:
         if _cooldown_elapsed(conn, "voice.mic_rtsp", poll_interval):
             events.extend(rtsp_mic.run_rtsp_mic(conn, module_cfg))
             _record_cooldown(conn, "voice.mic_rtsp")
+
+    if "camera.live" in enabled:
+        module_cfg = modules_cfg.get("camera.live", {})
+        poll_interval = int(module_cfg.get("poll_interval_seconds", 10))
+        if _cooldown_elapsed(conn, "camera.live", poll_interval):
+            events.extend(camera_live.ensure_live(conn, module_cfg))
+            _record_cooldown(conn, "camera.live")
 
     if "camera.recording" in enabled:
         module_cfg = modules_cfg.get("camera.recording", {})
