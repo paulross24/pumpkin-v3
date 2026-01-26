@@ -48,6 +48,7 @@ def _record_segment(
             rtsp_url,
             "-t",
             str(duration_seconds),
+            "-an",
             "-c",
             "copy",
             "-reset_timestamps",
