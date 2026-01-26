@@ -176,10 +176,20 @@
         </div>
         <div id="list"></div>
       </section>
+      <section class="card">
+        <h3>Restricted Requests</h3>
+        <div class="row" style="margin-bottom: 8px;">
+          <span class="pill" id="restricted-count">0 pending</span>
+          <button id="restricted-refresh">Refresh</button>
+        </div>
+        <div id="restricted-list"></div>
+      </section>
     </main>
     <script>
       const listNode = document.getElementById("list");
       const countNode = document.getElementById("count");
+      const restrictedListNode = document.getElementById("restricted-list");
+      const restrictedCountNode = document.getElementById("restricted-count");
 
       const render = (items) => {
         listNode.innerHTML = "";
@@ -270,6 +280,60 @@
         });
       };
 
+      const renderRestricted = (items) => {
+        restrictedListNode.innerHTML = "";
+        if (!items.length) {
+          const empty = document.createElement("div");
+          empty.textContent = "No restricted requests.";
+          restrictedListNode.appendChild(empty);
+          return;
+        }
+        items.forEach((request) => {
+          const card = document.createElement("div");
+          card.className = "proposal";
+
+          const title = document.createElement("div");
+          title.className = "proposal-title";
+          title.textContent = request.summary || "Restricted request";
+
+          const meta = document.createElement("div");
+          meta.className = "meta";
+          meta.innerHTML = `
+            <div>Status: ${request.status || "pending"}</div>
+            <div>Risk: ${request.risk ?? "n/a"} • Expected: ${request.expected_outcome || "n/a"}</div>
+            <div>Created: ${request.ts_created || "unknown"}</div>
+          `;
+
+          const details = document.createElement("pre");
+          details.style.whiteSpace = "pre-wrap";
+          details.style.fontSize = "12px";
+          details.style.background = "#fff7ef";
+          details.style.padding = "8px";
+          details.style.borderRadius = "8px";
+          details.textContent = request.details ? JSON.stringify(request.details, null, 2) : "No details payload.";
+
+          const actions = document.createElement("div");
+          actions.className = "actions";
+
+          const approve = document.createElement("button");
+          approve.textContent = "Approve";
+          approve.addEventListener("click", () => sendRestrictedDecision(request.id, "approve"));
+
+          const reject = document.createElement("button");
+          reject.textContent = "Reject";
+          reject.addEventListener("click", () => sendRestrictedDecision(request.id, "deny"));
+
+          actions.appendChild(approve);
+          actions.appendChild(reject);
+
+          card.appendChild(title);
+          card.appendChild(meta);
+          card.appendChild(details);
+          card.appendChild(actions);
+          restrictedListNode.appendChild(card);
+        });
+      };
+
       const load = async () => {
         try {
           const res = await fetch("/proposals?status=pending&limit=25&include_events=1");
@@ -279,6 +343,18 @@
           render(items);
         } catch (err) {
           listNode.innerHTML = "Failed to load proposals.";
+        }
+      };
+
+      const loadRestricted = async () => {
+        try {
+          const res = await fetch("/restricted_requests?status=pending");
+          const data = await res.json();
+          const items = Array.isArray(data.restricted_requests) ? data.restricted_requests : [];
+          restrictedCountNode.textContent = `${items.length} pending`;
+          renderRestricted(items);
+        } catch (err) {
+          restrictedListNode.innerHTML = "Failed to load restricted requests.";
         }
       };
 
@@ -301,8 +377,28 @@
         }
       };
 
+      const sendRestrictedDecision = async (id, decision) => {
+        const payload = { id };
+        const url = decision === "approve" ? "/restricted/approve" : "/restricted/deny";
+        try {
+          const res = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) {
+            throw new Error("Request failed");
+          }
+          await loadRestricted();
+        } catch (err) {
+          window.alert("Failed to update restricted request.");
+        }
+      };
+
       document.getElementById("refresh").addEventListener("click", load);
+      document.getElementById("restricted-refresh").addEventListener("click", loadRestricted);
       load();
+      loadRestricted();
     </script>
   </body>
 </html>

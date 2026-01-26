@@ -350,6 +350,16 @@
       </nav>
     </header>
     <main>
+      <section class="card grid-span" id="command-center-card">
+        <div class="card-head">
+          <h3>Command Center</h3>
+          <span class="card-cta">Live state</span>
+        </div>
+        <div class="stat" id="command-health">--</div>
+        <ul class="list" id="command-list"></ul>
+        <div class="sub">Recent changes</div>
+        <ul class="list" id="command-recent"></ul>
+      </section>
       <section class="card grid-span pulse-card is-link" data-link="/ui/thoughts">
         <div class="pulse-shell" id="thought-pulse" data-level="0">
           <svg class="pumpkin-svg" viewBox="0 0 200 200" aria-hidden="true">
@@ -499,6 +509,22 @@
         <div class="sub" id="briefing-text">No briefing yet.</div>
         <ul class="list" id="insight-list"></ul>
       </section>
+      <section class="card grid-span is-link" data-link="/ui/proposals">
+        <div class="card-head">
+          <h3>Decisions</h3>
+          <span class="card-cta">Open →</span>
+        </div>
+        <div class="stat" id="decision-count">0</div>
+        <ul class="list" id="decision-list"></ul>
+      </section>
+      <section class="card grid-span is-link" data-link="/ui/insights">
+        <div class="card-head">
+          <h3>Briefings</h3>
+          <span class="card-cta">Open →</span>
+        </div>
+        <div class="stat" id="briefing-count">0</div>
+        <ul class="list" id="briefing-list"></ul>
+      </section>
     </main>
     <script>
       const byId = (id) => document.getElementById(id);
@@ -523,6 +549,9 @@
 
       const subtitle = byId("subtitle");
       const heartbeat = byId("heartbeat");
+      const commandHealth = byId("command-health");
+      const commandList = byId("command-list");
+      const commandRecent = byId("command-recent");
       const healthStatus = byId("health-status");
       const healthDetails = byId("health-details");
       const proposalCount = byId("proposal-count");
@@ -541,6 +570,10 @@
       const insightCount = byId("insight-count");
       const insightList = byId("insight-list");
       const briefingText = byId("briefing-text");
+      const decisionCount = byId("decision-count");
+      const decisionList = byId("decision-list");
+      const briefingCount = byId("briefing-count");
+      const briefingList = byId("briefing-list");
       const thoughtPulse = byId("thought-pulse");
       const thoughtStatus = byId("thought-status");
       const thoughtMeta = byId("thought-meta");
@@ -708,23 +741,34 @@
       const load = async () => {
         try {
           linkCards();
-          const [healthRes, summaryRes, configRes] = await Promise.all([
-            fetch("/health"),
-            fetch("/summary"),
-            fetch("/config"),
-          ]);
+          const [healthRes, summaryRes, configRes, statusRes, decisionsRes, briefingsRes] =
+            await Promise.all([
+              fetch("/health"),
+              fetch("/summary"),
+              fetch("/config"),
+              fetch("/status"),
+              fetch("/decisions?limit=5"),
+              fetch("/briefings?limit=5"),
+            ]);
           const health = await healthRes.json();
           const summary = await summaryRes.json();
           const config = await configRes.json();
+          const status = statusRes.ok ? await statusRes.json() : null;
+          const decisionsData = decisionsRes.ok ? await decisionsRes.json() : null;
+          const briefingsData = briefingsRes.ok ? await briefingsRes.json() : null;
 
           setText(
             subtitle,
             `${config.service?.name || "Pumpkin"} ${config.service?.version || ""} at ${config.http?.host || "host"}:${config.http?.port || "port"}`
           );
-          setText(
-            heartbeat,
-            summary.heartbeat ? `Heartbeat ${summary.heartbeat.ts}` : "No heartbeat yet"
-          );
+          if (status && status.heartbeat) {
+            setText(heartbeat, `Heartbeat ${status.heartbeat}`);
+          } else {
+            setText(
+              heartbeat,
+              summary.heartbeat ? `Heartbeat ${summary.heartbeat.ts}` : "No heartbeat yet"
+            );
+          }
 
           setText(healthStatus, health.status || "unknown");
           if (healthStatus) {
@@ -789,6 +833,35 @@
           } else {
             setText(briefingText, "No briefing yet.");
           }
+
+          if (status) {
+            setText(commandHealth, `${status.health_score ?? "--"} health`);
+            setList(commandList, [
+              `version: ${status.version || "n/a"}`,
+              `build: ${status.build_id || "n/a"}`,
+              `pending approvals: ${status.pending_approvals?.total ?? 0}`,
+              `autonomy: ${status.autonomy?.mode || "OPERATOR"}`,
+            ]);
+            const recent = Array.isArray(status.recent_changes) ? status.recent_changes : [];
+            setList(
+              commandRecent,
+              recent.map((item) => `${item.ts} • ${item.type || "event"} (${item.source || "system"})`)
+            );
+          }
+
+          const decisions = Array.isArray(decisionsData?.decisions) ? decisionsData.decisions : [];
+          setText(decisionCount, decisions.length);
+          setList(
+            decisionList,
+            decisions.map((item) => `${item.ts} • ${item.decision || "decision"}`)
+          );
+
+          const briefings = Array.isArray(briefingsData?.briefings) ? briefingsData.briefings : [];
+          setText(briefingCount, briefings.length);
+          setList(
+            briefingList,
+            briefings.map((item) => `${item.ts} • ${item.period}: ${item.summary}`)
+          );
 
           const alertData = await loadAlerts();
           const thoughts = await loadThoughts();
