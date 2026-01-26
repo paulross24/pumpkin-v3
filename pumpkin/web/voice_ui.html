@@ -368,7 +368,7 @@
           <div class="menu-group">
             <div class="menu-label">Ops</div>
             <a href="/ui/health">Health</a>
-            <a href="/ui/autonomy">Autonomy</a>
+            <a href="/ui/settings">Settings</a>
             <a href="/ui/proposals">Approvals</a>
             <a href="/ui/alerts">Alerts</a>
             <a href="/ui/insights">Insights</a>
@@ -459,35 +459,6 @@
         <div class="stat" id="identity-name">Unknown</div>
         <ul class="list" id="identity-meta"></ul>
       </section>
-      <section class="card" id="llm-card">
-        <div class="card-head">
-          <h3>LLM Config</h3>
-        </div>
-        <div class="row">
-          <span class="pill" id="llm-status">Loading...</span>
-          <span class="sub" id="llm-model-label">Model: n/a</span>
-        </div>
-        <div class="field">
-          <label for="llm-key">OpenAI API key</label>
-          <input id="llm-key" type="password" placeholder="sk-..." autocomplete="off" />
-        </div>
-        <div class="field">
-          <label for="llm-model-input">Model</label>
-          <input id="llm-model-input" type="text" placeholder="gpt-4o-mini" />
-        </div>
-        <div class="field">
-          <label for="llm-base-url-input">Base URL</label>
-          <input
-            id="llm-base-url-input"
-            type="text"
-            placeholder="https://api.openai.com/v1/chat/completions"
-          />
-        </div>
-        <div class="row" style="margin-top: 8px;">
-          <button id="llm-save">Save LLM settings</button>
-          <span class="sub" id="llm-save-status"></span>
-        </div>
-      </section>
       <section class="card is-link" data-link="/ui/proposals">
         <div class="card-head">
           <h3>Proposals</h3>
@@ -499,16 +470,16 @@
         </div>
         <ul class="list" id="proposal-list"></ul>
       </section>
-      <section class="card is-link" data-link="/ui/autonomy">
+      <section class="card is-link" data-link="/ui/settings">
         <div class="card-head">
-          <h3>Autonomy</h3>
+          <h3>Settings</h3>
           <span class="card-cta">Open →</span>
         </div>
-        <div class="stat" id="autonomy-total">0</div>
+        <div class="stat" id="settings-status">Mode: --</div>
         <div class="sub">
-          <a class="link" href="/ui/autonomy">Open autonomy desk →</a>
+          <a class="link" href="/ui/settings">Open settings →</a>
         </div>
-        <ul class="list" id="autonomy-list"></ul>
+        <ul class="list" id="settings-list"></ul>
       </section>
       <section class="card is-link" data-link="/ui/scoreboard">
         <div class="card-head">
@@ -611,8 +582,8 @@
       const healthDetails = byId("health-details");
       const proposalCount = byId("proposal-count");
       const proposalList = byId("proposal-list");
-      const autonomyTotal = byId("autonomy-total");
-      const autonomyList = byId("autonomy-list");
+      const settingsStatus = byId("settings-status");
+      const settingsList = byId("settings-list");
       const scoreboardList = byId("scoreboard-list");
       const alertsCount = byId("alerts-count");
       const alertsList = byId("alerts-list");
@@ -850,17 +821,19 @@
           const proposals = (summary.proposals || []).slice(0, 3).map(formatProposal);
           setList(proposalList, proposals);
 
+          const status = summary.status || {};
+          const autonomyStatus = status.autonomy || {};
+          setText(
+            settingsStatus,
+            `Mode: ${autonomyStatus.mode || "OPERATOR"}`
+          );
           const autonomy = summary.autonomy || {};
-          setText(autonomyTotal, autonomy.total_executed ?? 0);
-          const autonomyItems = [
+          const settingsItems = [
+            `safe mode: ${autonomyStatus.safe_mode ? "on" : "off"}`,
             `last run: ${autonomy.last_executed_ts || "n/a"}`,
-            `last executed: ${autonomy.last_executed_count ?? 0}`,
+            `recent actions: ${(autonomy.recent_actions || []).length}`,
           ];
-          const recentActions = autonomy.recent_actions || [];
-          if (recentActions.length) {
-            autonomyItems.push(`recent: ${recentActions.length}`);
-          }
-          setList(autonomyList, autonomyItems);
+          setList(settingsList, settingsItems);
 
           const inventorySummary = summary.inventory || {};
           const moduleCount = (inventorySummary.enabled_modules || []).length;

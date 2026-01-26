@@ -5114,6 +5114,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "GET /ui/insights",
                             "GET /ui/thoughts",
                             "GET /ui/autonomy",
+                            "GET /ui/settings",
                             "GET /ui/homeassistant",
                             "GET /ui/scoreboard",
                             "GET /ui/proposals",
@@ -5210,6 +5211,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 return
             if path == "/ui/autonomy":
                 _send_html(self, 200, _load_voice_ui_asset("voice_ui_autonomy.html"))
+                return
+            if path == "/ui/settings":
+                _send_html(self, 200, _load_voice_ui_asset("voice_ui_settings.html"))
                 return
             if path == "/ui/homeassistant":
                 _send_html(self, 200, _load_voice_ui_asset("voice_ui_homeassistant.html"))
@@ -6161,6 +6165,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             },
                             "/inventory": {"get": {"summary": "Inventory snapshot and opportunities"}},
                             "/ui/autonomy": {"get": {"summary": "Autonomy dashboard"}},
+                            "/ui/settings": {"get": {"summary": "Settings dashboard"}},
                             "/ui/homeassistant": {"get": {"summary": "Home Assistant dashboard"}},
                             "/ui/memory": {"get": {"summary": "Memory dashboard"}},
                             "/ui/health": {"get": {"summary": "System health dashboard"}},

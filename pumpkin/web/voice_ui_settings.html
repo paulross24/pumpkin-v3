@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pumpkin Settings</title>
+    <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='29' y='10' width='6' height='12' fill='%235b4b41'/><circle cx='32' cy='36' r='20' fill='%23e67c2e'/><circle cx='20' cy='36' r='14' fill='%23f08a3a' opacity='0.85'/><circle cx='44' cy='36' r='14' fill='%23f08a3a' opacity='0.85'/></svg>" />
+    <style>
+      :root {
+        --bg: #f6efe8;
+        --bg-accent: #f2d6b5;
+        --ink: #2a1b12;
+        --muted: #5b4b41;
+        --pumpkin: #e67c2e;
+        --pumpkin-dark: #b95519;
+        --card: #fff8f2;
+        --line: #e5d6c6;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Iowan Old Style", "Palatino", "Bookman", "Georgia", serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at 10% 10%, rgba(230, 124, 46, 0.16), transparent 40%),
+          linear-gradient(160deg, var(--bg), var(--bg-accent));
+        min-height: 100vh;
+      }
+      header {
+        padding: 28px 24px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .title {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 26px;
+        font-weight: 700;
+      }
+      .pumpkin-icon { width: 24px; height: 24px; flex: 0 0 auto; }
+      .sub { color: var(--muted); }
+      main {
+        padding: 12px 24px 40px;
+        display: grid;
+        gap: 16px;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 16px;
+        box-shadow: 0 12px 32px rgba(50, 33, 22, 0.08);
+        display: grid;
+        gap: 10px;
+      }
+      .section-title {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+      }
+      .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+      select, input[type="text"], input[type="password"] {
+        border: 1px solid var(--line);
+        background: #fff;
+        color: var(--ink);
+        padding: 8px 10px;
+        border-radius: 10px;
+        font-family: inherit;
+        font-size: 13px;
+      }
+      button {
+        border: 1px solid var(--line);
+        background: var(--card);
+        color: var(--ink);
+        padding: 8px 12px;
+        border-radius: 10px;
+        cursor: pointer;
+      }
+      .pill {
+        display: inline-block;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: rgba(230, 124, 46, 0.12);
+        color: var(--pumpkin-dark);
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .list {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        display: grid;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .link { color: var(--pumpkin-dark); text-decoration: none; font-weight: 600; }
+      .field { display: flex; flex-direction: column; gap: 6px; }
+      label {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="title">
+        <svg class="pumpkin-icon" viewBox="0 0 64 64" aria-hidden="true">
+          <rect x="29" y="10" width="6" height="12" fill="var(--muted)" />
+          <circle cx="32" cy="36" r="20" fill="var(--pumpkin)" />
+          <circle cx="20" cy="36" r="14" fill="#f08a3a" opacity="0.85" />
+          <circle cx="44" cy="36" r="14" fill="#f08a3a" opacity="0.85" />
+        </svg>
+        Settings
+      </div>
+      <div class="sub">
+        Configure autonomy, LLM, and system modules from one place.
+        <a href="/ui">Back to dashboard →</a>
+      </div>
+    </header>
+    <main>
+      <section class="card">
+        <div class="section-title">Autonomy Mode</div>
+        <div class="row">
+          <span class="pill" id="current-mode">Mode: --</span>
+          <select id="mode-select">
+            <option value="OBSERVER">Observer</option>
+            <option value="OPERATOR">Operator</option>
+            <option value="STEWARD">Steward</option>
+          </select>
+          <button id="mode-save">Update mode</button>
+          <span class="sub" id="mode-status"></span>
+        </div>
+        <ul class="list" id="autonomy-details"></ul>
+      </section>
+      <section class="card">
+        <div class="section-title">LLM Configuration</div>
+        <div class="row">
+          <span class="pill" id="llm-status">Loading...</span>
+          <span class="sub" id="llm-model-label">Model: n/a</span>
+        </div>
+        <div class="field">
+          <label for="llm-key">OpenAI API key</label>
+          <input id="llm-key" type="password" placeholder="sk-..." autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="llm-model-input">Model</label>
+          <input id="llm-model-input" type="text" placeholder="gpt-4o-mini" />
+        </div>
+        <div class="field">
+          <label for="llm-base-url-input">Base URL</label>
+          <input
+            id="llm-base-url-input"
+            type="text"
+            placeholder="https://api.openai.com/v1/chat/completions"
+          />
+        </div>
+        <div class="row">
+          <button id="llm-save">Save LLM settings</button>
+          <span class="sub" id="llm-save-status"></span>
+        </div>
+      </section>
+      <section class="card">
+        <div class="section-title">Module Panels</div>
+        <ul class="list">
+          <li><a class="link" href="/ui/autonomy">Autonomy desk →</a></li>
+          <li><a class="link" href="/ui/mic">Voice mic settings →</a></li>
+          <li><a class="link" href="/ui/vision">Vision & face review →</a></li>
+          <li><a class="link" href="/ui/network">Network discovery →</a></li>
+          <li><a class="link" href="/ui/homeassistant">Home Assistant config →</a></li>
+        </ul>
+      </section>
+    </main>
+    <script>
+      const qs = (id) => document.getElementById(id);
+      const setText = (node, text) => { if (node) node.textContent = text; };
+      const setList = (node, items) => {
+        if (!node) return;
+        node.innerHTML = "";
+        if (!items.length) return;
+        items.forEach((item) => {
+          const li = document.createElement("li");
+          li.textContent = item;
+          node.appendChild(li);
+        });
+      };
+
+      const currentMode = qs("current-mode");
+      const modeSelect = qs("mode-select");
+      const modeSave = qs("mode-save");
+      const modeStatus = qs("mode-status");
+      const autonomyDetails = qs("autonomy-details");
+
+      const llmStatus = qs("llm-status");
+      const llmModelLabel = qs("llm-model-label");
+      const llmKeyInput = qs("llm-key");
+      const llmModelInput = qs("llm-model-input");
+      const llmBaseUrlInput = qs("llm-base-url-input");
+      const llmSave = qs("llm-save");
+      const llmSaveStatus = qs("llm-save-status");
+
+      const loadSummary = async () => {
+        const res = await fetch("/summary");
+        const summary = await res.json();
+        const autonomy = summary.autonomy || {};
+        const guardrails = autonomy.guardrails || {};
+        const mode = autonomy.mode || "OPERATOR";
+        setText(currentMode, `Mode: ${mode}`);
+        if (modeSelect) modeSelect.value = mode.toUpperCase();
+        setList(autonomyDetails, [
+          `last run: ${autonomy.last_executed_ts || "n/a"}`,
+          `pending proposals: ${summary.proposal_count || 0}`,
+          `max actions per loop: ${guardrails.max_actions_per_loop ?? "n/a"}`,
+        ]);
+      };
+
+      const loadLlmConfig = async () => {
+        try {
+          const res = await fetch("/llm/config");
+          const data = await res.json();
+          const enabled = Boolean(data.enabled);
+          setText(llmStatus, enabled ? "Key set" : "Key missing");
+          setText(llmModelLabel, `Model: ${data.model || "n/a"}`);
+          if (llmModelInput && !llmModelInput.value) llmModelInput.value = data.model || "";
+          if (llmBaseUrlInput && !llmBaseUrlInput.value) llmBaseUrlInput.value = data.base_url || "";
+        } catch (err) {
+          setText(llmStatus, "LLM config unavailable");
+        }
+      };
+
+      const saveLlmConfig = async () => {
+        if (!llmSaveStatus) return;
+        llmSaveStatus.textContent = "Saving...";
+        const payload = {};
+        const keyValue = llmKeyInput?.value.trim();
+        if (keyValue) payload.api_key = keyValue;
+        const modelValue = llmModelInput?.value.trim();
+        if (modelValue) payload.model = modelValue;
+        const baseUrlValue = llmBaseUrlInput?.value.trim();
+        if (baseUrlValue) payload.base_url = baseUrlValue;
+        try {
+          const res = await fetch("/llm/config", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) throw new Error("request_failed");
+          const data = await res.json();
+          setText(llmStatus, data.enabled ? "Key set" : "Key missing");
+          setText(llmModelLabel, `Model: ${data.model || "n/a"}`);
+          llmSaveStatus.textContent = "Saved.";
+          if (llmKeyInput) llmKeyInput.value = "";
+        } catch (err) {
+          llmSaveStatus.textContent = "Save failed.";
+        }
+      };
+
+      if (modeSave) {
+        modeSave.addEventListener("click", async () => {
+          if (!modeSelect) return;
+          const mode = modeSelect.value;
+          setText(modeStatus, "Updating...");
+          try {
+            const res = await fetch("/autonomy/mode", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ mode }),
+            });
+            if (!res.ok) throw new Error("request_failed");
+            const data = await res.json();
+            setText(modeStatus, `Mode set to ${data.mode}.`);
+            await loadSummary();
+          } catch (err) {
+            setText(modeStatus, "Update failed.");
+          }
+        });
+      }
+
+      if (llmSave) llmSave.addEventListener("click", saveLlmConfig);
+
+      loadSummary();
+      loadLlmConfig();
+    </script>
+  </body>
+</html>

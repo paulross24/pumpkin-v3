@@ -95,6 +95,7 @@ Pumpkin records:
 - `/ui/briefings` Hourly and daily briefings
 - `/ui/proposals` Proposals + restricted approvals
 - `/ui/audit` Audit log feed
+- `/ui/settings` Autonomy + LLM configuration
 - `/ui/vision` Vision review + enroll + correction
 - `/ui/mic` Mic diagnostics and transcription
 - `/ui/shopping` Hardware suggestions and status
