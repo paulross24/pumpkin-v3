@@ -141,10 +141,18 @@
           const reasoning = document.createElement("pre");
           reasoning.textContent = item.reasoning || "No reasoning";
 
+          const details = document.createElement("pre");
+          if (item.detection_details && Object.keys(item.detection_details).length) {
+            details.textContent = JSON.stringify(item.detection_details, null, 2);
+          } else {
+            details.textContent = "No detection details";
+          }
+
           card.appendChild(title);
           card.appendChild(meta);
           card.appendChild(observation);
           card.appendChild(reasoning);
+          card.appendChild(details);
           listNode.appendChild(card);
         });
       };
