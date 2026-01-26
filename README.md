@@ -1,26 +1,25 @@
 # Pumpkin v3
 
-Pumpkin v3 is a persistent, context-aware digital steward that observes, proposes, approves, acts, and records within explicit boundaries. It integrates Home Assistant, vision, network discovery, and mobile clients with a proposal-first workflow and auditable history.
+Pumpkin v3 is a persistent, context-aware digital steward that observes, decides, acts within explicit boundaries, and records outcomes with an auditable trail. It integrates Home Assistant, vision, network discovery, and mobile clients with a proposal-first workflow.
 
 ## Mission
 - Reduce fragility by surfacing issues early
-- Assist with proposals before actions
 - Keep boundaries explicit and human-adjustable
 - Maintain durable history and traceability
 - Make the system feel alive while remaining safe and reversible
 
-## Core loop
+## Closed-loop model
 1. Observe system context and events
-2. Understand and update internal context
-3. Propose candidate actions with rationale, risk, and expected outcome
-4. Await approval (unless explicitly auto-approved)
-5. Act within boundaries
-6. Record outcomes and update history
+2. Detect interesting changes or anomalies
+3. Decide next steps with reasoning
+4. Execute low-risk actions or open approvals
+5. Verify outcomes with evidence
+6. Record results and brief
 
 ## Components
-- Core daemon: proposal engine, actions, memory, audits
+- Core daemon: observations, detections, decisions, actions, outcomes, briefings
 - Voice server: REST API + UI pages + ingest endpoints
-- UI: status, proposals, vision review, mic diagnostics, shopping list
+- UI: status, proposals/approvals, vision review, mic diagnostics, shopping list
 
 ## Key capabilities
 - Home Assistant sync: entities, areas, persons, presence
@@ -31,18 +30,23 @@ Pumpkin v3 is a persistent, context-aware digital steward that observes, propose
 - Shopping list for suggested hardware, with mark acquired
 - Proposal workflow with approvals and audit log
 
-## Safety and guardrails
-- Proposals are default; actions require approval
-- Boundaries are enforced in code and policy
-- All proposals/actions recorded with policy hash
-- Audit logs are append-only JSONL
-- Protected patch paths prevent auto-editing critical files
+## Autonomy modes and safety lanes
+Autonomy is controlled by mode + policy lanes:
+- Modes: `observer`, `operator`, `steward`
+- Lanes:
+  - Lane A: low-risk, reversible (auto)
+  - Lane B: medium-risk (proposal)
+  - Lane C: high-risk (restricted request)
+
+These are enforced in `policy.yaml`. Safe mode can disable execution while keeping observation on.
 
 ## Runtime
 ### Voice server
 - `python3 -m pumpkin voice server`
 - Binds to `PUMPKIN_VOICE_HOST` (default `0.0.0.0`) and `PUMPKIN_VOICE_PORT` (default `9000`)
 - OpenAPI: `GET /openapi.json`
+- Status: `GET /status`
+- Health: `GET /health`
 
 ### Core daemon
 - `python3 -m pumpkin daemon`
@@ -55,13 +59,31 @@ Pumpkin v3 is a persistent, context-aware digital steward that observes, propose
 - `sudo systemctl enable --now pumpkin.service pumpkin-voice.service`
 - Optional watchdog timer: `pumpkin-core-watchdog.timer`
 
+## Data model (high-level)
+Pumpkin records:
+- Heartbeats
+- Detections
+- Decisions
+- Actions/outcomes
+- Proposals and restricted requests
+- Briefings (hourly/daily)
+- Audit log (append-only)
+
 ## Configuration
 - `modules/config.yaml`: module settings and autonomy toggles
 - `policy.yaml`: action boundaries and approval rules
-- Secrets:
-  - Home Assistant token via env (default `PUMPKIN_HA_TOKEN`)
-  - CompreFace API key via env
-  - OpenAI key stored in memory or `PUMPKIN_OPENAI_API_KEY`
+- Secrets (env only, see `.env.example`):
+  - `PUMPKIN_HA_TOKEN`
+  - `PUMPKIN_COMPRE_FACE_KEY`
+  - `PUMPKIN_OPENAI_API_KEY`
+  - `PUMPKIN_INGEST_KEY`
+
+## Ingest v1
+- Endpoint: `POST /ingest`
+- Required fields: `schema_version: 1`, `request_id`
+- Optional: `location`
+- Response: `{accepted, request_id, received_at, correlation_ids}`
+- Auth: `X-Pumpkin-Key` or `Authorization: Bearer` (when `PUMPKIN_INGEST_KEY` is set)
 
 ## UI pages
 - `/ui` main dashboard
