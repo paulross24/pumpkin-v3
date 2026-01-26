@@ -55,6 +55,21 @@ ACTION_METADATA = {
         "verification": "Confirm the Home Assistant service call succeeds.",
         "rollback": "Call the opposite service if needed (manual).",
     },
+    "system.restart_service": {
+        "description": "Restart a systemd service (allowlist only).",
+        "verification": "Check systemd reports the service as active.",
+        "rollback": "Restart again or start the service if it stops.",
+    },
+    "system.rotate_logs": {
+        "description": "Rotate a log file or directory (allowlist only).",
+        "verification": "Confirm rotated files exist.",
+        "rollback": "Restore the rotated file if needed.",
+    },
+    "system.clear_cache": {
+        "description": "Clear cache files under an allowlisted path.",
+        "verification": "Confirm cache files were removed.",
+        "rollback": "No rollback; cache files are disposable.",
+    },
 }
 
 
@@ -85,6 +100,12 @@ def execute_action(
         return retry_execute_action(params, audit_path)
     if action_type == "homeassistant.service":
         return homeassistant_service_action(params, audit_path)
+    if action_type == "system.restart_service":
+        return system_restart_service(params, audit_path)
+    if action_type == "system.rotate_logs":
+        return system_rotate_logs(params, audit_path)
+    if action_type == "system.clear_cache":
+        return system_clear_cache(params, audit_path)
     raise ValueError(f"unsupported action_type: {action_type}")
 
 
@@ -579,3 +600,115 @@ def _validate_patch_paths(patch_text: str, repo_root: str, allowed_roots: List[s
             target = os.path.realpath(os.path.join(root, path))
         if not _path_allowed(target, allowed_roots):
             raise ValueError(f"patch_path_not_allowed: {path}")
+
+
+def _allowlisted_path(path: str, allowed_roots: List[str]) -> bool:
+    if not path:
+        return False
+    normalized = _normalize_path(path)
+    for root in allowed_roots:
+        if not root:
+            continue
+        normalized_root = _normalize_path(root)
+        if normalized == normalized_root or normalized.startswith(normalized_root + os.sep):
+            return True
+    return False
+
+
+def system_restart_service(params: Dict[str, Any], audit_path: str) -> Dict[str, Any]:
+    service = params.get("service")
+    if not isinstance(service, str) or not service.strip():
+        raise ValueError("service missing")
+    service = service.strip()
+    result = subprocess.run(
+        ["systemctl", "restart", service],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    status = subprocess.run(
+        ["systemctl", "is-active", service],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    payload = {
+        "service": service,
+        "restart_exit": result.returncode,
+        "restart_stdout": result.stdout.strip(),
+        "restart_stderr": result.stderr.strip(),
+        "status": status.stdout.strip() or status.stderr.strip(),
+    }
+    append_jsonl(
+        audit_path,
+        {
+            "kind": "system.restart_service",
+            "service": service,
+            "status": payload["status"],
+        },
+    )
+    return payload
+
+
+def system_rotate_logs(params: Dict[str, Any], audit_path: str) -> Dict[str, Any]:
+    path = params.get("path")
+    if not isinstance(path, str) or not path.strip():
+        raise ValueError("path missing")
+    path = _normalize_path(path)
+    allowed = settings.allowed_log_paths()
+    if not _allowlisted_path(path, allowed):
+        raise ValueError("path not allowlisted")
+    rotated: List[str] = []
+    ts = utc_now_iso().replace(":", "").replace("+", "").replace("-", "")
+    if os.path.isdir(path):
+        for entry in os.listdir(path):
+            if not entry.endswith(".log"):
+                continue
+            full = os.path.join(path, entry)
+            if not os.path.isfile(full):
+                continue
+            target = f"{full}.{ts}"
+            os.replace(full, target)
+            rotated.append(target)
+    elif os.path.isfile(path):
+        target = f"{path}.{ts}"
+        os.replace(path, target)
+        rotated.append(target)
+    append_jsonl(
+        audit_path,
+        {
+            "kind": "system.rotate_logs",
+            "path": path,
+            "rotated": rotated,
+        },
+    )
+    return {"path": path, "rotated": rotated}
+
+
+def system_clear_cache(params: Dict[str, Any], audit_path: str) -> Dict[str, Any]:
+    path = params.get("path")
+    if not isinstance(path, str) or not path.strip():
+        raise ValueError("path missing")
+    path = _normalize_path(path)
+    allowed = settings.allowed_cache_paths()
+    if not _allowlisted_path(path, allowed):
+        raise ValueError("path not allowlisted")
+    removed: List[str] = []
+    if os.path.isdir(path):
+        for entry in os.listdir(path):
+            full = os.path.join(path, entry)
+            if os.path.isfile(full):
+                os.remove(full)
+                removed.append(full)
+    elif os.path.isfile(path):
+        os.remove(path)
+        removed.append(path)
+    append_jsonl(
+        audit_path,
+        {
+            "kind": "system.clear_cache",
+            "path": path,
+            "removed_count": len(removed),
+        },
+    )
+    return {"path": path, "removed": removed}

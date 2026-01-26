@@ -28,6 +28,21 @@ def policy_path() -> Path:
     return Path(os.getenv("PUMPKIN_POLICY_PATH", str(repo_root() / "policy.yaml")))
 
 
+def version() -> str:
+    value = os.getenv("PUMPKIN_VERSION")
+    if value:
+        return value.strip()
+    version_file = repo_root() / "VERSION"
+    if version_file.exists():
+        return version_file.read_text(encoding="utf-8").strip()
+    return "dev"
+
+
+def build_id() -> str:
+    value = os.getenv("PUMPKIN_BUILD_ID")
+    return value.strip() if value else "local"
+
+
 def modules_registry_path() -> Path:
     return Path(
         os.getenv("PUMPKIN_MODULES_REGISTRY_PATH", str(repo_root() / "modules/registry.yaml"))
@@ -167,6 +182,27 @@ def loop_interval_seconds() -> float:
         return float(value)
     except ValueError:
         return 30.0
+
+
+def safe_mode_enabled() -> bool:
+    value = os.getenv("PUMPKIN_SAFE_MODE", "false").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def allowed_cache_paths() -> List[str]:
+    raw = os.getenv("PUMPKIN_CACHE_PATHS")
+    if raw:
+        return [item.strip() for item in raw.split(",") if item.strip()]
+    root = repo_root()
+    return [str(root / "tmp"), str(root / "data" / "cache")]
+
+
+def allowed_log_paths() -> List[str]:
+    raw = os.getenv("PUMPKIN_LOG_PATHS")
+    if raw:
+        return [item.strip() for item in raw.split(",") if item.strip()]
+    root = repo_root()
+    return [str(root / "data")]
 
 
 def max_proposals_per_loop() -> int:

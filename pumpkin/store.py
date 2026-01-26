@@ -60,6 +60,257 @@ def list_events(
     return conn.execute(query, tuple(params)).fetchall()
 
 
+def insert_identity(conn: sqlite3.Connection, name: str, notes: Optional[str] = None) -> int:
+    ts = utc_now_iso()
+    cur = conn.execute(
+        "INSERT INTO identity (ts_created, name, notes) VALUES (?, ?, ?)",
+        (ts, name, notes),
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def latest_identity(conn: sqlite3.Connection) -> Optional[sqlite3.Row]:
+    return conn.execute("SELECT * FROM identity ORDER BY id DESC LIMIT 1").fetchone()
+
+
+def insert_heartbeat(
+    conn: sqlite3.Connection, policy_hash: str, details: Optional[Dict[str, Any]] = None
+) -> int:
+    ts = utc_now_iso()
+    details_json = json.dumps(details or {}, ensure_ascii=True)
+    cur = conn.execute(
+        "INSERT INTO heartbeats (ts, policy_hash, details_json) VALUES (?, ?, ?)",
+        (ts, policy_hash, details_json),
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def latest_heartbeat(conn: sqlite3.Connection) -> Optional[sqlite3.Row]:
+    return conn.execute("SELECT * FROM heartbeats ORDER BY id DESC LIMIT 1").fetchone()
+
+
+def insert_detection(
+    conn: sqlite3.Connection,
+    source: str,
+    detection_type: str,
+    severity: str,
+    summary: str,
+    details: Dict[str, Any],
+    event_id: Optional[int] = None,
+    ts: Optional[str] = None,
+) -> int:
+    ts = ts or utc_now_iso()
+    cur = conn.execute(
+        """
+        INSERT INTO detections (ts, source, detection_type, severity, summary, details_json, event_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (ts, source, detection_type, severity, summary, json.dumps(details, ensure_ascii=True), event_id),
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def list_detections(conn: sqlite3.Connection, limit: int = 50) -> List[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM detections ORDER BY id DESC LIMIT ?", (int(limit),)
+    ).fetchall()
+
+
+def insert_decision(
+    conn: sqlite3.Connection,
+    detection_id: Optional[int],
+    observation: str,
+    reasoning: str,
+    decision: str,
+    action_type: Optional[str],
+    action_id: Optional[int],
+    proposal_id: Optional[int],
+    restricted_id: Optional[int],
+    verification_status: Optional[str],
+    evidence: Optional[Dict[str, Any]],
+    ts: Optional[str] = None,
+) -> int:
+    ts = ts or utc_now_iso()
+    cur = conn.execute(
+        """
+        INSERT INTO decisions (
+            ts, detection_id, observation, reasoning, decision, action_type, action_id,
+            proposal_id, restricted_id, verification_status, evidence_json
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            ts,
+            detection_id,
+            observation,
+            reasoning,
+            decision,
+            action_type,
+            action_id,
+            proposal_id,
+            restricted_id,
+            verification_status,
+            json.dumps(evidence or {}, ensure_ascii=True),
+        ),
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def list_decisions(conn: sqlite3.Connection, limit: int = 50) -> List[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM decisions ORDER BY id DESC LIMIT ?", (int(limit),)
+    ).fetchall()
+
+
+def insert_outcome(
+    conn: sqlite3.Connection, action_id: int, status: str, evidence: Dict[str, Any]
+) -> int:
+    ts = utc_now_iso()
+    cur = conn.execute(
+        "INSERT INTO outcomes (ts, action_id, status, evidence_json) VALUES (?, ?, ?, ?)",
+        (ts, action_id, status, json.dumps(evidence, ensure_ascii=True)),
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def list_outcomes(conn: sqlite3.Connection, limit: int = 50) -> List[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM outcomes ORDER BY id DESC LIMIT ?", (int(limit),)
+    ).fetchall()
+
+
+def insert_restricted_request(
+    conn: sqlite3.Connection,
+    summary: str,
+    details: Dict[str, Any],
+    risk: float,
+    expected_outcome: str,
+    status: str,
+    policy_hash: str,
+    ts_created: Optional[str] = None,
+) -> int:
+    ts_created = ts_created or utc_now_iso()
+    cur = conn.execute(
+        """
+        INSERT INTO restricted_requests (
+            ts_created, summary, details_json, risk, expected_outcome, status, policy_hash
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            ts_created,
+            summary,
+            json.dumps(details, ensure_ascii=True),
+            risk,
+            expected_outcome,
+            status,
+            policy_hash,
+        ),
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def update_restricted_request_status(conn: sqlite3.Connection, request_id: int, status: str) -> None:
+    conn.execute(
+        "UPDATE restricted_requests SET status = ? WHERE id = ?", (status, request_id)
+    )
+    conn.commit()
+
+
+def list_restricted_requests(conn: sqlite3.Connection, status: Optional[str] = None) -> List[sqlite3.Row]:
+    if status:
+        return conn.execute(
+            "SELECT * FROM restricted_requests WHERE status = ? ORDER BY id DESC", (status,)
+        ).fetchall()
+    return conn.execute(
+        "SELECT * FROM restricted_requests ORDER BY id DESC"
+    ).fetchall()
+
+
+def insert_restricted_approval(
+    conn: sqlite3.Connection,
+    restricted_id: int,
+    actor: str,
+    decision: str,
+    reason: Optional[str],
+    policy_hash: str,
+    ts: Optional[str] = None,
+) -> int:
+    ts = ts or utc_now_iso()
+    cur = conn.execute(
+        """
+        INSERT INTO restricted_approvals (restricted_id, ts, actor, decision, reason, policy_hash)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (restricted_id, ts, actor, decision, reason, policy_hash),
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def insert_briefing(
+    conn: sqlite3.Connection, period: str, summary: str, details: Dict[str, Any]
+) -> int:
+    ts = utc_now_iso()
+    cur = conn.execute(
+        "INSERT INTO briefings (ts, period, summary, details_json) VALUES (?, ?, ?, ?)",
+        (ts, period, summary, json.dumps(details, ensure_ascii=True)),
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def list_briefings(conn: sqlite3.Connection, limit: int = 50) -> List[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM briefings ORDER BY id DESC LIMIT ?", (int(limit),)
+    ).fetchall()
+
+
+def set_setting(conn: sqlite3.Connection, key: str, value: Any) -> None:
+    ts = utc_now_iso()
+    conn.execute(
+        """
+        INSERT INTO settings (key, value_json, ts_updated)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, ts_updated = excluded.ts_updated
+        """,
+        (key, json.dumps(value, ensure_ascii=True), ts),
+    )
+    conn.commit()
+
+
+def get_setting(conn: sqlite3.Connection, key: str) -> Any:
+    row = conn.execute("SELECT value_json FROM settings WHERE key = ?", (key,)).fetchone()
+    if not row:
+        return None
+    try:
+        return json.loads(row["value_json"])
+    except Exception:
+        return None
+
+
+def insert_audit_log(conn: sqlite3.Connection, kind: str, payload: Dict[str, Any]) -> int:
+    ts = utc_now_iso()
+    cur = conn.execute(
+        "INSERT INTO audit_log (ts, kind, payload_json) VALUES (?, ?, ?)",
+        (ts, kind, json.dumps(payload, ensure_ascii=True)),
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def list_audit_log(conn: sqlite3.Connection, limit: int = 50) -> List[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (int(limit),)
+    ).fetchall()
+
+
 def insert_proposal(
     conn: sqlite3.Connection,
     kind: str,
@@ -333,6 +584,11 @@ def fetch_approved_unexecuted(conn: sqlite3.Connection) -> List[sqlite3.Row]:
 
 
 def latest_heartbeat(conn: sqlite3.Connection) -> Optional[sqlite3.Row]:
+    row = conn.execute(
+        "SELECT * FROM heartbeats ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    if row:
+        return row
     return conn.execute(
         "SELECT * FROM events WHERE type = 'heartbeat' ORDER BY id DESC LIMIT 1"
     ).fetchone()
@@ -341,6 +597,13 @@ def latest_heartbeat(conn: sqlite3.Connection) -> Optional[sqlite3.Row]:
 def count_proposals_by_status(conn: sqlite3.Connection) -> Dict[str, int]:
     rows = conn.execute(
         "SELECT status, COUNT(*) as count FROM proposals GROUP BY status"
+    ).fetchall()
+    return {row[0]: int(row[1]) for row in rows}
+
+
+def count_restricted_by_status(conn: sqlite3.Connection) -> Dict[str, int]:
+    rows = conn.execute(
+        "SELECT status, COUNT(*) as count FROM restricted_requests GROUP BY status"
     ).fetchall()
     return {row[0]: int(row[1]) for row in rows}
 

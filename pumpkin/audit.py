@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from . import settings
+from . import db
+from . import store
 
 
 def _utc_now_iso() -> str:
@@ -58,6 +60,12 @@ def append_jsonl(path: str, entry: Dict[str, Any]) -> None:
         f.write(json.dumps(entry, ensure_ascii=True) + "\n")
         f.flush()
         os.fsync(f.fileno())
+    try:
+        conn = db.connect(str(settings.db_path()))
+        store.insert_audit_log(conn, entry.get("kind", "audit"), entry)
+        conn.close()
+    except Exception:
+        pass
 
 
 def read_tail(path: str, limit: int = 100, kind: Optional[str] = None) -> List[Dict[str, Any]]:

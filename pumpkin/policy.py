@@ -117,6 +117,24 @@ def validate_policy(data: Dict[str, Any]) -> None:
             else:
                 raise ValueError(f"unsupported auto_approve condition: {key}")
 
+    lanes = data.get("lanes", {})
+    if lanes is not None:
+        if not isinstance(lanes, dict):
+            raise ValueError("lanes must be a mapping")
+        for lane_key, lane_data in lanes.items():
+            if lane_key not in {"A", "B", "C"}:
+                raise ValueError("lanes keys must be A, B, or C")
+            if not isinstance(lane_data, dict):
+                raise ValueError("lanes entries must be mappings")
+            action_types = lane_data.get("action_types", [])
+            if not isinstance(action_types, list) or not all(
+                isinstance(x, str) for x in action_types
+            ):
+                raise ValueError("lanes.action_types must be a list of strings")
+            allowlists = lane_data.get("allowlists")
+            if allowlists is not None and not isinstance(allowlists, dict):
+                raise ValueError("lanes.allowlists must be a mapping if present")
+
     actions = data.get("actions", [])
     if not isinstance(actions, list):
         raise ValueError("actions must be a list")
@@ -139,6 +157,27 @@ def validate_policy(data: Dict[str, Any]) -> None:
         required = schema.get("required", [])
         if not isinstance(required, list):
             raise ValueError("action.params_schema.required must be list")
+
+
+def lane_for_action(policy: Policy, action_type: str) -> str:
+    lanes = policy.data.get("lanes", {}) or {}
+    for lane_key, lane_data in lanes.items():
+        action_types = lane_data.get("action_types", []) if isinstance(lane_data, dict) else []
+        if action_type in action_types:
+            return lane_key
+    return "B"
+
+
+def allowlist_for_action(policy: Policy, action_type: str) -> Dict[str, Any]:
+    lanes = policy.data.get("lanes", {}) or {}
+    for lane_key, lane_data in lanes.items():
+        if not isinstance(lane_data, dict):
+            continue
+        if action_type in lane_data.get("action_types", []):
+            allowlists = lane_data.get("allowlists", {}) if isinstance(lane_data, dict) else {}
+            if isinstance(allowlists, dict):
+                return allowlists.get(action_type, {}) if isinstance(allowlists.get(action_type, {}), dict) else {}
+    return {}
 
 
 def find_action_schema(policy: Policy, action_type: str) -> Dict[str, Any]:

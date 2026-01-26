@@ -44,6 +44,40 @@ def _record_policy_snapshot_if_changed(conn, policy: policy_mod.Policy) -> None:
         store.set_memory(conn, "policy.last_hash", policy.policy_hash)
 
 
+def _seed_bootstrap(conn) -> None:
+    if not store.latest_identity(conn):
+        store.insert_identity(conn, "Pumpkin", notes="Bootstrap identity")
+    if not store.list_briefings(conn, limit=1):
+        store.insert_briefing(
+            conn,
+            period="boot",
+            summary="Pumpkin booted and initialized.",
+            details={"seed": True},
+        )
+    if not store.list_decisions(conn, limit=1):
+        store.insert_decision(
+            conn,
+            detection_id=None,
+            observation="System initialization",
+            reasoning="Bootstrap seed to populate Command Center.",
+            decision="Monitor for changes.",
+            action_type=None,
+            action_id=None,
+            proposal_id=None,
+            restricted_id=None,
+            verification_status="seeded",
+            evidence={"seed": True},
+        )
+    if not store.get_setting(conn, "autonomy.mode"):
+        store.set_setting(conn, "autonomy.mode", "OPERATOR")
+    if not store.get_setting(conn, "autonomy.policy_hours"):
+        store.set_setting(
+            conn,
+            "autonomy.policy_hours",
+            {"start": "06:00", "end": "22:00"},
+        )
+
+
 def _insert_events(conn, events: List[Dict[str, Any]]) -> List[int]:
     event_ids = []
     for event in events:
@@ -356,7 +390,7 @@ def _ensure_execution_plan(conn, policy: policy_mod.Policy, row: Any) -> bool:
         details["execution_plan_confirmed"] = False
         store.update_proposal_details(conn, row["id"], details)
 
-    autonomy_cfg = _load_autonomy_config()
+    autonomy_cfg = _load_autonomy_config(conn)
     if autonomy_cfg.get("auto_confirm_execution_plan") is True:
         details["execution_plan_confirmed"] = True
         store.update_proposal_details(conn, row["id"], details)
@@ -612,6 +646,33 @@ def _record_pulse(
     _record_cooldown(conn, "system.pulse")
 
 
+def _maybe_hourly_briefing(
+    conn,
+    ha_summary: Dict[str, Any],
+    system_snapshot: Dict[str, Any] | None,
+    insights_list: List[Dict[str, Any]],
+) -> None:
+    last_ts = store.get_memory(conn, "briefing.last_hourly_ts")
+    if isinstance(last_ts, str):
+        try:
+            parsed = datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
+        except Exception:
+            parsed = None
+        if parsed:
+            delta = (datetime.now(timezone.utc) - parsed).total_seconds()
+            if delta < 3600:
+                return
+    summary = insights.build_briefing(ha_summary, system_snapshot, insights_list)
+    ts = datetime.now(timezone.utc).isoformat()
+    store.set_memory(conn, "briefing.last_hourly_ts", ts)
+    store.insert_briefing(
+        conn,
+        period="hourly",
+        summary=summary,
+        details={"count": len(insights_list), "type": "hourly"},
+    )
+
+
 def _update_shopping_list(conn) -> List[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
     seen = set()
@@ -725,7 +786,7 @@ def _repair_failed_patches(conn) -> None:
     last_ts = store.get_memory(conn, "actions.last_repair_ts")
     if not isinstance(last_ts, str):
         last_ts = "1970-01-01T00:00:00+00:00"
-    autonomy_cfg = _load_autonomy_config()
+    autonomy_cfg = _load_autonomy_config(conn)
     try:
         max_attempts = int(autonomy_cfg.get("max_patch_repair_attempts", 2))
     except (TypeError, ValueError):
@@ -943,7 +1004,7 @@ def _repair_failed_patches(conn) -> None:
     store.set_memory(conn, "patch.repair.blocked_until", blocked_map)
 
 
-def _load_autonomy_config() -> Dict[str, Any]:
+def _load_autonomy_config(conn=None) -> Dict[str, Any]:
     config_path = settings.modules_config_path()
     if not config_path.exists():
         return {}
@@ -952,7 +1013,330 @@ def _load_autonomy_config() -> Dict[str, Any]:
     if not isinstance(modules_cfg, dict):
         return {}
     autonomy_cfg = modules_cfg.get("autonomy", {})
-    return autonomy_cfg if isinstance(autonomy_cfg, dict) else {}
+    if not isinstance(autonomy_cfg, dict):
+        autonomy_cfg = {}
+    if conn is not None:
+        mode = store.get_setting(conn, "autonomy.mode")
+        if isinstance(mode, str) and mode:
+            autonomy_cfg["mode"] = mode
+        policy_hours = store.get_setting(conn, "autonomy.policy_hours")
+        if isinstance(policy_hours, dict):
+            autonomy_cfg["policy_hours"] = policy_hours
+    return autonomy_cfg
+
+
+def _autonomy_mode(conn, autonomy_cfg: Dict[str, Any]) -> str:
+    mode = autonomy_cfg.get("mode")
+    if isinstance(mode, str) and mode.strip():
+        return mode.strip().upper()
+    stored = store.get_setting(conn, "autonomy.mode")
+    if isinstance(stored, str) and stored.strip():
+        return stored.strip().upper()
+    return "OPERATOR"
+
+
+def _within_policy_hours(autonomy_cfg: Dict[str, Any]) -> bool:
+    window = autonomy_cfg.get("policy_hours")
+    if not isinstance(window, dict):
+        return True
+    start = window.get("start")
+    end = window.get("end")
+    if not (isinstance(start, str) and isinstance(end, str)):
+        return True
+    try:
+        now = datetime.now().time()
+        start_h, start_m = [int(part) for part in start.split(":", 1)]
+        end_h, end_m = [int(part) for part in end.split(":", 1)]
+        start_t = datetime.now().replace(hour=start_h, minute=start_m, second=0, microsecond=0).time()
+        end_t = datetime.now().replace(hour=end_h, minute=end_m, second=0, microsecond=0).time()
+    except Exception:
+        return True
+    if start_t <= end_t:
+        return start_t <= now <= end_t
+    return now >= start_t or now <= end_t
+
+
+def _should_auto_execute(
+    mode: str, lane: str, autonomy_cfg: Dict[str, Any]
+) -> bool:
+    if settings.safe_mode_enabled():
+        return False
+    if mode == "OBSERVER":
+        return False
+    if lane != "A":
+        return False
+    if mode == "STEWARD":
+        return _within_policy_hours(autonomy_cfg)
+    return True
+
+
+def _recent_detection_seen(conn, signature: str, window_seconds: int = 900) -> bool:
+    entries = store.get_memory(conn, "detections.recent")
+    if not isinstance(entries, list):
+        return False
+    now = time.time()
+    kept = []
+    seen = False
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        ts = entry.get("ts")
+        sig = entry.get("sig")
+        if not isinstance(ts, (int, float)):
+            continue
+        if now - ts > window_seconds:
+            continue
+        kept.append(entry)
+        if sig == signature:
+            seen = True
+    store.set_memory(conn, "detections.recent", kept)
+    return seen
+
+
+def _remember_detection(conn, signature: str) -> None:
+    entries = store.get_memory(conn, "detections.recent")
+    if not isinstance(entries, list):
+        entries = []
+    entries.append({"sig": signature, "ts": time.time()})
+    store.set_memory(conn, "detections.recent", entries[-50:])
+
+
+def _event_payload(row: Any) -> Dict[str, Any]:
+    try:
+        payload_raw = row["payload_json"]
+    except Exception:
+        payload_raw = None
+    if isinstance(payload_raw, str):
+        try:
+            return json.loads(payload_raw)
+        except Exception:
+            return {}
+    if isinstance(payload_raw, dict):
+        return payload_raw
+    return {}
+
+
+def _build_detections_from_events(conn, events: List[Any]) -> List[Dict[str, Any]]:
+    detections: List[Dict[str, Any]] = []
+    for row in events:
+        try:
+            event_id = row["id"]
+            source = row["source"]
+            event_type = row["type"]
+            severity = row["severity"]
+        except Exception:
+            continue
+        if not isinstance(event_type, str):
+            continue
+        if severity not in {"warn", "error", "bad", "med"} and not event_type.endswith("failed"):
+            continue
+        payload = _event_payload(row)
+        summary = payload.get("summary")
+        if not isinstance(summary, str) or not summary.strip():
+            summary = f"{event_type.replace('.', ' ')} detected"
+        detection_type = f"{source}.{event_type}"
+        signature = f"{detection_type}:{summary}"
+        if _recent_detection_seen(conn, signature):
+            continue
+        detections.append(
+            {
+                "event_id": event_id,
+                "source": source,
+                "detection_type": detection_type,
+                "severity": severity,
+                "summary": summary,
+                "details": {"event_type": event_type, "payload": payload},
+                "signature": signature,
+            }
+        )
+    return detections
+
+
+def _allowlisted_action(policy: policy_mod.Policy, action_type: str, params: Dict[str, Any]) -> bool:
+    allowlist = policy_mod.allowlist_for_action(policy, action_type)
+    if not allowlist:
+        return True
+    if action_type == "system.restart_service":
+        allowed = allowlist.get("services", [])
+        return params.get("service") in allowed
+    if action_type == "homeassistant.service":
+        allowed = allowlist.get("domains", [])
+        return params.get("domain") in allowed
+    return True
+
+
+def _notify_homeassistant(conn, title: str, message: str) -> None:
+    config_path = settings.modules_config_path()
+    if not config_path.exists():
+        return
+    config = module_config.load_config(str(config_path))
+    modules_cfg = config.get("modules", {}) if isinstance(config, dict) else {}
+    ha_cfg = modules_cfg.get("homeassistant.observer", {}) if isinstance(modules_cfg, dict) else {}
+    base_url = ha_cfg.get("base_url")
+    token_env = ha_cfg.get("token_env", "PUMPKIN_HA_TOKEN")
+    token = os.getenv(token_env)
+    if not (isinstance(base_url, str) and base_url.strip() and token):
+        return
+    payload = {"title": title, "message": message, "notification_id": "pumpkin-core"}
+    try:
+        ha_client.call_service(base_url, token, "persistent_notification", "create", payload, 10)
+    except Exception:
+        return
+
+
+def _apply_autonomous_action(
+    conn,
+    policy: policy_mod.Policy,
+    action_type: str,
+    action_params: Dict[str, Any],
+    proposal_id: int | None,
+) -> Dict[str, Any]:
+    if not _allowlisted_action(policy, action_type, action_params):
+        return {"status": "blocked", "reason": "not allowlisted"}
+    action_id = store.insert_action(
+        conn,
+        proposal_id=proposal_id,
+        action_type=action_type,
+        params=action_params,
+        status="started",
+        policy_hash=policy.policy_hash,
+    )
+    try:
+        result = execute_action(action_type, action_params, str(settings.audit_path()))
+        store.finish_action(conn, action_id, "succeeded", result=result)
+        verification_status = "verified" if result else "unknown"
+        store.insert_outcome(conn, action_id, "succeeded", {"result": result})
+        return {
+            "status": "succeeded",
+            "action_id": action_id,
+            "result": result,
+            "verification_status": verification_status,
+        }
+    except Exception as exc:
+        store.finish_action(conn, action_id, "failed", result={"error": str(exc)})
+        store.insert_outcome(conn, action_id, "failed", {"error": str(exc)})
+        return {"status": "failed", "action_id": action_id, "error": str(exc)}
+
+
+def _process_detections(
+    conn,
+    policy: policy_mod.Policy,
+    autonomy_cfg: Dict[str, Any],
+    detections: List[Dict[str, Any]],
+) -> int:
+    mode = _autonomy_mode(conn, autonomy_cfg)
+    auto_actions = 0
+    for detection in detections:
+        action_type = "notify.local"
+        action_params = {
+            "message": f"{detection['summary']} (severity {detection['severity']})"
+        }
+        lane = policy_mod.lane_for_action(policy, action_type)
+        decision = f"{lane} action"
+        reasoning = "Auto-summarized detection requires attention."
+        proposal_id = None
+        restricted_id = None
+        action_id = None
+        verification_status = None
+        outcome = {}
+
+        detection_id = store.insert_detection(
+            conn,
+            detection["source"],
+            detection["detection_type"],
+            detection["severity"],
+            detection["summary"],
+            detection["details"],
+            event_id=detection.get("event_id"),
+        )
+        _remember_detection(conn, detection["signature"])
+
+        if lane == "C":
+            restricted_id = store.insert_restricted_request(
+                conn,
+                summary=f"Restricted action needed: {detection['summary']}",
+                details={
+                    "rationale": reasoning,
+                    "action_type": action_type,
+                    "action_params": action_params,
+                    "detection_id": detection_id,
+                },
+                risk=0.7,
+                expected_outcome="Restricted request requires approval.",
+                status="pending",
+                policy_hash=policy.policy_hash,
+            )
+            decision = "Restricted request opened"
+            _notify_homeassistant(conn, "Pumpkin restricted request", detection["summary"])
+        elif lane == "B":
+            proposal_id = store.insert_proposal(
+                conn,
+                kind="action.request",
+                summary=f"Respond to detection: {detection['summary']}",
+                details={
+                    "rationale": reasoning,
+                    "action_type": action_type,
+                    "action_params": action_params,
+                    "detection_id": detection_id,
+                },
+                risk=0.3,
+                expected_outcome="Detection response executed.",
+                status="pending",
+                policy_hash=policy.policy_hash,
+                needs_new_capability=False,
+                capability_request=None,
+            )
+            decision = "Proposal opened"
+            _notify_homeassistant(conn, "Pumpkin proposal", detection["summary"])
+        else:
+            if _should_auto_execute(mode, lane, autonomy_cfg):
+                outcome = _apply_autonomous_action(
+                    conn, policy, action_type, action_params, proposal_id
+                )
+                action_id = outcome.get("action_id")
+                verification_status = outcome.get("verification_status")
+                if action_id:
+                    auto_actions += 1
+                _notify_homeassistant(
+                    conn,
+                    "Pumpkin auto action",
+                    f"{detection['summary']} → {outcome.get('status')}",
+                )
+            else:
+                proposal_id = store.insert_proposal(
+                    conn,
+                    kind="action.request",
+                    summary=f"Respond to detection: {detection['summary']}",
+                    details={
+                        "rationale": reasoning,
+                        "action_type": action_type,
+                        "action_params": action_params,
+                        "detection_id": detection_id,
+                    },
+                    risk=0.2,
+                    expected_outcome="Detection response executed.",
+                    status="pending",
+                    policy_hash=policy.policy_hash,
+                    needs_new_capability=False,
+                    capability_request=None,
+                )
+                decision = "Proposal opened"
+                _notify_homeassistant(conn, "Pumpkin proposal", detection["summary"])
+
+        store.insert_decision(
+            conn,
+            detection_id=detection_id,
+            observation=detection["summary"],
+            reasoning=reasoning,
+            decision=decision,
+            action_type=action_type,
+            action_id=action_id,
+            proposal_id=proposal_id,
+            restricted_id=restricted_id,
+            verification_status=verification_status,
+            evidence=outcome if isinstance(outcome, dict) else {},
+        )
+    return auto_actions
 
 
 def _inventory_change_event(conn) -> Dict[str, Any] | None:
@@ -1122,6 +1506,7 @@ def _create_heartbeat(conn, policy_hash: str) -> None:
         payload={"policy_hash": policy_hash},
         severity="info",
     )
+    store.insert_heartbeat(conn, policy_hash, details={"source": "core"})
 
 
 def _quiet_hours_window(conn) -> Dict[str, Any] | None:
@@ -1207,7 +1592,7 @@ def _record_proposals(conn, policy: policy_mod.Policy, proposals: List[Dict[str,
     ordered = sorted(
         proposals, key=lambda p: 0 if p.get("kind") == "module.install" else 1
     )
-    autonomy_cfg = _load_autonomy_config()
+    autonomy_cfg = _load_autonomy_config(conn)
     try:
         snooze_days = int(autonomy_cfg.get("proposal_snooze_days", 30))
     except (TypeError, ValueError):
@@ -1533,10 +1918,11 @@ def _execute_approved(conn, policy: policy_mod.Policy, autonomy_cfg: Dict[str, A
             },
         )
 
-        try:
-            result = execute_action(action_type, action_params, str(settings.audit_path()))
-            store.finish_action(conn, action_id, "succeeded", result=result)
-            store.update_proposal_status(conn, proposal_id, "executed")
+            try:
+                result = execute_action(action_type, action_params, str(settings.audit_path()))
+                store.finish_action(conn, action_id, "succeeded", result=result)
+                store.insert_outcome(conn, action_id, "succeeded", {"result": result})
+                store.update_proposal_status(conn, proposal_id, "executed")
             if force_execute:
                 details.pop("force_execute", None)
                 store.update_proposal_details(conn, proposal_id, details)
@@ -1608,6 +1994,7 @@ def _execute_approved(conn, policy: policy_mod.Policy, autonomy_cfg: Dict[str, A
             else:
                 result = {"error": str(exc)}
             store.finish_action(conn, action_id, "failed", result=result)
+            store.insert_outcome(conn, action_id, "failed", result)
             store.update_proposal_status(conn, proposal_id, "failed")
             if force_execute:
                 details.pop("force_execute", None)
@@ -1715,6 +2102,7 @@ def run_once() -> Dict[str, Any]:
     conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
     policy = policy_mod.load_policy(str(settings.policy_path()))
     _record_policy_snapshot_if_changed(conn, policy)
+    _seed_bootstrap(conn)
 
     prev_entities = store.get_memory(conn, "homeassistant.entities") or {}
     prev_network = store.get_memory(conn, "network.discovery.snapshot") or {}
@@ -1770,6 +2158,12 @@ def run_once() -> Dict[str, Any]:
         insights=all_insights,
         in_quiet_hours=_in_quiet_hours(conn),
     )
+    _maybe_hourly_briefing(
+        conn,
+        ha_summary=ha_summary if isinstance(ha_summary, dict) else {},
+        system_snapshot=system_snapshot,
+        insights_list=all_insights,
+    )
     proposals = propose.build_proposals(new_events, conn)
     if _should_reflect(conn):
         improvement = propose.build_improvement_proposals(conn)
@@ -1778,7 +2172,7 @@ def run_once() -> Dict[str, Any]:
         store.set_memory(conn, "core.last_reflection_date", datetime.now().date().isoformat())
     _record_proposals(conn, policy, proposals)
     _update_shopping_list(conn)
-    autonomy_cfg = _load_autonomy_config()
+    autonomy_cfg = _load_autonomy_config(conn)
     try:
         pulse_interval = int(autonomy_cfg.get("pulse_interval_seconds", 60))
     except (TypeError, ValueError):
@@ -1801,6 +2195,9 @@ def run_once() -> Dict[str, Any]:
         selfcheck.run_self_check(conn)
         store.set_memory(conn, "selfcheck.last_ts", now)
 
+    detections = _build_detections_from_events(conn, new_events)
+    auto_actions = _process_detections(conn, policy, autonomy_cfg, detections)
+
     _requeue_orphaned_suggestions(conn, policy.policy_hash)
     _cleanup_confirm_plan_proposals(conn, autonomy_cfg)
     _auto_approve_pending_repaired_patches(conn, autonomy_cfg)
@@ -1812,13 +2209,13 @@ def run_once() -> Dict[str, Any]:
         total_executed = int(total_executed)
     except (TypeError, ValueError):
         total_executed = 0
-    if executed_actions:
+    if executed_actions or auto_actions:
         store.set_memory(conn, "actions.last_executed_ts", datetime.now().isoformat())
-    store.set_memory(conn, "actions.last_executed_count", executed_actions)
-    store.set_memory(conn, "actions.total_executed", total_executed + executed_actions)
+    store.set_memory(conn, "actions.last_executed_count", executed_actions + auto_actions)
+    store.set_memory(conn, "actions.total_executed", total_executed + executed_actions + auto_actions)
     return {
         "new_event_count": len(new_events),
-        "executed_actions": executed_actions,
+        "executed_actions": executed_actions + auto_actions,
     }
 
 

@@ -487,6 +487,12 @@ def maybe_daily_briefing(
         "insights.last_briefing",
         {"ts": ts, "summary": summary, "count": len(insights), "type": briefing_key},
     )
+    store.insert_briefing(
+        conn,
+        period=f"daily:{briefing_key}",
+        summary=summary,
+        details={"count": len(insights), "type": briefing_key},
+    )
     store.insert_event(
         conn,
         source="insight",
@@ -548,6 +554,12 @@ def maybe_event_briefing(
         conn,
         "insights.last_briefing",
         {"ts": ts, "summary": summary, "count": len(warn_insights), "type": "event"},
+    )
+    store.insert_briefing(
+        conn,
+        period="event",
+        summary=summary,
+        details={"count": len(warn_insights), "type": "event"},
     )
     store.insert_event(
         conn,

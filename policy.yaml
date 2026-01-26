@@ -10,7 +10,40 @@ approval:
     - network.cloudflared_change
     - network.firewall_change
     - code.apply_patch
+
 auto_approve: []
+
+lanes:
+  A:
+    action_types:
+      - notify.local
+      - system.rotate_logs
+      - system.clear_cache
+      - system.restart_service
+    allowlists:
+      system.restart_service:
+        services:
+          - pumpkin
+          - pumpkin-voice
+  B:
+    action_types:
+      - homeassistant.service
+      - network.deep_scan
+      - network.mark_useful
+    allowlists:
+      homeassistant.service:
+        domains:
+          - persistent_notification
+          - light
+          - switch
+          - climate
+  C:
+    action_types:
+      - code.apply_patch
+      - network.dns_change
+      - network.cloudflared_change
+      - network.firewall_change
+
 actions:
   - action_type: notify.local
     params_schema:
@@ -21,6 +54,33 @@ actions:
           maxLength: 2000
       required:
         - message
+  - action_type: system.restart_service
+    params_schema:
+      type: object
+      properties:
+        service:
+          type: string
+          maxLength: 128
+      required:
+        - service
+  - action_type: system.rotate_logs
+    params_schema:
+      type: object
+      properties:
+        path:
+          type: string
+          maxLength: 256
+      required:
+        - path
+  - action_type: system.clear_cache
+    params_schema:
+      type: object
+      properties:
+        path:
+          type: string
+          maxLength: 256
+      required:
+        - path
   - action_type: code.apply_patch
     params_schema:
       type: object
