@@ -5220,6 +5220,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
             if path == "/ui/proposals":
                 _send_html(self, 200, _load_voice_ui_asset("voice_ui_proposals.html"))
                 return
+            if path == "/ui/decisions":
+                _send_html(self, 200, _load_voice_ui_asset("voice_ui_decisions.html"))
+                return
             if path == "/ui/network":
                 _send_html(self, 200, _load_voice_ui_asset("voice_ui_network.html"))
                 return

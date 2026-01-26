@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pumpkin Decisions</title>
+    <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='29' y='10' width='6' height='12' fill='%235b4b41'/><circle cx='32' cy='36' r='20' fill='%23e67c2e'/><circle cx='20' cy='36' r='14' fill='%23f08a3a' opacity='0.85'/><circle cx='44' cy='36' r='14' fill='%23f08a3a' opacity='0.85'/></svg>" />
+    <style>
+      :root {
+        --bg: #f6efe8;
+        --bg-accent: #f2d6b5;
+        --ink: #2a1b12;
+        --muted: #5b4b41;
+        --pumpkin: #e67c2e;
+        --pumpkin-dark: #b95519;
+        --card: #fff8f2;
+        --line: #e5d6c6;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Iowan Old Style", "Palatino", "Bookman", "Georgia", serif;
+        color: var(--ink);
+        background: linear-gradient(160deg, var(--bg), var(--bg-accent));
+        min-height: 100vh;
+      }
+      header {
+        padding: 28px 24px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .title {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 26px;
+        font-weight: 700;
+      }
+      .pumpkin-icon {
+        width: 24px;
+        height: 24px;
+      }
+      .sub { color: var(--muted); }
+      main { padding: 12px 24px 40px; }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 16px;
+        box-shadow: 0 12px 32px rgba(50, 33, 22, 0.08);
+      }
+      .decision {
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: #fffdf9;
+        display: grid;
+        gap: 6px;
+        margin-bottom: 10px;
+      }
+      .meta {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      pre {
+        white-space: pre-wrap;
+        font-size: 12px;
+        background: #fff7ef;
+        padding: 8px;
+        border-radius: 8px;
+        border: 1px solid #f3c8a5;
+      }
+      button {
+        border: 1px solid var(--line);
+        background: var(--card);
+        color: var(--ink);
+        padding: 8px 12px;
+        border-radius: 10px;
+        cursor: pointer;
+      }
+      a { color: var(--pumpkin-dark); text-decoration: none; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="title">
+        <svg class="pumpkin-icon" viewBox="0 0 64 64" aria-hidden="true">
+          <rect x="29" y="10" width="6" height="12" fill="var(--muted)" />
+          <circle cx="32" cy="36" r="20" fill="var(--pumpkin)" />
+          <circle cx="20" cy="36" r="14" fill="#f08a3a" opacity="0.85" />
+          <circle cx="44" cy="36" r="14" fill="#f08a3a" opacity="0.85" />
+        </svg>
+        Decisions Feed
+      </div>
+      <div class="sub">
+        Recent decisions from the autonomy loop.
+        <a href="/ui">Back to dashboard →</a>
+      </div>
+    </header>
+    <main>
+      <section class="card">
+        <div class="meta" style="margin-bottom: 8px;">
+          <span id="count">0 decisions</span>
+          <button id="refresh" style="margin-left: 12px;">Refresh</button>
+        </div>
+        <div id="list"></div>
+      </section>
+    </main>
+    <script>
+      const listNode = document.getElementById("list");
+      const countNode = document.getElementById("count");
+
+      const render = (items) => {
+        listNode.innerHTML = "";
+        if (!items.length) {
+          listNode.textContent = "No decisions yet.";
+          return;
+        }
+        items.forEach((item) => {
+          const card = document.createElement("div");
+          card.className = "decision";
+
+          const title = document.createElement("div");
+          title.textContent = item.decision || "Decision";
+
+          const meta = document.createElement("div");
+          meta.className = "meta";
+          meta.textContent = `${item.ts || "n/a"} • ${item.action_type || "no action"} • ${item.verification_status || "pending"}`;
+
+          const reasoning = document.createElement("pre");
+          reasoning.textContent = item.reasoning || "No reasoning";
+
+          card.appendChild(title);
+          card.appendChild(meta);
+          card.appendChild(reasoning);
+          listNode.appendChild(card);
+        });
+      };
+
+      const load = async () => {
+        try {
+          const res = await fetch("/decisions?limit=50");
+          const data = await res.json();
+          const items = Array.isArray(data.decisions) ? data.decisions : [];
+          countNode.textContent = `${items.length} decisions`;
+          render(items);
+        } catch (err) {
+          listNode.textContent = "Failed to load decisions.";
+        }
+      };
+
+      document.getElementById("refresh").addEventListener("click", load);
+      load();
+    </script>
+  </body>
+</html>
