@@ -821,8 +821,8 @@
           const proposals = (summary.proposals || []).slice(0, 3).map(formatProposal);
           setList(proposalList, proposals);
 
-          const status = summary.status || {};
-          const autonomyStatus = status.autonomy || {};
+          const summaryStatus = summary.status || {};
+          const autonomyStatus = summaryStatus.autonomy || {};
           setText(
             settingsStatus,
             `Mode: ${autonomyStatus.mode || "OPERATOR"}`
