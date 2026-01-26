@@ -398,6 +398,12 @@ def insert_approval(
 def update_proposal_status(conn: sqlite3.Connection, proposal_id: int, status: str) -> None:
     conn.execute("UPDATE proposals SET status = ? WHERE id = ?", (status, proposal_id))
     conn.commit()
+    if status == "approved":
+        queue = get_memory(conn, "approvals.queue") or []
+        if not isinstance(queue, list):
+            queue = []
+        queue.append({"id": proposal_id, "ts": utc_now_iso()})
+        set_memory(conn, "approvals.queue", queue[-200:])
     if status in {"rejected", "failed"}:
         row = conn.execute(
             "SELECT summary FROM proposals WHERE id = ?",

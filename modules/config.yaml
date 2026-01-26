@@ -64,7 +64,7 @@ modules:
       end: "22:00"
     max_actions_per_loop: 3
     default_action_cooldown_seconds: 30
-    auto_confirm_execution_plan: false
+    auto_confirm_execution_plan: true
     auto_apply_repaired_patches: false
     protected_patch_paths:
       - pumpkin/telemetry.py
@@ -75,6 +75,18 @@ modules:
       homeassistant.service: 20
       network.discovery: 120
     pulse_interval_seconds: 60
+  detections:
+    enabled: true
+    window_seconds: 900
+    max_per_window: 1
+    min_occurrences: 1
+    min_occurrences_by_type:
+      selfcheck.selfcheck.run: 2
+      homeassistant.homeassistant.device_registry_failed: 2
+    backoff_minutes: 30
+    backoff_minutes_by_type:
+      selfcheck.selfcheck.run: 60
+      homeassistant.homeassistant.device_registry_failed: 120
   network.discovery:
     subnet: auto
     tcp_ports:

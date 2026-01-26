@@ -28,7 +28,7 @@ Pumpkin v3 is a persistent, context-aware digital steward that observes, decides
 - Car telemetry ingestion and reporting
 - Dog watch alerts (camera-based behavior alerts)
 - Shopping list for suggested hardware, with mark acquired
-- Proposal workflow with approvals and audit log
+- Proposal workflow with approvals, follow-through queue, and audit log
 
 ## Autonomy modes and safety lanes
 Autonomy is controlled by mode + policy lanes:
@@ -39,6 +39,7 @@ Autonomy is controlled by mode + policy lanes:
   - Lane C: high-risk (restricted request)
 
 These are enforced in `policy.yaml`. Safe mode can disable execution while keeping observation on.
+Detection noise is reduced with suppression/backoff rules in `modules/config.yaml`.
 
 ## Runtime
 ### Voice server

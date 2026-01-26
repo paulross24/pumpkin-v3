@@ -672,6 +672,7 @@ def _watchdog_stalled_actions(conn, policy: policy_mod.Policy, autonomy_cfg: Dic
         return
     cutoff = datetime.now(timezone.utc).timestamp() - (stall_minutes * 60)
     approved = store.list_proposals(conn, status="approved", limit=200)
+    updated_queue = list(queue_ids)
     for row in approved:
         try:
             details = json.loads(row["details_json"])
@@ -1163,6 +1164,20 @@ def _load_autonomy_config(conn=None) -> Dict[str, Any]:
     return autonomy_cfg
 
 
+def _load_detection_config(conn=None) -> Dict[str, Any]:
+    config_path = settings.modules_config_path()
+    if not config_path.exists():
+        return {}
+    config = module_config.load_config(str(config_path))
+    modules_cfg = config.get("modules", {})
+    if not isinstance(modules_cfg, dict):
+        return {}
+    detections_cfg = modules_cfg.get("detections", {})
+    if not isinstance(detections_cfg, dict):
+        detections_cfg = {}
+    return detections_cfg
+
+
 def _autonomy_mode(conn, autonomy_cfg: Dict[str, Any]) -> str:
     mode = autonomy_cfg.get("mode")
     if isinstance(mode, str) and mode.strip():
@@ -1239,6 +1254,73 @@ def _remember_detection(conn, signature: str) -> None:
     store.set_memory(conn, "detections.recent", entries[-50:])
 
 
+def _should_emit_detection(
+    conn,
+    detection_type: str,
+    signature: str,
+    cfg: Dict[str, Any],
+) -> bool:
+    if not cfg.get("enabled", True):
+        return True
+    now = time.time()
+    window_seconds = int(cfg.get("window_seconds", 900))
+    max_per_window = int(cfg.get("max_per_window", 1))
+    min_occurrences_by_type = cfg.get("min_occurrences_by_type", {})
+    if not isinstance(min_occurrences_by_type, dict):
+        min_occurrences_by_type = {}
+    default_min = int(cfg.get("min_occurrences", 1))
+    required = int(min_occurrences_by_type.get(detection_type, default_min))
+    backoff_by_type = cfg.get("backoff_minutes_by_type", {})
+    if not isinstance(backoff_by_type, dict):
+        backoff_by_type = {}
+    default_backoff = int(cfg.get("backoff_minutes", 0))
+
+    suppressed = store.get_memory(conn, "detections.suppressed_until") or {}
+    if not isinstance(suppressed, dict):
+        suppressed = {}
+    suppressed_until = suppressed.get(signature)
+    if isinstance(suppressed_until, (int, float)) and now < float(suppressed_until):
+        return False
+
+    occurrences = store.get_memory(conn, "detections.occurrences") or {}
+    if not isinstance(occurrences, dict):
+        occurrences = {}
+    record = occurrences.get(signature) if isinstance(occurrences.get(signature), dict) else {}
+    first_ts = record.get("first_ts")
+    count = record.get("count", 0)
+    if not isinstance(first_ts, (int, float)) or now - float(first_ts) > window_seconds:
+        first_ts = now
+        count = 0
+    count = int(count) + 1
+    occurrences[signature] = {"first_ts": first_ts, "count": count}
+    store.set_memory(conn, "detections.occurrences", occurrences)
+    if count < required:
+        return False
+
+    emissions = store.get_memory(conn, "detections.emissions") or {}
+    if not isinstance(emissions, dict):
+        emissions = {}
+    history = emissions.get(signature)
+    if not isinstance(history, list):
+        history = []
+    history = [ts for ts in history if isinstance(ts, (int, float)) and now - ts <= window_seconds]
+    if len(history) >= max_per_window:
+        emissions[signature] = history
+        store.set_memory(conn, "detections.emissions", emissions)
+        return False
+    history.append(now)
+    emissions[signature] = history
+    store.set_memory(conn, "detections.emissions", emissions)
+    occurrences[signature] = {"first_ts": now, "count": 0}
+    store.set_memory(conn, "detections.occurrences", occurrences)
+
+    backoff = int(backoff_by_type.get(detection_type, default_backoff))
+    if backoff > 0:
+        suppressed[signature] = now + backoff * 60
+        store.set_memory(conn, "detections.suppressed_until", suppressed)
+    return True
+
+
 def _event_payload(row: Any) -> Dict[str, Any]:
     try:
         payload_raw = row["payload_json"]
@@ -1256,6 +1338,7 @@ def _event_payload(row: Any) -> Dict[str, Any]:
 
 def _build_detections_from_events(conn, events: List[Any]) -> List[Dict[str, Any]]:
     detections: List[Dict[str, Any]] = []
+    detection_cfg = _load_detection_config(conn)
     for row in events:
         try:
             event_id = row["id"]
@@ -1274,7 +1357,7 @@ def _build_detections_from_events(conn, events: List[Any]) -> List[Dict[str, Any
             summary = f"{event_type.replace('.', ' ')} detected"
         detection_type = f"{source}.{event_type}"
         signature = f"{detection_type}:{summary}"
-        if _recent_detection_seen(conn, signature):
+        if not _should_emit_detection(conn, detection_type, signature, detection_cfg):
             continue
         detections.append(
             {
@@ -1856,6 +1939,19 @@ def _maybe_auto_approve_action(
 def _execute_approved(conn, policy: policy_mod.Policy, autonomy_cfg: Dict[str, Any]) -> int:
     executed_count = 0
     approved = store.fetch_approved_unexecuted(conn)
+    queue = store.get_memory(conn, "approvals.queue") or []
+    if not isinstance(queue, list):
+        queue = []
+    queue_ids = []
+    for item in queue:
+        if isinstance(item, dict) and isinstance(item.get("id"), int):
+            queue_ids.append(item["id"])
+    if queue_ids:
+        order = {pid: idx for idx, pid in enumerate(queue_ids)}
+        approved = sorted(
+            approved,
+            key=lambda row: order.get(row["id"], len(order)),
+        )
     if not approved:
         pending = store.list_proposals(conn, status="pending", limit=50)
         pending_action_ids = [row["id"] for row in pending if row["kind"] == "action.request"]
@@ -1944,6 +2040,8 @@ def _execute_approved(conn, policy: policy_mod.Policy, autonomy_cfg: Dict[str, A
                 details["converted_followup_id"] = new_id
                 store.update_proposal_details(conn, proposal_id, details)
                 store.update_proposal_status(conn, proposal_id, "executed")
+                if proposal_id in updated_queue:
+                    updated_queue.remove(proposal_id)
                 audit.append_jsonl(
                     str(settings.audit_path()),
                     {
@@ -1958,6 +2056,8 @@ def _execute_approved(conn, policy: policy_mod.Policy, autonomy_cfg: Dict[str, A
                 details["conversion_failed"] = "planner_followup_unavailable"
                 store.update_proposal_details(conn, proposal_id, details)
             store.update_proposal_status(conn, proposal_id, "failed")
+            if proposal_id in updated_queue:
+                updated_queue.remove(proposal_id)
             audit.append_jsonl(
                 str(settings.audit_path()),
                 {
@@ -2013,6 +2113,8 @@ def _execute_approved(conn, policy: policy_mod.Policy, autonomy_cfg: Dict[str, A
             )
         except Exception as exc:
             store.update_proposal_status(conn, proposal_id, "failed")
+            if proposal_id in updated_queue:
+                updated_queue.remove(proposal_id)
             audit.append_jsonl(
                 str(settings.audit_path()),
                 {
@@ -2026,6 +2128,8 @@ def _execute_approved(conn, policy: policy_mod.Policy, autonomy_cfg: Dict[str, A
 
         if decision == "forbid":
             store.update_proposal_status(conn, proposal_id, "failed")
+            if proposal_id in updated_queue:
+                updated_queue.remove(proposal_id)
             audit.append_jsonl(
                 str(settings.audit_path()),
                 {
@@ -2060,6 +2164,8 @@ def _execute_approved(conn, policy: policy_mod.Policy, autonomy_cfg: Dict[str, A
             store.finish_action(conn, action_id, "succeeded", result=result)
             store.insert_outcome(conn, action_id, "succeeded", {"result": result})
             store.update_proposal_status(conn, proposal_id, "executed")
+            if proposal_id in updated_queue:
+                updated_queue.remove(proposal_id)
             if force_execute:
                 details.pop("force_execute", None)
                 store.update_proposal_details(conn, proposal_id, details)
@@ -2133,6 +2239,8 @@ def _execute_approved(conn, policy: policy_mod.Policy, autonomy_cfg: Dict[str, A
             store.finish_action(conn, action_id, "failed", result=result)
             store.insert_outcome(conn, action_id, "failed", result)
             store.update_proposal_status(conn, proposal_id, "failed")
+            if proposal_id in updated_queue:
+                updated_queue.remove(proposal_id)
             if force_execute:
                 details.pop("force_execute", None)
                 store.update_proposal_details(conn, proposal_id, details)
@@ -2232,6 +2340,12 @@ def _execute_approved(conn, policy: policy_mod.Policy, autonomy_cfg: Dict[str, A
                 },
             )
             executed_count += 1
+    if updated_queue != queue_ids:
+        store.set_memory(
+            conn,
+            "approvals.queue",
+            [{"id": pid, "ts": None} for pid in updated_queue][-200:],
+        )
     return executed_count
 
 
