@@ -78,6 +78,9 @@ Pumpkin records:
   - `PUMPKIN_OPENAI_API_KEY`
   - `PUMPKIN_INGEST_KEY`
 
+## Status and ingest
+- `GET /status` for the Command Center state snapshot
+
 ## Ingest v1
 - Endpoint: `POST /ingest`
 - Required fields: `schema_version: 1`, `request_id`
@@ -86,8 +89,8 @@ Pumpkin records:
 - Auth: `X-Pumpkin-Key` or `Authorization: Bearer` (when `PUMPKIN_INGEST_KEY` is set)
 
 ## UI pages
-- `/ui` main dashboard
-- `/ui/proposals` proposals and approvals
+- `/ui` Command Center (health score, approvals, recent changes)
+- `/ui/proposals` proposals + restricted approvals
 - `/ui/vision` vision review + enroll + correction
 - `/ui/mic` mic diagnostics and transcription
 - `/ui/shopping` hardware suggestions and status
