@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pumpkin Camera Recordings</title>
+    <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='29' y='10' width='6' height='12' fill='%235b4b41'/><circle cx='32' cy='36' r='20' fill='%23e67c2e'/><circle cx='20' cy='36' r='14' fill='%23f08a3a' opacity='0.85'/><circle cx='44' cy='36' r='14' fill='%23f08a3a' opacity='0.85'/></svg>" />
+    <style>
+      :root {
+        --bg: #f6efe8;
+        --bg-accent: #f2d6b5;
+        --ink: #2a1b12;
+        --muted: #5b4b41;
+        --pumpkin: #e67c2e;
+        --pumpkin-dark: #b95519;
+        --card: #fff8f2;
+        --line: #e5d6c6;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Iowan Old Style", "Palatino", "Bookman", "Georgia", serif;
+        color: var(--ink);
+        background: linear-gradient(160deg, var(--bg), var(--bg-accent));
+        min-height: 100vh;
+      }
+      header {
+        padding: 28px 24px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .title {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 26px;
+        font-weight: 700;
+      }
+      .pumpkin-icon { width: 24px; height: 24px; }
+      .sub { color: var(--muted); }
+      main { padding: 12px 24px 40px; display: grid; gap: 16px; }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 16px;
+        box-shadow: 0 12px 32px rgba(50, 33, 22, 0.08);
+      }
+      .meta { font-size: 12px; color: var(--muted); }
+      .row { display: flex; gap: 12px; flex-wrap: wrap; }
+      .recording {
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: #fffdf9;
+        display: grid;
+        gap: 6px;
+        margin-bottom: 10px;
+      }
+      video { width: 100%; border-radius: 12px; background: #000; }
+      button {
+        border: 1px solid var(--line);
+        background: var(--card);
+        color: var(--ink);
+        padding: 8px 12px;
+        border-radius: 10px;
+        cursor: pointer;
+      }
+      a { color: var(--pumpkin-dark); text-decoration: none; }
+      input, select {
+        border: 1px solid var(--line);
+        background: #fff;
+        color: var(--ink);
+        padding: 8px 10px;
+        border-radius: 10px;
+        font-family: inherit;
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="title">
+        <svg class="pumpkin-icon" viewBox="0 0 64 64" aria-hidden="true">
+          <rect x="29" y="10" width="6" height="12" fill="var(--muted)" />
+          <circle cx="32" cy="36" r="20" fill="var(--pumpkin)" />
+          <circle cx="20" cy="36" r="14" fill="#f08a3a" opacity="0.85" />
+          <circle cx="44" cy="36" r="14" fill="#f08a3a" opacity="0.85" />
+        </svg>
+        Camera Recordings
+      </div>
+      <div class="sub">
+        Kitchen camera timeline. Playback is local-first.
+        <a href="/ui">Back to dashboard →</a>
+      </div>
+    </header>
+    <main>
+      <section class="card">
+        <div class="row">
+          <span class="meta" id="count">0 clips</span>
+          <select id="camera-id">
+            <option value="kitchen-cam">kitchen-cam</option>
+          </select>
+          <button id="refresh">Refresh</button>
+        </div>
+        <div id="list"></div>
+      </section>
+      <section class="card">
+        <div class="meta">Selected playback</div>
+        <video id="player" controls></video>
+        <div class="meta" id="player-meta">No clip selected.</div>
+      </section>
+    </main>
+    <script>
+      const listNode = document.getElementById("list");
+      const countNode = document.getElementById("count");
+      const player = document.getElementById("player");
+      const playerMeta = document.getElementById("player-meta");
+
+      const render = (items) => {
+        listNode.innerHTML = "";
+        if (!items.length) {
+          listNode.textContent = "No recordings yet.";
+          return;
+        }
+        items.forEach((item) => {
+          const card = document.createElement("div");
+          card.className = "recording";
+          const label = document.createElement("div");
+          label.textContent = `${item.label || item.camera_id || "camera"} • ${item.start_ts || item.ts || "n/a"}`;
+          const meta = document.createElement("div");
+          meta.className = "meta";
+          meta.textContent = `duration: ${item.duration_seconds || "-"}s • size: ${item.size_bytes || "-"} bytes`;
+          const play = document.createElement("button");
+          play.textContent = "Play clip";
+          play.addEventListener("click", () => {
+            if (item.recording_url) {
+              player.src = item.recording_url;
+              player.play();
+              playerMeta.textContent = `${item.camera_id || "camera"} • ${item.start_ts || item.ts || "n/a"}`;
+            } else {
+              playerMeta.textContent = "Recording missing or not accessible.";
+            }
+          });
+          card.appendChild(label);
+          card.appendChild(meta);
+          card.appendChild(play);
+          listNode.appendChild(card);
+        });
+      };
+
+      const load = async () => {
+        try {
+          const cameraId = document.getElementById("camera-id").value.trim();
+          const res = await fetch(`/camera/recordings?camera_id=${encodeURIComponent(cameraId)}`);
+          const data = await res.json();
+          const items = Array.isArray(data.recordings) ? data.recordings : [];
+          countNode.textContent = `${items.length} clips`;
+          render(items);
+        } catch (err) {
+          listNode.textContent = "Failed to load recordings.";
+        }
+      };
+
+      document.getElementById("refresh").addEventListener("click", load);
+      load();
+      setInterval(load, 30000);
+    </script>
+  </body>
+</html>

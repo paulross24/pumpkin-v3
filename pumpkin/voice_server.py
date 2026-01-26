@@ -4627,6 +4627,24 @@ def _safe_snapshot_path(raw_path: str) -> Path | None:
     return path
 
 
+def _safe_recording_path(raw_path: str) -> Path | None:
+    if not raw_path:
+        return None
+    base_dir = (settings.data_dir() / "camera_recordings").resolve()
+    path = Path(raw_path)
+    if not path.is_absolute():
+        path = (base_dir / path).resolve()
+    else:
+        path = path.resolve()
+    try:
+        path.relative_to(base_dir)
+    except ValueError:
+        return None
+    if not path.exists() or not path.is_file() or path.suffix.lower() != ".mp4":
+        return None
+    return path
+
+
 def _list_unknown_faces(conn, limit: int = 50) -> list[Dict[str, Any]]:
     false_positives = store.get_memory(conn, "vision.false_positives") or []
     if not isinstance(false_positives, list):
@@ -5123,9 +5141,12 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "GET /ui/car",
                             "GET /ui/car/alerts",
                             "GET /ui/alerts",
+                            "GET /ui/recordings",
                             "GET /ui/inventory",
                             "GET /ui/vision",
                             "GET /ui/mic",
+                            "GET /camera/recordings",
+                            "GET /camera/recording",
                             "GET /config",
                             "GET /catalog",
                             "GET /capabilities",
@@ -5230,6 +5251,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 return
             if path == "/ui/briefings":
                 _send_html(self, 200, _load_voice_ui_asset("voice_ui_briefings.html"))
+                return
+            if path == "/ui/recordings":
+                _send_html(self, 200, _load_voice_ui_asset("voice_ui_recordings.html"))
                 return
             if path == "/ui/network":
                 _send_html(self, 200, _load_voice_ui_asset("voice_ui_network.html"))
@@ -5369,6 +5393,24 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 payload = snapshot_path.read_bytes()
                 self.send_response(200)
                 self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
+            if path == "/camera/recording":
+                raw_path = params.get("path", [None])[0]
+                if not raw_path:
+                    self.send_response(400)
+                    self.end_headers()
+                    return
+                recording_path = _safe_recording_path(raw_path)
+                if not recording_path:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                payload = recording_path.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "video/mp4")
                 self.send_header("Content-Length", str(len(payload)))
                 self.end_headers()
                 self.wfile.write(payload)
@@ -5574,6 +5616,44 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         }
                     )
                 _send_json(self, 200, {"count": len(decisions), "decisions": decisions})
+                return
+            if path == "/camera/recordings":
+                limit = _parse_limit(params.get("limit", [None])[0], default=50, max_limit=200)
+                camera_id = params.get("camera_id", [None])[0]
+                conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+                rows = store.list_events(
+                    conn,
+                    limit=limit,
+                    source="vision",
+                    event_type="camera.recorded",
+                )
+                recordings = []
+                for row in rows:
+                    try:
+                        payload = json.loads(row["payload_json"]) if row["payload_json"] else {}
+                    except Exception:
+                        payload = {}
+                    if camera_id and str(payload.get("camera_id")) != str(camera_id):
+                        continue
+                    path_val = payload.get("path")
+                    safe_path = _safe_recording_path(path_val) if isinstance(path_val, str) else None
+                    recording_url = None
+                    if safe_path:
+                        recording_url = f"/camera/recording?path={quote(str(safe_path))}"
+                    recordings.append(
+                        {
+                            "id": row["id"],
+                            "ts": row["ts"],
+                            "camera_id": payload.get("camera_id"),
+                            "label": payload.get("label"),
+                            "start_ts": payload.get("start_ts"),
+                            "duration_seconds": payload.get("duration_seconds"),
+                            "size_bytes": payload.get("size_bytes"),
+                            "path": path_val,
+                            "recording_url": recording_url,
+                        }
+                    )
+                _send_json(self, 200, {"count": len(recordings), "recordings": recordings})
                 return
             if path == "/briefings":
                 limit = _parse_limit(params.get("limit", [None])[0], default=20, max_limit=200)
@@ -6019,6 +6099,52 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "/vision/recognized": {"get": {"summary": "List recognized face events"}},
                             "/vision/stats": {"get": {"summary": "Vision pipeline stats"}},
                             "/vision/snapshot": {"get": {"summary": "Fetch a captured snapshot"}},
+                            "/camera/recordings": {
+                                "get": {
+                                    "summary": "List camera recordings",
+                                    "parameters": [
+                                        {
+                                            "name": "camera_id",
+                                            "in": "query",
+                                            "schema": {"type": "string"},
+                                        },
+                                        {
+                                            "name": "limit",
+                                            "in": "query",
+                                            "schema": {"type": "integer"},
+                                        },
+                                    ],
+                                    "responses": {
+                                        "200": {
+                                            "description": "Recording list",
+                                            "content": {
+                                                "application/json": {
+                                                    "schema": {"type": "object"}
+                                                }
+                                            },
+                                        }
+                                    },
+                                }
+                            },
+                            "/camera/recording": {
+                                "get": {
+                                    "summary": "Fetch a camera recording",
+                                    "parameters": [
+                                        {
+                                            "name": "path",
+                                            "in": "query",
+                                            "schema": {"type": "string"},
+                                            "required": True,
+                                        }
+                                    ],
+                                    "responses": {
+                                        "200": {
+                                            "description": "Recording MP4 bytes",
+                                            "content": {"video/mp4": {"schema": {"type": "string"}}},
+                                        }
+                                    },
+                                }
+                            },
                             "/vision/false_positives": {"get": {"summary": "List false positive hashes"}},
                             "/notifications/test": {"post": {"summary": "Create a test alert"}},
                             "/identity/link": {

@@ -25,6 +25,7 @@ Pumpkin v3 is a persistent, context-aware digital steward that observes, decides
 - Home Assistant sync: entities, areas, persons, presence
 - Network discovery + deep scan + RTSP probe
 - Vision pipeline: snapshots, unknowns, recognition, CompreFace enroll, auto-tuned thresholds
+- Camera recordings: rolling RTSP segments with retention and playback
 - Car telemetry ingestion and reporting
 - Dog watch alerts (camera-based behavior alerts)
 - Shopping list for suggested hardware, with mark acquired
@@ -98,6 +99,7 @@ Pumpkin records:
 - `/ui/settings` Autonomy + LLM configuration
 - Decision cards include risk/confidence/reversibility scoring
 - `/ui/vision` Vision review + enroll + correction
+- `/ui/recordings` Camera recordings with playback
 - `/ui/mic` Mic diagnostics and transcription
 - `/ui/shopping` Hardware suggestions and status
 

@@ -20,6 +20,7 @@ from . import settings
 from . import observe
 from . import vision
 from . import rtsp_mic
+from . import camera_recording
 from . import propose
 from . import store
 from . import insights
@@ -454,6 +455,15 @@ def _collect_module_events(conn) -> List[Dict[str, Any]]:
         if _cooldown_elapsed(conn, "voice.mic_rtsp", poll_interval):
             events.extend(rtsp_mic.run_rtsp_mic(conn, module_cfg))
             _record_cooldown(conn, "voice.mic_rtsp")
+
+    if "camera.recording" in enabled:
+        module_cfg = modules_cfg.get("camera.recording", {})
+        camera_id = module_cfg.get("camera_id") or "kitchen-cam"
+        cooldown_seconds = int(module_cfg.get("cooldown_seconds", 60))
+        cooldown_key = f"camera.recording:{camera_id}"
+        if _cooldown_elapsed(conn, cooldown_key, cooldown_seconds):
+            events.extend(camera_recording.run_recording(conn, module_cfg))
+            _record_cooldown(conn, cooldown_key)
 
     return events
 

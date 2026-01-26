@@ -1,6 +1,7 @@
 version: 1
 enabled:
   - code.assistant
+  - camera.recording
   - face.recognition
   - homeassistant.observer
   - insights
@@ -217,6 +218,13 @@ modules:
       duration_ms: 120
       volume: 0.2
       aplay_path: aplay
+  camera.recording:
+    enabled: true
+    camera_id: kitchen-cam
+    segment_seconds: 60
+    cooldown_seconds: 60
+    retention_hours: 24
+    ffmpeg_path: ffmpeg
   car.telemetry:
     baseline:
       mode: auto
