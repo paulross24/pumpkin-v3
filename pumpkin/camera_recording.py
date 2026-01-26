@@ -36,30 +36,55 @@ def _record_segment(
     ffmpeg_path: str,
 ) -> Dict[str, Any]:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    args = [
-        ffmpeg_path,
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-rtsp_transport",
-        "tcp",
-        "-i",
-        rtsp_url,
-        "-t",
-        str(duration_seconds),
-        "-c",
-        "copy",
-        "-reset_timestamps",
-        "1",
-        "-y",
-        str(output_path),
-    ]
     try:
+        args = [
+            ffmpeg_path,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-rtsp_transport",
+            "tcp",
+            "-i",
+            rtsp_url,
+            "-t",
+            str(duration_seconds),
+            "-c",
+            "copy",
+            "-reset_timestamps",
+            "1",
+            "-y",
+            str(output_path),
+        ]
         subprocess.run(args, check=True, timeout=duration_seconds + 15)
     except subprocess.TimeoutExpired as exc:
         return {"status": "failed", "error": "timeout", "detail": str(exc)}
     except subprocess.CalledProcessError as exc:
-        return {"status": "failed", "error": "ffmpeg_failed", "detail": str(exc)}
+        # Fallback to a safe transcode when stream copy fails.
+        try:
+            args = [
+                ffmpeg_path,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-rtsp_transport",
+                "tcp",
+                "-i",
+                rtsp_url,
+                "-t",
+                str(duration_seconds),
+                "-an",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-movflags",
+                "+faststart",
+                "-y",
+                str(output_path),
+            ]
+            subprocess.run(args, check=True, timeout=duration_seconds + 25)
+        except Exception as exc2:
+            return {"status": "failed", "error": "ffmpeg_failed", "detail": f\"{exc} | fallback: {exc2}\"}
     return {"status": "ok"}
 
 
