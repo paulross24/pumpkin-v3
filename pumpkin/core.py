@@ -1917,12 +1917,11 @@ def _execute_approved(conn, policy: policy_mod.Policy, autonomy_cfg: Dict[str, A
                 "policy_hash": policy.policy_hash,
             },
         )
-
-            try:
-                result = execute_action(action_type, action_params, str(settings.audit_path()))
-                store.finish_action(conn, action_id, "succeeded", result=result)
-                store.insert_outcome(conn, action_id, "succeeded", {"result": result})
-                store.update_proposal_status(conn, proposal_id, "executed")
+        try:
+            result = execute_action(action_type, action_params, str(settings.audit_path()))
+            store.finish_action(conn, action_id, "succeeded", result=result)
+            store.insert_outcome(conn, action_id, "succeeded", {"result": result})
+            store.update_proposal_status(conn, proposal_id, "executed")
             if force_execute:
                 details.pop("force_execute", None)
                 store.update_proposal_details(conn, proposal_id, details)
