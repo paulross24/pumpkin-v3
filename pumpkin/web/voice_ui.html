@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Pumpkin Voice UI</title>
+    <title>Pumpkin Command Center</title>
     <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='29' y='10' width='6' height='12' fill='%235b4b41'/><circle cx='32' cy='36' r='20' fill='%23e67c2e'/><circle cx='20' cy='36' r='14' fill='%23f08a3a' opacity='0.85'/><circle cx='44' cy='36' r='14' fill='%23f08a3a' opacity='0.85'/></svg>" />
     <style>
       :root {
@@ -31,6 +31,32 @@
           radial-gradient(circle at 80% 20%, rgba(178, 85, 25, 0.1), transparent 45%),
           linear-gradient(160deg, var(--bg), var(--bg-accent));
         min-height: 100vh;
+      }
+      .layout {
+        display: grid;
+        grid-template-columns: 220px 1fr;
+        min-height: 100vh;
+      }
+      .rail {
+        padding: 24px 18px;
+        border-right: 1px solid var(--line);
+        background: rgba(255, 248, 242, 0.85);
+        position: sticky;
+        top: 0;
+        height: 100vh;
+        overflow-y: auto;
+      }
+      .rail-title {
+        font-size: 18px;
+        font-weight: 700;
+        margin-bottom: 12px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .content {
+        display: flex;
+        flex-direction: column;
       }
       header {
         padding: 28px 24px 12px;
@@ -61,16 +87,25 @@
         color: var(--muted);
       }
       .menu {
-        display: flex;
+        display: grid;
         gap: 10px;
-        flex-wrap: wrap;
+      }
+      .menu-group {
+        display: grid;
+        gap: 6px;
+      }
+      .menu-label {
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        color: var(--muted);
       }
       .menu a {
         text-decoration: none;
         color: var(--pumpkin-dark);
         background: rgba(230, 124, 46, 0.12);
-        padding: 6px 12px;
-        border-radius: 999px;
+        padding: 8px 10px;
+        border-radius: 12px;
         font-size: 12px;
         font-weight: 600;
         border: 1px solid var(--line);
@@ -109,6 +144,7 @@
         animation: fadeUp 0.4s ease both;
         display: grid;
         gap: 8px;
+        min-height: 170px;
       }
       .card.is-link {
         cursor: pointer;
@@ -131,7 +167,7 @@
       }
       .card h3 {
         margin: 0;
-        font-size: 14px;
+        font-size: 12px;
         text-transform: uppercase;
         letter-spacing: 0.08em;
         color: var(--muted);
@@ -146,7 +182,7 @@
         list-style: none;
         display: grid;
         gap: 6px;
-        font-size: 13px;
+        font-size: 12px;
         color: var(--muted);
       }
       .pill {
@@ -310,48 +346,64 @@
     </style>
   </head>
   <body>
-    <header>
-      <div class="title-row">
-        <div class="title">
+    <div class="layout">
+      <aside class="rail">
+        <div class="rail-title">
           <svg class="pumpkin-icon" viewBox="0 0 64 64" aria-hidden="true">
             <rect x="29" y="10" width="6" height="12" fill="var(--muted)" />
             <circle cx="32" cy="36" r="20" fill="var(--pumpkin)" />
             <circle cx="20" cy="36" r="14" fill="#f08a3a" opacity="0.85" />
             <circle cx="44" cy="36" r="14" fill="#f08a3a" opacity="0.85" />
           </svg>
-          Pumpkin Command Center
+          Pumpkin
         </div>
-        <div class="actions">
-          <button id="refresh">Refresh now</button>
-          <span class="pill" id="heartbeat">Waiting for heartbeat</span>
-        </div>
-      </div>
-      <div class="sub" id="subtitle">Loading status...</div>
-      <nav class="menu">
-        <a href="/ui">Overview</a>
-        <a href="/ui/health">Health</a>
-        <a href="/ui/identity">Identity</a>
-        <a href="/ui/thoughts">Thoughts</a>
-        <a href="/ui/insights">Insights</a>
-        <a href="/ui/memory">Memory</a>
-        <a href="/ui/homeassistant">Home Assistant</a>
-        <a href="/ui/autonomy">Autonomy</a>
-        <a href="/ui/scoreboard">Scoreboard</a>
-        <a href="/ui/proposals">Approvals</a>
-        <a href="/ui/decisions">Decisions</a>
-        <a href="/ui/briefings">Briefings</a>
-        <a href="/ui/audit">Audit</a>
-        <a href="/ui/shopping">Shopping</a>
-        <a href="/ui/network">Network</a>
-        <a href="/ui/vision">Vision</a>
-        <a href="/ui/mic">Voice Mic</a>
-        <a href="/ui/dogwatch">Dog Watch</a>
-        <a href="/ui/car">Car</a>
-        <a href="/ui/alerts">Alerts</a>
-        <a href="/ui/inventory">Inventory</a>
-      </nav>
-    </header>
-    <main>
+        <nav class="menu">
+          <div class="menu-group">
+            <div class="menu-label">Core</div>
+            <a href="/ui">Command Center</a>
+            <a href="/ui/decisions">Decisions</a>
+            <a href="/ui/briefings">Briefings</a>
+            <a href="/ui/audit">Audit</a>
+          </div>
+          <div class="menu-group">
+            <div class="menu-label">Ops</div>
+            <a href="/ui/health">Health</a>
+            <a href="/ui/autonomy">Autonomy</a>
+            <a href="/ui/proposals">Approvals</a>
+            <a href="/ui/alerts">Alerts</a>
+            <a href="/ui/insights">Insights</a>
+          </div>
+          <div class="menu-group">
+            <div class="menu-label">Sense</div>
+            <a href="/ui/thoughts">Thoughts</a>
+            <a href="/ui/vision">Vision</a>
+            <a href="/ui/mic">Voice Mic</a>
+            <a href="/ui/network">Network</a>
+          </div>
+          <div class="menu-group">
+            <div class="menu-label">Utility</div>
+            <a href="/ui/identity">Identity</a>
+            <a href="/ui/homeassistant">Home Assistant</a>
+            <a href="/ui/scoreboard">Scoreboard</a>
+            <a href="/ui/shopping">Shopping</a>
+            <a href="/ui/dogwatch">Dog Watch</a>
+            <a href="/ui/car">Car</a>
+            <a href="/ui/inventory">Inventory</a>
+          </div>
+        </nav>
+      </aside>
+      <div class="content">
+        <header>
+          <div class="title-row">
+            <div class="title">Command Center</div>
+            <div class="actions">
+              <button id="refresh">Refresh now</button>
+              <span class="pill" id="heartbeat">Waiting for heartbeat</span>
+            </div>
+          </div>
+          <div class="sub" id="subtitle">Loading status...</div>
+        </header>
+        <main>
       <section class="card grid-span" id="command-center-card">
         <div class="card-head">
           <h3>Command Center</h3>
@@ -527,7 +579,9 @@
         <div class="stat" id="briefing-count">0</div>
         <ul class="list" id="briefing-list"></ul>
       </section>
-    </main>
+        </main>
+      </div>
+    </div>
     <script>
       const byId = (id) => document.getElementById(id);
       const setText = (node, text) => {
@@ -537,11 +591,10 @@
         if (!node) return;
         node.innerHTML = "";
         if (!items.length) {
-          const li = document.createElement("li");
-          li.textContent = "None";
-          node.appendChild(li);
+          node.style.display = "none";
           return;
         }
+        node.style.display = "grid";
         items.forEach((item) => {
           const li = document.createElement("li");
           li.textContent = item;

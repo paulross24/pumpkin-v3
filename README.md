@@ -19,7 +19,7 @@ Pumpkin v3 is a persistent, context-aware digital steward that observes, decides
 ## Components
 - Core daemon: observations, detections, decisions, actions, outcomes, briefings
 - Voice server: REST API + UI pages + ingest endpoints
-- UI: status, proposals/approvals, vision review, mic diagnostics, shopping list
+- UI: command center, decisions, briefings, proposals/approvals, audit, vision review, mic diagnostics, shopping list
 
 ## Key capabilities
 - Home Assistant sync: entities, areas, persons, presence
@@ -90,10 +90,13 @@ Pumpkin records:
 
 ## UI pages
 - `/ui` Command Center (health score, approvals, recent changes)
-- `/ui/proposals` proposals + restricted approvals
-- `/ui/vision` vision review + enroll + correction
-- `/ui/mic` mic diagnostics and transcription
-- `/ui/shopping` hardware suggestions and status
+- `/ui/decisions` Decisions feed
+- `/ui/briefings` Hourly and daily briefings
+- `/ui/proposals` Proposals + restricted approvals
+- `/ui/audit` Audit log feed
+- `/ui/vision` Vision review + enroll + correction
+- `/ui/mic` Mic diagnostics and transcription
+- `/ui/shopping` Hardware suggestions and status
 
 ## Proposal management
 - `python3 -m pumpkin proposals list`
