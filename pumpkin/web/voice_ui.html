@@ -764,6 +764,15 @@
         }
       };
 
+      const safeJson = async (res, fallback) => {
+        if (!res || !res.ok) return fallback;
+        try {
+          return await res.json();
+        } catch (err) {
+          return fallback;
+        }
+      };
+
       const load = async () => {
         try {
           linkCards();
@@ -776,12 +785,12 @@
               fetch("/decisions?limit=5"),
               fetch("/briefings?limit=5"),
             ]);
-          const health = await healthRes.json();
-          const summary = await summaryRes.json();
-          const config = await configRes.json();
-          const status = statusRes.ok ? await statusRes.json() : null;
-          const decisionsData = decisionsRes.ok ? await decisionsRes.json() : null;
-          const briefingsData = briefingsRes.ok ? await briefingsRes.json() : null;
+          const health = await safeJson(healthRes, { status: "unknown", metrics: {} });
+          const summary = await safeJson(summaryRes, {});
+          const config = await safeJson(configRes, {});
+          const status = await safeJson(statusRes, null);
+          const decisionsData = await safeJson(decisionsRes, null);
+          const briefingsData = await safeJson(briefingsRes, null);
 
           setText(
             subtitle,
