@@ -133,6 +133,15 @@ modules:
       api_key_env: PUMPKIN_FACE_API_KEY
       min_confidence: 0.45
       timeout_seconds: 6
+    auto_tune:
+      enabled: true
+      window_hours: 24
+      cooldown_hours: 6
+      target_false_positives: 2
+      target_relabels: 1
+      min_confidence_floor: 0.4
+      min_confidence_ceiling: 0.9
+      step: 0.02
     cameras:
       - id: ring-doorbell
         label: front door

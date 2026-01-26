@@ -7749,6 +7749,18 @@ class VoiceHandler(BaseHTTPRequestHandler):
             _send_json(self, 400, {"status": "error", "detail": result})
             return
         conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+        relabel_events = store.get_memory(conn, "vision.relabel_events") or []
+        if not isinstance(relabel_events, list):
+            relabel_events = []
+        relabel_events.append(
+            {
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "subject": subject.strip(),
+                "recognized_id": recognized_id,
+                "snapshot_path": snapshot_path.strip(),
+            }
+        )
+        store.set_memory(conn, "vision.relabel_events", relabel_events[-200:])
         append_jsonl(
             str(settings.audit_path()),
             {
@@ -7792,6 +7804,16 @@ class VoiceHandler(BaseHTTPRequestHandler):
         false_set = {str(item) for item in false_positives}
         false_set.add(snapshot_hash)
         store.set_memory(conn, "vision.false_positives", sorted(false_set))
+        false_events = store.get_memory(conn, "vision.false_positive_events") or []
+        if not isinstance(false_events, list):
+            false_events = []
+        false_events.append(
+            {
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "snapshot_hash": snapshot_hash,
+            }
+        )
+        store.set_memory(conn, "vision.false_positive_events", false_events[-200:])
         _send_json(self, 200, {"status": "ok", "snapshot_hash": snapshot_hash})
 
     def _handle_vision_unknown_clear(self) -> None:

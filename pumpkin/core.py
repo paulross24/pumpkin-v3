@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sqlite3
 import time
 import urllib.error
 import urllib.request
@@ -22,6 +23,7 @@ from . import propose
 from . import store
 from . import insights
 from . import module_config
+from . import module_config_change
 from . import inventory as inventory_mod
 from . import selfcheck
 from .db import init_db
@@ -35,6 +37,141 @@ def _append_recent_memory(conn, key: str, item: Dict[str, Any], limit: int = 25)
         current = []
     current.append(item)
     store.set_memory(conn, key, current[-limit:])
+
+
+def _normalize_feedback_events(raw: Any, now: datetime) -> List[Dict[str, Any]]:
+    if not isinstance(raw, list):
+        return []
+    normalized: List[Dict[str, Any]] = []
+    for item in raw:
+        if isinstance(item, dict):
+            ts = item.get("ts")
+            if isinstance(ts, str):
+                normalized.append(item)
+            continue
+        if isinstance(item, str):
+            normalized.append({"ts": now.isoformat(), "snapshot_hash": item})
+    return normalized
+
+
+def _filter_recent_events(events: List[Dict[str, Any]], cutoff: datetime) -> List[Dict[str, Any]]:
+    recent: List[Dict[str, Any]] = []
+    for item in events:
+        ts = item.get("ts")
+        if not isinstance(ts, str):
+            continue
+        try:
+            parsed = datetime.fromisoformat(ts)
+        except ValueError:
+            continue
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        if parsed >= cutoff:
+            recent.append(item)
+    return recent
+
+
+def _auto_tune_face_recognition(conn: sqlite3.Connection, module_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
+    events: List[Dict[str, Any]] = []
+    auto_cfg = module_cfg.get("auto_tune", {})
+    if not isinstance(auto_cfg, dict) or not auto_cfg.get("enabled", False):
+        return events
+    now = datetime.now(timezone.utc)
+    cooldown_hours = int(auto_cfg.get("cooldown_hours", 6))
+    last_ts_raw = store.get_memory(conn, "vision.auto_tune.last_ts")
+    if isinstance(last_ts_raw, str):
+        try:
+            last_ts = datetime.fromisoformat(last_ts_raw)
+        except ValueError:
+            last_ts = None
+        if last_ts is not None:
+            if last_ts.tzinfo is None:
+                last_ts = last_ts.replace(tzinfo=timezone.utc)
+            if (now - last_ts).total_seconds() < cooldown_hours * 3600:
+                return events
+
+    window_hours = int(auto_cfg.get("window_hours", 24))
+    cutoff = now - timedelta(hours=window_hours)
+
+    false_events = _normalize_feedback_events(store.get_memory(conn, "vision.false_positive_events"), now)
+    relabel_events = _normalize_feedback_events(store.get_memory(conn, "vision.relabel_events"), now)
+    false_recent = _filter_recent_events(false_events, cutoff)
+    relabel_recent = _filter_recent_events(relabel_events, cutoff)
+
+    store.set_memory(conn, "vision.false_positive_events", false_recent[-200:])
+    store.set_memory(conn, "vision.relabel_events", relabel_recent[-200:])
+
+    target_fp = int(auto_cfg.get("target_false_positives", 2))
+    target_relabels = int(auto_cfg.get("target_relabels", 1))
+    total_count = len(false_recent) + len(relabel_recent)
+    target_total = max(1, target_fp + target_relabels)
+    if total_count <= target_total:
+        return events
+
+    provider = module_cfg.get("provider", {}) if isinstance(module_cfg, dict) else {}
+    if not isinstance(provider, dict):
+        provider = {}
+    current_conf = float(provider.get("min_confidence", 0.7))
+    step = float(auto_cfg.get("step", 0.02))
+    floor = float(auto_cfg.get("min_confidence_floor", 0.4))
+    ceiling = float(auto_cfg.get("min_confidence_ceiling", 0.9))
+    new_conf = min(ceiling, max(floor, current_conf + step))
+    if new_conf <= current_conf:
+        return events
+
+    config_path = settings.modules_config_path()
+    config = module_config.load_config(str(config_path))
+    modules_cfg = config.get("modules", {})
+    if not isinstance(modules_cfg, dict):
+        modules_cfg = {}
+    face_cfg = modules_cfg.get("face.recognition", {})
+    if not isinstance(face_cfg, dict):
+        face_cfg = {}
+    provider_cfg = face_cfg.get("provider", {})
+    if not isinstance(provider_cfg, dict):
+        provider_cfg = {}
+    provider_cfg["min_confidence"] = round(new_conf, 3)
+    face_cfg["provider"] = provider_cfg
+    modules_cfg["face.recognition"] = face_cfg
+    config["modules"] = modules_cfg
+
+    proposed_text = module_config_change.render_config(config)
+    old_hash, new_hash, diff_hash, backup_path, diff = module_config_change.apply_module_config_change(
+        str(config_path), proposed_text
+    )
+    audit.append_jsonl(
+        str(settings.audit_path()),
+        {
+            "kind": "vision.auto_tune",
+            "ts": now.isoformat(),
+            "old_confidence": current_conf,
+            "new_confidence": new_conf,
+            "false_positive_count": len(false_recent),
+            "relabel_count": len(relabel_recent),
+            "window_hours": window_hours,
+            "backup_path": backup_path,
+            "diff_hash": diff_hash,
+            "old_hash": old_hash,
+            "new_hash": new_hash,
+        },
+    )
+    store.set_memory(conn, "vision.auto_tune.last_ts", now.isoformat())
+    store.set_memory(conn, "vision.auto_tune.last_confidence", new_conf)
+    events.append(
+        {
+            "source": "vision",
+            "type": "vision.auto_tune",
+            "payload": {
+                "old_confidence": current_conf,
+                "new_confidence": new_conf,
+                "false_positive_count": len(false_recent),
+                "relabel_count": len(relabel_recent),
+                "window_hours": window_hours,
+            },
+            "severity": "info",
+        }
+    )
+    return events
 
 
 def _record_policy_snapshot_if_changed(conn, policy: policy_mod.Policy) -> None:
@@ -308,6 +445,7 @@ def _collect_module_events(conn) -> List[Dict[str, Any]]:
         if _cooldown_elapsed(conn, "face.recognition", scan_interval):
             events.extend(vision.run_face_recognition(conn, module_cfg))
             _record_cooldown(conn, "face.recognition")
+        events.extend(_auto_tune_face_recognition(conn, module_cfg))
 
     if "voice.mic_rtsp" in enabled:
         module_cfg = modules_cfg.get("voice.mic_rtsp", {})

@@ -24,7 +24,7 @@ Pumpkin v3 is a persistent, context-aware digital steward that observes, decides
 ## Key capabilities
 - Home Assistant sync: entities, areas, persons, presence
 - Network discovery + deep scan + RTSP probe
-- Vision pipeline: snapshots, unknowns, recognition, CompreFace enroll
+- Vision pipeline: snapshots, unknowns, recognition, CompreFace enroll, auto-tuned thresholds
 - Car telemetry ingestion and reporting
 - Dog watch alerts (camera-based behavior alerts)
 - Shopping list for suggested hardware, with mark acquired
