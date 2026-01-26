@@ -76,6 +76,7 @@ _DEEP_SCAN_LOCK = threading.Lock()
 _DEEP_SCAN_RUNNING: set[str] = set()
 _last_seen = {}
 CODE_PROMPT_MAX_LEN = 8000
+_SERVER_START = time.time()
 
 
 def _bad_request(handler: BaseHTTPRequestHandler, message: str) -> None:
@@ -204,6 +205,76 @@ def _parse_bool(value: Any) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "y", "on"}
     return False
+
+
+def _compute_health_score(conn) -> int:
+    score = 100
+    heartbeat = store.latest_heartbeat(conn)
+    if heartbeat:
+        try:
+            hb_ts = heartbeat["ts"]
+            hb_time = datetime.fromisoformat(str(hb_ts).replace("Z", "+00:00"))
+            age = (datetime.now(timezone.utc) - hb_time).total_seconds()
+            if age > 600:
+                score -= 50
+            elif age > 120:
+                score -= 30
+        except Exception:
+            score -= 20
+    else:
+        score -= 50
+
+    pending = store.count_proposals_by_status(conn).get("pending", 0)
+    restricted = store.count_restricted_by_status(conn).get("pending", 0)
+    score -= min(20, pending * 2)
+    score -= min(20, restricted * 2)
+
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=30)
+    rows = conn.execute(
+        "SELECT severity FROM detections WHERE ts >= ?",
+        (cutoff.isoformat(),),
+    ).fetchall()
+    if rows:
+        warn_count = sum(1 for row in rows if row["severity"] in {"warn", "error", "bad", "med"})
+        score -= min(30, warn_count * 3)
+    return max(0, min(100, score))
+
+
+def _status_payload(conn) -> Dict[str, Any]:
+    heartbeat = store.latest_heartbeat(conn)
+    heartbeat_ts = heartbeat["ts"] if heartbeat else None
+    uptime_seconds = int(time.time() - _SERVER_START)
+    events = store.list_events(conn, limit=3)
+    recent = []
+    for row in events:
+        recent.append(
+            {
+                "ts": row["ts"],
+                "source": row["source"],
+                "type": row["type"],
+                "severity": row["severity"],
+            }
+        )
+    proposals_pending = store.count_proposals_by_status(conn).get("pending", 0)
+    restricted_pending = store.count_restricted_by_status(conn).get("pending", 0)
+    return {
+        "server_time": datetime.now(timezone.utc).isoformat(),
+        "uptime_seconds": uptime_seconds,
+        "version": settings.version(),
+        "build_id": settings.build_id(),
+        "heartbeat": heartbeat_ts,
+        "health_score": _compute_health_score(conn),
+        "recent_changes": recent,
+        "pending_approvals": {
+            "proposals": proposals_pending,
+            "restricted_requests": restricted_pending,
+            "total": proposals_pending + restricted_pending,
+        },
+        "autonomy": {
+            "mode": store.get_setting(conn, "autonomy.mode") or "OPERATOR",
+            "safe_mode": settings.safe_mode_enabled(),
+        },
+    }
 
 
 def _store_async_result(
@@ -4857,6 +4928,12 @@ class VoiceHandler(BaseHTTPRequestHandler):
             if self.path == "/proposals/reject":
                 self._handle_proposal_decision("rejected")
                 return
+            if self.path == "/restricted/approve":
+                self._handle_restricted_decision("approved")
+                return
+            if self.path == "/restricted/deny":
+                self._handle_restricted_decision("rejected")
+                return
             if self.path == "/llm/config":
                 self._handle_llm_config()
                 return
@@ -4901,6 +4978,12 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 return
             if self.path == "/notifications/test":
                 self._handle_notifications_test()
+                return
+            if self.path == "/autonomy/mode":
+                self._handle_autonomy_mode()
+                return
+            if self.path == "/demo/incidents":
+                self._handle_demo_incident()
                 return
             self.send_response(404)
             self.end_headers()
@@ -4995,6 +5078,10 @@ class VoiceHandler(BaseHTTPRequestHandler):
             parsed = urlparse(self.path)
             path = parsed.path
             params = parse_qs(parsed.query)
+            if path == "/status":
+                conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+                _send_json(self, 200, _status_payload(conn))
+                return
             if path == "/health":
                 metrics = telemetry.collect_health_metrics()
                 _send_json(
@@ -5018,6 +5105,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "endpoints": [
                             "GET /",
                             "GET /health",
+                            "GET /status",
                             "GET /ha/callback",
                             "GET /ui",
                             "GET /ui/memory",
@@ -5042,6 +5130,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "GET /openapi.json",
                             "GET /ask/result",
                             "GET /proposals",
+                            "GET /restricted_requests",
+                            "GET /decisions",
+                            "GET /briefings",
                             "GET /summary",
                             "GET /memory",
                             "GET /timeline",
@@ -5077,6 +5168,10 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "POST /satellite/voice",
                             "POST /voice/mic/config",
                             "POST /voice/mic/test",
+                            "POST /restricted/approve",
+                            "POST /restricted/deny",
+                            "POST /autonomy/mode",
+                            "POST /demo/incidents",
                         ],
                     },
                 )
@@ -5394,6 +5489,78 @@ class VoiceHandler(BaseHTTPRequestHandler):
                     },
                 )
                 return
+            if path == "/restricted_requests":
+                status = params.get("status", [None])[0]
+                conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+                rows = store.list_restricted_requests(conn, status=status if isinstance(status, str) else None)
+                items = []
+                for row in rows:
+                    try:
+                        details = json.loads(row["details_json"])
+                    except Exception:
+                        details = {}
+                    items.append(
+                        {
+                            "id": row["id"],
+                            "summary": row["summary"],
+                            "details": details,
+                            "risk": row["risk"],
+                            "expected_outcome": row["expected_outcome"],
+                            "status": row["status"],
+                            "ts_created": row["ts_created"],
+                        }
+                    )
+                _send_json(self, 200, {"count": len(items), "restricted_requests": items})
+                return
+            if path == "/decisions":
+                limit = _parse_limit(params.get("limit", [None])[0], default=20, max_limit=200)
+                conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+                rows = store.list_decisions(conn, limit=limit)
+                decisions = []
+                for row in rows:
+                    try:
+                        evidence = json.loads(row["evidence_json"]) if row["evidence_json"] else {}
+                    except Exception:
+                        evidence = {}
+                    decisions.append(
+                        {
+                            "id": row["id"],
+                            "ts": row["ts"],
+                            "detection_id": row["detection_id"],
+                            "observation": row["observation"],
+                            "reasoning": row["reasoning"],
+                            "decision": row["decision"],
+                            "action_type": row["action_type"],
+                            "action_id": row["action_id"],
+                            "proposal_id": row["proposal_id"],
+                            "restricted_id": row["restricted_id"],
+                            "verification_status": row["verification_status"],
+                            "evidence": evidence,
+                        }
+                    )
+                _send_json(self, 200, {"count": len(decisions), "decisions": decisions})
+                return
+            if path == "/briefings":
+                limit = _parse_limit(params.get("limit", [None])[0], default=20, max_limit=200)
+                conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+                rows = store.list_briefings(conn, limit=limit)
+                briefings = []
+                for row in rows:
+                    try:
+                        details = json.loads(row["details_json"])
+                    except Exception:
+                        details = {}
+                    briefings.append(
+                        {
+                            "id": row["id"],
+                            "ts": row["ts"],
+                            "period": row["period"],
+                            "summary": row["summary"],
+                            "details": details,
+                        }
+                    )
+                _send_json(self, 200, {"count": len(briefings), "briefings": briefings})
+                return
             if path == "/timeline":
                 limit = _parse_limit(params.get("limit", [None])[0], default=20, max_limit=200)
                 source = params.get("source", [None])[0]
@@ -5450,6 +5617,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 status = params.get("status", ["pending"])[0]
                 limit = _parse_limit(params.get("limit", [None])[0], default=10)
                 conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+                status_payload = _status_payload(conn)
                 last_device = store.get_memory(conn, "voice.last_device")
                 if not isinstance(last_device, str):
                     last_device = None
@@ -5617,7 +5785,8 @@ class VoiceHandler(BaseHTTPRequestHandler):
                     self,
                     200,
                     {
-                        "status": "ok",
+                        "status": status_payload,
+                        "summary_status": "ok",
                         "identity": _identity_snapshot(conn, last_device),
                         "heartbeat": heartbeat_event,
                         "system_snapshot": system_snapshot,
@@ -5792,6 +5961,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "paths": {
                             "/": {"get": {"summary": "Service metadata"}},
                             "/health": {"get": {"summary": "Health check"}},
+                            "/status": {"get": {"summary": "Status snapshot"}},
                             "/ha/callback": {"get": {"summary": "Home Assistant OAuth callback redirect"}},
                             "/config": {"get": {"summary": "Runtime config"}},
                             "/catalog": {"get": {"summary": "Module catalog"}},
@@ -5800,6 +5970,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "/audit": {"get": {"summary": "Audit log tail"}},
                             "/actions": {"get": {"summary": "Recent action executions"}},
                             "/approvals": {"get": {"summary": "Recent approvals"}},
+                            "/decisions": {"get": {"summary": "Decision feed"}},
+                            "/briefings": {"get": {"summary": "Briefing feed"}},
+                            "/restricted_requests": {"get": {"summary": "Restricted requests"}},
                             "/shopping": {"get": {"summary": "Hardware shopping list"}},
                             "/notifications": {"get": {"summary": "Recent alerts"}},
                             "/thoughts": {"get": {"summary": "Recent thought stream"}},
@@ -6105,6 +6278,74 @@ class VoiceHandler(BaseHTTPRequestHandler):
                                     },
                                 }
                             },
+                            "/restricted/approve": {
+                                "post": {
+                                    "summary": "Approve a restricted request",
+                                    "requestBody": {
+                                        "content": {
+                                            "application/json": {
+                                                "schema": {
+                                                    "type": "object",
+                                                    "properties": {"id": {"type": "integer"}},
+                                                    "required": ["id"],
+                                                }
+                                            }
+                                        }
+                                    },
+                                }
+                            },
+                            "/restricted/deny": {
+                                "post": {
+                                    "summary": "Deny a restricted request",
+                                    "requestBody": {
+                                        "content": {
+                                            "application/json": {
+                                                "schema": {
+                                                    "type": "object",
+                                                    "properties": {"id": {"type": "integer"}},
+                                                    "required": ["id"],
+                                                }
+                                            }
+                                        }
+                                    },
+                                }
+                            },
+                            "/autonomy/mode": {
+                                "post": {
+                                    "summary": "Set autonomy mode",
+                                    "requestBody": {
+                                        "content": {
+                                            "application/json": {
+                                                "schema": {
+                                                    "type": "object",
+                                                    "properties": {"mode": {"type": "string"}},
+                                                    "required": ["mode"],
+                                                }
+                                            }
+                                        }
+                                    },
+                                }
+                            },
+                            "/demo/incidents": {
+                                "post": {
+                                    "summary": "Inject a demo incident",
+                                    "requestBody": {
+                                        "content": {
+                                            "application/json": {
+                                                "schema": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "type": {"type": "string"},
+                                                        "target": {"type": "string"},
+                                                        "severity": {"type": "string"},
+                                                    },
+                                                    "required": ["type"],
+                                                }
+                                            }
+                                        }
+                                    },
+                                }
+                            },
                             "/ingest": {
                                 "post": {
                                     "summary": "Ingest text payload",
@@ -6400,6 +6641,26 @@ class VoiceHandler(BaseHTTPRequestHandler):
         if not isinstance(data, dict):
             _bad_request(self, "JSON body must be an object")
             return
+        required_key = os.getenv("PUMPKIN_INGEST_KEY")
+        if required_key:
+            header_key = self.headers.get("X-Pumpkin-Key")
+            auth_header = self.headers.get("Authorization")
+            token = None
+            if isinstance(auth_header, str) and auth_header.startswith("Bearer "):
+                token = auth_header[len("Bearer ") :].strip()
+            if header_key:
+                token = header_key.strip()
+            if token != required_key:
+                _bad_request(self, "unauthorized")
+                return
+        schema_version = data.get("schema_version")
+        if not isinstance(schema_version, int) or schema_version != 1:
+            _bad_request(self, "schema_version must be 1")
+            return
+        request_id = data.get("request_id")
+        if not isinstance(request_id, str) or not request_id.strip():
+            _bad_request(self, "request_id must be a string")
+            return
         text = data.get("text")
         if not isinstance(text, str):
             _bad_request(self, "text must be a string")
@@ -6424,6 +6685,10 @@ class VoiceHandler(BaseHTTPRequestHandler):
         if ha_user_name is not None and not isinstance(ha_user_name, str):
             _bad_request(self, "ha_user_name must be a string")
             return
+        location = data.get("location")
+        if location is not None and not isinstance(location, dict):
+            _bad_request(self, "location must be an object")
+            return
         truncated = _truncate_text(text, INGEST_LOG_TEXT_LIMIT)
         print(
             "PumpkinVoice ingest "
@@ -6431,23 +6696,20 @@ class VoiceHandler(BaseHTTPRequestHandler):
         )
         try:
             conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
-            header_api_key = self.headers.get("X-Pumpkin-OpenAI-Key")
-            if header_api_key:
-                try:
-                    store.set_memory(conn, "llm.openai_api_key", header_api_key.strip())
-                except Exception:
-                    pass
             _apply_ha_identity(conn, device, ha_user_id, ha_user_name)
-            store.insert_event(
+            event_id = store.insert_event(
                 conn,
                 source="voice",
                 event_type="voice.ingest",
                 payload={
                     "text": text,
+                    "schema_version": schema_version,
+                    "request_id": request_id,
                     "source": source,
                     "device": device,
                     "ha_user_id": ha_user_id,
                     "ha_user_name": ha_user_name,
+                    "location": location,
                 },
                 severity="info",
             )
@@ -6459,8 +6721,10 @@ class VoiceHandler(BaseHTTPRequestHandler):
             self,
             200,
             {
-                "status": "ok",
-                "received": {"text": text, "source": source, "device": device},
+                "accepted": True,
+                "request_id": request_id,
+                "received_at": datetime.now(timezone.utc).isoformat(),
+                "correlation_ids": {"event_id": event_id if "event_id" in locals() else None},
             },
         )
 
@@ -6737,6 +7001,97 @@ class VoiceHandler(BaseHTTPRequestHandler):
                     severity="info",
                 )
         _send_json(self, 200, {"status": "ok", "id": proposal_id, "decision": decision})
+
+    def _handle_restricted_decision(self, decision: str) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+        try:
+            data = _parse_json(body)
+        except ValueError:
+            _bad_request(self, "invalid JSON")
+            return
+        if not isinstance(data, dict):
+            _bad_request(self, "JSON body must be an object")
+            return
+        request_id = data.get("id")
+        if not isinstance(request_id, int):
+            _bad_request(self, "id must be an integer")
+            return
+        actor = data.get("actor")
+        if actor is not None and not isinstance(actor, str):
+            _bad_request(self, "actor must be a string")
+            return
+        reason = data.get("reason")
+        if reason is not None and not isinstance(reason, str):
+            _bad_request(self, "reason must be a string")
+            return
+        conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+        row = conn.execute(
+            "SELECT * FROM restricted_requests WHERE id = ?", (request_id,)
+        ).fetchone()
+        if not row:
+            _send_json(self, 404, {"error": "restricted_request_not_found"})
+            return
+        policy_hash = row["policy_hash"]
+        store.insert_restricted_approval(
+            conn,
+            restricted_id=request_id,
+            actor=actor or "android",
+            decision=decision,
+            reason=reason,
+            policy_hash=policy_hash,
+        )
+        store.update_restricted_request_status(conn, request_id, decision)
+        _send_json(self, 200, {"status": "ok", "id": request_id, "decision": decision})
+
+    def _handle_autonomy_mode(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+        try:
+            data = _parse_json(body)
+        except ValueError:
+            _bad_request(self, "invalid JSON")
+            return
+        if not isinstance(data, dict):
+            _bad_request(self, "JSON body must be an object")
+            return
+        mode = data.get("mode")
+        if not isinstance(mode, str):
+            _bad_request(self, "mode must be a string")
+            return
+        mode = mode.strip().upper()
+        if mode not in {"OBSERVER", "OPERATOR", "STEWARD"}:
+            _bad_request(self, "mode must be OBSERVER, OPERATOR, or STEWARD")
+            return
+        conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+        store.set_setting(conn, "autonomy.mode", mode)
+        _send_json(self, 200, {"status": "ok", "mode": mode})
+
+    def _handle_demo_incident(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+        try:
+            data = _parse_json(body)
+        except ValueError:
+            _bad_request(self, "invalid JSON")
+            return
+        if not isinstance(data, dict):
+            _bad_request(self, "JSON body must be an object")
+            return
+        event_type = data.get("type") or "demo.incident"
+        severity = data.get("severity") or "warn"
+        summary = data.get("summary") or "Demo incident injected"
+        payload = data.get("payload") if isinstance(data.get("payload"), dict) else {}
+        payload.setdefault("summary", summary)
+        conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+        event_id = store.insert_event(
+            conn,
+            source="demo",
+            event_type=str(event_type),
+            payload=payload,
+            severity=str(severity),
+        )
+        _send_json(self, 200, {"status": "ok", "event_id": event_id})
 
     def _handle_llm_config(self) -> None:
         length = int(self.headers.get("Content-Length", "0"))
