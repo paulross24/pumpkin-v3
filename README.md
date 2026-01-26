@@ -96,6 +96,7 @@ Pumpkin records:
 - `/ui/proposals` Proposals + restricted approvals
 - `/ui/audit` Audit log feed
 - `/ui/settings` Autonomy + LLM configuration
+- Decision cards include risk/confidence/reversibility scoring
 - `/ui/vision` Vision review + enroll + correction
 - `/ui/mic` Mic diagnostics and transcription
 - `/ui/shopping` Hardware suggestions and status

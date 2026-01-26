@@ -59,6 +59,25 @@
         gap: 6px;
         margin-bottom: 10px;
       }
+      .badge-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: rgba(230, 124, 46, 0.12);
+        color: var(--pumpkin-dark);
+        font-size: 11px;
+        font-weight: 600;
+      }
+      .badge strong {
+        font-weight: 700;
+      }
       .meta {
         font-size: 12px;
         color: var(--muted);
@@ -148,8 +167,31 @@
             details.textContent = "No detection details";
           }
 
+          const badges = document.createElement("div");
+          badges.className = "badge-row";
+          const scores = item.evidence?.scores || null;
+          if (scores) {
+            const addBadge = (label, value) => {
+              const badge = document.createElement("div");
+              badge.className = "badge";
+              badge.innerHTML = `${label}: <strong>${value}</strong>`;
+              badges.appendChild(badge);
+            };
+            if (scores.risk != null) addBadge("risk", scores.risk);
+            if (scores.confidence != null) addBadge("confidence", scores.confidence);
+            if (scores.reversibility != null) addBadge("reversible", scores.reversibility);
+            if (scores.lane) addBadge("lane", scores.lane);
+            if (scores.mode) addBadge("mode", scores.mode);
+          } else {
+            const badge = document.createElement("div");
+            badge.className = "badge";
+            badge.textContent = "scores: n/a";
+            badges.appendChild(badge);
+          }
+
           card.appendChild(title);
           card.appendChild(meta);
+          card.appendChild(badges);
           card.appendChild(observation);
           card.appendChild(reasoning);
           card.appendChild(details);

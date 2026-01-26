@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import sqlite3
@@ -672,7 +673,6 @@ def _watchdog_stalled_actions(conn, policy: policy_mod.Policy, autonomy_cfg: Dic
         return
     cutoff = datetime.now(timezone.utc).timestamp() - (stall_minutes * 60)
     approved = store.list_proposals(conn, status="approved", limit=200)
-    updated_queue = list(queue_ids)
     for row in approved:
         try:
             details = json.loads(row["details_json"])
@@ -1439,6 +1439,49 @@ def _apply_autonomous_action(
         return {"status": "failed", "action_id": action_id, "error": str(exc)}
 
 
+def _score_decision(
+    detection: Dict[str, Any],
+    action_type: str,
+    lane: str,
+    mode: str,
+) -> Dict[str, Any]:
+    severity = str(detection.get("severity") or "info").lower()
+    base_risk = {"info": 0.2, "warn": 0.5, "warning": 0.5, "error": 0.6, "critical": 0.8}.get(
+        severity, 0.4
+    )
+    lane_risk = {"A": -0.1, "B": 0.1, "C": 0.25}.get(lane, 0.0)
+    mode_risk = {"OBSERVER": 0.0, "OPERATOR": 0.0, "STEWARD": 0.05}.get(mode, 0.0)
+    risk = min(1.0, max(0.0, base_risk + lane_risk + mode_risk))
+
+    details = detection.get("details") if isinstance(detection.get("details"), dict) else {}
+    raw_confidence = details.get("confidence") or details.get("score")
+    if isinstance(raw_confidence, (int, float)):
+        confidence = min(1.0, max(0.0, float(raw_confidence)))
+    else:
+        confidence = {"info": 0.6, "warn": 0.7, "warning": 0.7, "error": 0.75, "critical": 0.8}.get(
+            severity, 0.65
+        )
+
+    reversible_map = {
+        "notify.local": 0.95,
+        "notify.ha": 0.9,
+        "homeassistant.service": 0.7,
+        "homeassistant.script": 0.6,
+        "network.discovery": 0.9,
+        "code.apply_patch": 0.2,
+        "ops.restart": 0.5,
+    }
+    reversibility = reversible_map.get(action_type, 0.5)
+
+    return {
+        "risk": round(risk, 2),
+        "confidence": round(confidence, 2),
+        "reversibility": round(reversibility, 2),
+        "lane": lane,
+        "mode": mode,
+    }
+
+
 def _process_detections(
     conn,
     policy: policy_mod.Policy,
@@ -1460,6 +1503,7 @@ def _process_detections(
         action_id = None
         verification_status = None
         outcome = {}
+        scores = _score_decision(detection, action_type, lane, mode)
 
         detection_id = store.insert_detection(
             conn,
@@ -1555,7 +1599,10 @@ def _process_detections(
             proposal_id=proposal_id,
             restricted_id=restricted_id,
             verification_status=verification_status,
-            evidence=outcome if isinstance(outcome, dict) else {},
+            evidence={
+                "scores": scores,
+                "outcome": outcome if isinstance(outcome, dict) else {},
+            },
         )
     return auto_actions
 
@@ -1577,6 +1624,40 @@ def _inventory_change_event(conn) -> Dict[str, Any] | None:
         },
         "severity": "info",
     }
+
+
+def _update_world_state(
+    conn,
+    system_snapshot: Dict[str, Any] | None,
+    ha_summary: Dict[str, Any],
+    network_snapshot: Dict[str, Any],
+    inventory: Dict[str, Any],
+    insights_list: List[Dict[str, Any]],
+) -> None:
+    state = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "system": system_snapshot or {},
+        "homeassistant": ha_summary or {},
+        "network": network_snapshot or {},
+        "inventory": inventory or {},
+        "insights": insights_list[:5],
+    }
+    digest = hashlib.sha256(
+        json.dumps(state, sort_keys=True, ensure_ascii=True).encode("utf-8")
+    ).hexdigest()
+    last_digest = store.get_memory(conn, "world.state_hash")
+    if last_digest == digest:
+        return
+    store.set_memory(conn, "world.state_hash", digest)
+    store.set_memory(conn, "world.state", state)
+    audit.append_jsonl(
+        str(settings.audit_path()),
+        {
+            "kind": "world.state",
+            "ts": state["ts"],
+            "digest": digest,
+        },
+    )
 
 
 def _parse_ts(value: str) -> datetime | None:
@@ -1946,6 +2027,7 @@ def _execute_approved(conn, policy: policy_mod.Policy, autonomy_cfg: Dict[str, A
     for item in queue:
         if isinstance(item, dict) and isinstance(item.get("id"), int):
             queue_ids.append(item["id"])
+    updated_queue = list(queue_ids)
     if queue_ids:
         order = {pid: idx for idx, pid in enumerate(queue_ids)}
         approved = sorted(
@@ -2391,6 +2473,15 @@ def run_once() -> Dict[str, Any]:
     event_insights = insights.filter_recent_insights(conn, event_insights)
     insights.record_insights(conn, event_insights)
     all_insights = list(insight_items) + list(event_insights)
+    inventory_snapshot = inventory_mod.snapshot(conn)
+    _update_world_state(
+        conn,
+        system_snapshot=system_snapshot,
+        ha_summary=ha_summary if isinstance(ha_summary, dict) else {},
+        network_snapshot=network_snapshot if isinstance(network_snapshot, dict) else {},
+        inventory=inventory_snapshot if isinstance(inventory_snapshot, dict) else {},
+        insights_list=all_insights,
+    )
     brief_times = insights.briefing_times()
     for idx, briefing_time in enumerate(brief_times):
         insights.maybe_daily_briefing(
