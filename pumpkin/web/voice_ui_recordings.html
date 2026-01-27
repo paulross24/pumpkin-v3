@@ -158,6 +158,11 @@
             desc.className = "meta";
             desc.textContent = `summary: ${item.description}`;
             card.appendChild(desc);
+          } else if (item.description_error) {
+            const descErr = document.createElement("div");
+            descErr.className = "meta";
+            descErr.textContent = `summary unavailable (${item.description_error})`;
+            card.appendChild(descErr);
           }
           card.appendChild(play);
           listNode.appendChild(card);

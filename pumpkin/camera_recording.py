@@ -127,10 +127,10 @@ def _load_llm_config(conn) -> Dict[str, Any]:
     return {"api_key": api_key, "model": model, "base_url": base_url}
 
 
-def _call_openai_vision_json(prompt: str, image_bytes: bytes, cfg: Dict[str, Any]) -> Dict[str, Any] | None:
+def _call_openai_vision_json(prompt: str, image_bytes: bytes, cfg: Dict[str, Any]) -> Dict[str, Any]:
     api_key = cfg.get("api_key")
     if not api_key:
-        return None
+        return {"error": "openai_api_key_missing"}
     model = cfg.get("model") or "gpt-4o-mini"
     base_url = cfg.get("base_url") or "https://api.openai.com/v1/chat/completions"
     image_b64 = base64.b64encode(image_bytes).decode("ascii")
@@ -167,20 +167,25 @@ def _call_openai_vision_json(prompt: str, image_bytes: bytes, cfg: Dict[str, Any
     try:
         with request.urlopen(req, timeout=20) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-    except url_error.HTTPError:
-        return None
-    except url_error.URLError:
-        return None
+    except url_error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8")
+        except Exception:
+            detail = str(exc)
+        return {"error": f"openai_http_{getattr(exc, 'code', 'error')}", "detail": detail}
+    except url_error.URLError as exc:
+        return {"error": "openai_request_failed", "detail": str(exc)}
     except json.JSONDecodeError:
-        return None
+        return {"error": "openai_invalid_json"}
     try:
         content = data["choices"][0]["message"]["content"]
     except Exception:
-        return None
+        return {"error": "openai_response_missing_content"}
     try:
         return json.loads(content)
     except json.JSONDecodeError:
-        return None
+        return {"error": "openai_response_invalid_json", "raw": content}
 
 
 def _cleanup_old(recording_root: Path, retention_hours: int) -> int:
@@ -271,7 +276,12 @@ def run_recording(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
         if frame:
             llm_cfg = _load_llm_config(conn)
             analysis = _call_openai_vision_json(describe_prompt, frame, llm_cfg)
-            if isinstance(analysis, dict):
+            if isinstance(analysis, dict) and analysis.get("error"):
+                description_payload = {
+                    "description_error": analysis.get("error"),
+                    "description_error_detail": analysis.get("detail"),
+                }
+            elif isinstance(analysis, dict):
                 description_payload = {
                     "description": analysis.get("summary"),
                     "description_objects": analysis.get("objects"),
