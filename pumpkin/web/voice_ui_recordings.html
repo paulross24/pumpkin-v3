@@ -153,6 +153,12 @@
           });
           card.appendChild(label);
           card.appendChild(meta);
+          if (item.description) {
+            const desc = document.createElement("div");
+            desc.className = "meta";
+            desc.textContent = `summary: ${item.description}`;
+            card.appendChild(desc);
+          }
           card.appendChild(play);
           listNode.appendChild(card);
         });

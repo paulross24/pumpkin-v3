@@ -5,6 +5,10 @@ from __future__ import annotations
 import os
 import subprocess
 from datetime import datetime, timezone, timedelta
+import base64
+import json
+from urllib import error as url_error
+from urllib import request
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -89,6 +93,96 @@ def _record_segment(
     return {"status": "ok"}
 
 
+def _capture_frame(output_path: Path, ffmpeg_path: str, sample_seconds: int) -> bytes | None:
+    args = [
+        ffmpeg_path,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-ss",
+        str(sample_seconds),
+        "-i",
+        str(output_path),
+        "-frames:v",
+        "1",
+        "-f",
+        "image2pipe",
+        "-vcodec",
+        "mjpeg",
+        "pipe:1",
+    ]
+    try:
+        result = subprocess.run(args, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+    except Exception:
+        return None
+    return result.stdout if result.stdout else None
+
+
+def _load_llm_config(conn) -> Dict[str, Any]:
+    api_key = store.get_memory(conn, "llm.openai_api_key") or os.getenv("PUMPKIN_OPENAI_API_KEY")
+    model = store.get_memory(conn, "llm.openai_model") or os.getenv("PUMPKIN_OPENAI_MODEL", "gpt-4o-mini")
+    base_url = store.get_memory(conn, "llm.openai_base_url") or os.getenv(
+        "PUMPKIN_OPENAI_BASE_URL", "https://api.openai.com/v1/chat/completions"
+    )
+    return {"api_key": api_key, "model": model, "base_url": base_url}
+
+
+def _call_openai_vision_json(prompt: str, image_bytes: bytes, cfg: Dict[str, Any]) -> Dict[str, Any] | None:
+    api_key = cfg.get("api_key")
+    if not api_key:
+        return None
+    model = cfg.get("model") or "gpt-4o-mini"
+    base_url = cfg.get("base_url") or "https://api.openai.com/v1/chat/completions"
+    image_b64 = base64.b64encode(image_bytes).decode("ascii")
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": "You describe home camera frames. Respond with strict JSON only.",
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"},
+                    },
+                ],
+            },
+        ],
+        "temperature": 0.2,
+        "max_tokens": 220,
+    }
+    req = request.Request(
+        base_url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+    try:
+        with request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except url_error.HTTPError:
+        return None
+    except url_error.URLError:
+        return None
+    except json.JSONDecodeError:
+        return None
+    try:
+        content = data["choices"][0]["message"]["content"]
+    except Exception:
+        return None
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        return None
+
+
 def _cleanup_old(recording_root: Path, retention_hours: int) -> int:
     if retention_hours <= 0:
         return 0
@@ -118,6 +212,12 @@ def run_recording(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
     duration_seconds = int(module_cfg.get("segment_seconds", 60))
     retention_hours = int(module_cfg.get("retention_hours", 24))
     ffmpeg_path = str(module_cfg.get("ffmpeg_path", "ffmpeg"))
+    describe_enabled = bool(module_cfg.get("describe_enabled", False))
+    describe_sample_seconds = int(module_cfg.get("describe_sample_seconds", 1))
+    describe_prompt = module_cfg.get(
+        "describe_prompt",
+        "Describe what is happening in this camera frame. Return JSON: {\"summary\": str, \"objects\": [str], \"activity\": str, \"confidence\": float}.",
+    )
 
     registry = cameras_mod.load_registry(conn)
     rtsp_url = None
@@ -165,6 +265,20 @@ def run_recording(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
     except Exception:
         size_bytes = None
 
+    description_payload: Dict[str, Any] = {}
+    if describe_enabled:
+        frame = _capture_frame(output_path, ffmpeg_path, describe_sample_seconds)
+        if frame:
+            llm_cfg = _load_llm_config(conn)
+            analysis = _call_openai_vision_json(describe_prompt, frame, llm_cfg)
+            if isinstance(analysis, dict):
+                description_payload = {
+                    "description": analysis.get("summary"),
+                    "description_objects": analysis.get("objects"),
+                    "description_activity": analysis.get("activity"),
+                    "description_confidence": analysis.get("confidence"),
+                }
+
     cameras_mod.record_event(
         conn,
         "camera.recorded",
@@ -175,6 +289,7 @@ def run_recording(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
             "start_ts": start_ts,
             "duration_seconds": duration_seconds,
             "size_bytes": size_bytes,
+            **description_payload,
         },
         severity="info",
     )

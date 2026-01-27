@@ -5712,6 +5712,10 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "start_ts": payload.get("start_ts"),
                             "duration_seconds": payload.get("duration_seconds"),
                             "size_bytes": payload.get("size_bytes"),
+                            "description": payload.get("description"),
+                            "description_objects": payload.get("description_objects"),
+                            "description_activity": payload.get("description_activity"),
+                            "description_confidence": payload.get("description_confidence"),
                             "path": path_val,
                             "recording_url": recording_url,
                         }
