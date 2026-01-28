@@ -469,6 +469,47 @@ def _cleanup_old(recording_root: Path, retention_hours: int) -> int:
     return removed
 
 
+def _concat_segments(ffmpeg_path: str, segment_paths: List[Path], output_path: Path) -> Dict[str, Any]:
+    if not segment_paths:
+        return {"status": "error", "error": "no_segments"}
+    if len(segment_paths) == 1:
+        try:
+            segment_paths[0].replace(output_path)
+            return {"status": "ok", "path": str(output_path)}
+        except Exception as exc:
+            return {"status": "error", "error": "single_move_failed", "detail": str(exc)}
+    list_path = output_path.with_suffix(".txt")
+    try:
+        with list_path.open("w", encoding="utf-8") as handle:
+            for seg in segment_paths:
+                handle.write(f"file '{seg.as_posix()}'\n")
+        cmd = [
+            ffmpeg_path,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(list_path),
+            "-c",
+            "copy",
+            str(output_path),
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            return {"status": "error", "error": "concat_failed", "detail": proc.stderr.strip()}
+        return {"status": "ok", "path": str(output_path)}
+    finally:
+        try:
+            if list_path.exists():
+                list_path.unlink()
+        except Exception:
+            pass
+
+
 def run_recording(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
     events: List[Dict[str, Any]] = []
     if not module_cfg.get("enabled", True):
@@ -487,6 +528,8 @@ def run_recording(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
     motion_threshold = float(module_cfg.get("motion_threshold", 0.08))
     motion_sample_seconds = int(module_cfg.get("motion_sample_seconds", 1))
     motion_grace_seconds = int(module_cfg.get("motion_grace_seconds", 10))
+    motion_extend = bool(module_cfg.get("motion_extend", True))
+    max_record_seconds = int(module_cfg.get("max_record_seconds", 300))
     describe_prompt = module_cfg.get(
         "describe_prompt",
         "Describe what is happening in this camera frame. Return JSON: {\"summary\": str, \"objects\": [str], \"activity\": str, \"confidence\": float}.",
@@ -539,8 +582,59 @@ def run_recording(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
     output_dir = _recording_dir(str(camera_id))
     filename = f"{camera_id}-{start_ts.replace(':', '').replace('-', '')}.mp4"
     output_path = output_dir / filename
-    result = _record_segment(rtsp_url, output_path, duration_seconds, ffmpeg_path)
-    if result.get("status") != "ok":
+    segment_paths: List[Path] = []
+    total_seconds = 0
+    while True:
+        segment_name = f"{camera_id}-{start_ts.replace(':', '').replace('-', '')}-{len(segment_paths)+1:03d}.mp4"
+        segment_path = output_dir / segment_name
+        result = _record_segment(rtsp_url, segment_path, duration_seconds, ffmpeg_path)
+        if result.get("status") != "ok":
+            events.append(
+                {
+                    "source": "vision",
+                    "type": "camera.recording_failed",
+                    "payload": {
+                        "camera_id": camera_id,
+                        "label": label,
+                        "error": result.get("error"),
+                        "detail": result.get("detail"),
+                    },
+                    "severity": "warn",
+                }
+            )
+            return events
+        segment_paths.append(segment_path)
+        total_seconds += duration_seconds
+
+        if not motion_only or not motion_extend:
+            break
+        if total_seconds >= max_record_seconds:
+            events.append(
+                {
+                    "source": "vision",
+                    "type": "camera.recording_capped",
+                    "payload": {"camera_id": camera_id, "label": label, "max_seconds": max_record_seconds},
+                    "severity": "info",
+                }
+            )
+            break
+        motion_frame = _capture_rtsp_gray(rtsp_url, ffmpeg_path, motion_sample_seconds)
+        has_motion = _motion_detected(conn, str(camera_id), motion_frame, motion_threshold)
+        if not has_motion:
+            last_hit = store.get_memory(conn, f"camera.recording.motion_last_hit.{camera_id}")
+            if last_hit:
+                try:
+                    last_dt = datetime.fromisoformat(str(last_hit))
+                    age = (datetime.now(timezone.utc) - last_dt).total_seconds()
+                    if age <= motion_grace_seconds:
+                        has_motion = True
+                except Exception:
+                    has_motion = False
+        if not has_motion:
+            break
+
+    concat_result = _concat_segments(ffmpeg_path, segment_paths, output_path)
+    if concat_result.get("status") != "ok":
         events.append(
             {
                 "source": "vision",
@@ -548,13 +642,19 @@ def run_recording(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "payload": {
                     "camera_id": camera_id,
                     "label": label,
-                    "error": result.get("error"),
-                    "detail": result.get("detail"),
+                    "error": concat_result.get("error"),
+                    "detail": concat_result.get("detail"),
                 },
                 "severity": "warn",
             }
         )
         return events
+    for seg in segment_paths:
+        if seg != output_path:
+            try:
+                seg.unlink()
+            except Exception:
+                pass
 
     size_bytes = None
     try:
