@@ -491,6 +491,21 @@ def _collect_thoughts(conn: sqlite3.Connection, limit: int = 12) -> List[Dict[st
             )
             if len(items) >= limit:
                 break
+    if not items:
+        hb = _latest_event(conn, "heartbeat") or _latest_event(conn, "system.snapshot")
+        hb_ts = hb.get("ts") if isinstance(hb, dict) else None
+        message = "pulse: monitoring"
+        if hb_ts:
+            message = f"pulse: monitoring (last heartbeat {hb_ts})"
+        items.append(
+            {
+                "id": 0,
+                "ts": hb_ts,
+                "type": "pulse",
+                "severity": "info",
+                "message": message,
+            }
+        )
     return items
 
 
