@@ -472,6 +472,36 @@ def _collect_thoughts(conn: sqlite3.Connection, limit: int = 12) -> List[Dict[st
                 "message": f"llm: {provider} {model} ({latency_text})",
             }
         )
+    try:
+        pending_count = len(store.list_proposals(conn, status="pending", limit=200))
+    except Exception:
+        pending_count = 0
+    try:
+        alerts_count = len(_list_alerts(conn, limit=50))
+    except Exception:
+        alerts_count = 0
+    device_count = 0
+    try:
+        snapshot = store.get_memory(conn, "network.discovery.snapshot") or {}
+        device_count = int(snapshot.get("device_count") or 0)
+    except Exception:
+        device_count = 0
+    hb = _latest_event(conn, "heartbeat") or _latest_event(conn, "system.snapshot")
+    hb_ts = hb.get("ts") if isinstance(hb, dict) else None
+    pulse_parts = []
+    pulse_parts.append(f"{device_count} devices")
+    pulse_parts.append(f"{pending_count} proposals")
+    pulse_parts.append(f"{alerts_count} alerts")
+    pulse_message = "pulse: " + ", ".join(pulse_parts)
+    items.append(
+        {
+            "id": 0,
+            "ts": hb_ts,
+            "type": "pulse",
+            "severity": "info",
+            "message": pulse_message,
+        }
+    )
     for row in rows:
         event_type = row["type"] or ""
         if event_type in THOUGHT_EVENT_TYPES or event_type.startswith("insight."):
@@ -491,21 +521,6 @@ def _collect_thoughts(conn: sqlite3.Connection, limit: int = 12) -> List[Dict[st
             )
             if len(items) >= limit:
                 break
-    if not items:
-        hb = _latest_event(conn, "heartbeat") or _latest_event(conn, "system.snapshot")
-        hb_ts = hb.get("ts") if isinstance(hb, dict) else None
-        message = "pulse: monitoring"
-        if hb_ts:
-            message = f"pulse: monitoring (last heartbeat {hb_ts})"
-        items.append(
-            {
-                "id": 0,
-                "ts": hb_ts,
-                "type": "pulse",
-                "severity": "info",
-                "message": message,
-            }
-        )
     return items
 
 
