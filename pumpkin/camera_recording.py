@@ -245,7 +245,16 @@ def _call_ollama_vision_json(prompt: str, image_bytes: bytes, cfg: Dict[str, Any
         content = data.get("message", {}).get("content")
         if not content:
             return {"error": "ollama_empty_response", "detail": raw[:200]}
-        return json.loads(content)
+        try:
+            return json.loads(content)
+        except Exception:
+            return {
+                "summary": content.strip(),
+                "objects": [],
+                "activity": None,
+                "confidence": 0.4,
+                "note": "ollama_text_fallback",
+            }
     except Exception:
         return {"error": "ollama_parse_failed", "detail": raw[:200]}
 
