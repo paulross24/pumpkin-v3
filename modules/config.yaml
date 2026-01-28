@@ -222,14 +222,18 @@ modules:
   camera.recording:
     enabled: true
     camera_id: kitchen-cam
-    segment_seconds: 60
-    cooldown_seconds: 60
+    segment_seconds: 10
+    cooldown_seconds: 2
     retention_hours: 24
     ffmpeg_path: ffmpeg
     describe_enabled: true
     describe_sample_seconds: 1
     describe_prompt: "Describe what is happening in this camera frame. Return JSON: {\"summary\": str, \"objects\": [str], \"activity\": str, \"confidence\": float}."
     describe_fallback: true
+    motion_only: true
+    motion_threshold: 0.06
+    motion_sample_seconds: 1
+    motion_grace_seconds: 12
   camera.live:
     enabled: true
     camera_id: kitchen-cam

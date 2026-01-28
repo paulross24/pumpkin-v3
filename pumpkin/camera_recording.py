@@ -143,6 +143,55 @@ def _capture_frame_gray(output_path: Path, ffmpeg_path: str, sample_seconds: int
     return result.stdout if result.stdout else None
 
 
+def _capture_rtsp_gray(rtsp_url: str, ffmpeg_path: str, sample_seconds: int, size: int = 32) -> bytes | None:
+    args = [
+        ffmpeg_path,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-rtsp_transport",
+        "tcp",
+        "-ss",
+        str(sample_seconds),
+        "-i",
+        rtsp_url,
+        "-frames:v",
+        "1",
+        "-vf",
+        f"scale={size}:{size}:flags=area,format=gray",
+        "-f",
+        "rawvideo",
+        "pipe:1",
+    ]
+    try:
+        result = subprocess.run(args, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+    except Exception:
+        return None
+    return result.stdout if result.stdout else None
+
+
+def _motion_detected(conn, camera_id: str, frame_bytes: bytes | None, threshold: float) -> bool:
+    if not frame_bytes:
+        return False
+    last_key = f"camera.recording.motion_last_frame.{camera_id}"
+    prev_b64 = store.get_memory(conn, last_key)
+    prev = None
+    if isinstance(prev_b64, str):
+        try:
+            prev = base64.b64decode(prev_b64.encode("ascii"))
+        except Exception:
+            prev = None
+    store.set_memory(conn, last_key, base64.b64encode(frame_bytes).decode("ascii"))
+    if prev is None or len(prev) != len(frame_bytes):
+        return True
+    diff = sum(abs(a - b) for a, b in zip(prev, frame_bytes))
+    diff_ratio = diff / (len(frame_bytes) * 255.0)
+    if diff_ratio >= threshold:
+        store.set_memory(conn, f"camera.recording.motion_last_hit.{camera_id}", _now_iso())
+        return True
+    return False
+
+
 def _load_llm_config(conn) -> Dict[str, Any]:
     api_key = store.get_memory(conn, "llm.openai_api_key") or os.getenv("PUMPKIN_OPENAI_API_KEY")
     model = store.get_memory(conn, "llm.openai_model") or os.getenv("PUMPKIN_OPENAI_MODEL", "gpt-4o-mini")
@@ -290,11 +339,15 @@ def run_recording(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
     ffmpeg_path = str(module_cfg.get("ffmpeg_path", "ffmpeg"))
     describe_enabled = bool(module_cfg.get("describe_enabled", False))
     describe_sample_seconds = int(module_cfg.get("describe_sample_seconds", 1))
+    describe_fallback = bool(module_cfg.get("describe_fallback", True))
+    motion_only = bool(module_cfg.get("motion_only", False))
+    motion_threshold = float(module_cfg.get("motion_threshold", 0.08))
+    motion_sample_seconds = int(module_cfg.get("motion_sample_seconds", 1))
+    motion_grace_seconds = int(module_cfg.get("motion_grace_seconds", 10))
     describe_prompt = module_cfg.get(
         "describe_prompt",
         "Describe what is happening in this camera frame. Return JSON: {\"summary\": str, \"objects\": [str], \"activity\": str, \"confidence\": float}.",
     )
-    describe_fallback = bool(module_cfg.get("describe_fallback", True))
 
     registry = cameras_mod.load_registry(conn)
     rtsp_url = None
@@ -314,6 +367,30 @@ def run_recording(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
             }
         )
         return events
+
+    if motion_only:
+        motion_frame = _capture_rtsp_gray(rtsp_url, ffmpeg_path, motion_sample_seconds)
+        has_motion = _motion_detected(conn, str(camera_id), motion_frame, motion_threshold)
+        if not has_motion:
+            last_hit = store.get_memory(conn, f"camera.recording.motion_last_hit.{camera_id}")
+            if last_hit:
+                try:
+                    last_dt = datetime.fromisoformat(str(last_hit))
+                    age = (datetime.now(timezone.utc) - last_dt).total_seconds()
+                    if age <= motion_grace_seconds:
+                        has_motion = True
+                except Exception:
+                    has_motion = False
+        if not has_motion:
+            events.append(
+                {
+                    "source": "vision",
+                    "type": "camera.recording_idle",
+                    "payload": {"camera_id": camera_id, "label": label, "reason": "no_motion"},
+                    "severity": "info",
+                }
+            )
+            return events
 
     start_ts = _now_iso()
     output_dir = _recording_dir(str(camera_id))
