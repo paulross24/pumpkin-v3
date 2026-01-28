@@ -6031,6 +6031,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 home_state = _home_state_summary(conn)
                 issues = _summarize_issues(system_snapshot)
                 world_state = store.get_memory(conn, "world.state")
+                awareness = store.get_memory(conn, "awareness.snapshot")
+                if not isinstance(awareness, dict):
+                    awareness = None
                 network_discovery = store.get_memory(conn, "network.discovery.snapshot")
                 deep_scan_state = store.get_memory(conn, "network.discovery.deep_scan")
                 network_discovery = _merge_deep_scan_devices(network_discovery, deep_scan_state)
@@ -6179,6 +6182,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "heartbeat": heartbeat_event,
                         "system_snapshot": system_snapshot,
                         "world_state": world_state,
+                        "awareness": awareness,
                         "homeassistant": ha_summary,
                         "homeassistant_last_event": ha_last_event,
                         "homeassistant_sync": ha_sync,

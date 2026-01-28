@@ -411,6 +411,7 @@
           <span class="card-cta">Live state</span>
         </div>
         <div class="stat" id="command-health">--</div>
+        <div class="sub" id="command-awareness">Awareness: --</div>
         <ul class="list" id="command-list"></ul>
         <div class="sub">Recent changes</div>
         <ul class="list" id="command-recent"></ul>
@@ -578,6 +579,7 @@
       const subtitle = byId("subtitle");
       const heartbeat = byId("heartbeat");
       const commandHealth = byId("command-health");
+      const commandAwareness = byId("command-awareness");
       const commandList = byId("command-list");
       const commandRecent = byId("command-recent");
       const healthStatus = byId("health-status");
@@ -886,6 +888,14 @@
               commandRecent,
               recent.map((item) => `${item.ts} • ${item.type || "event"} (${item.source || "system"})`)
             );
+          }
+          const awareness = summary.awareness || {};
+          if (commandAwareness) {
+            if (awareness.summary) {
+              setText(commandAwareness, `Awareness: ${awareness.summary}`);
+            } else {
+              setText(commandAwareness, "Awareness: warming up");
+            }
           }
 
           const decisions = Array.isArray(decisionsData?.decisions) ? decisionsData.decisions : [];
