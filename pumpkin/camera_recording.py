@@ -580,6 +580,8 @@ def run_recording(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
                         f"Known people recently seen on this camera: {names_text}. "
                         "If you can see them, mention by name; otherwise ignore."
                     )
+                    description_payload["description_people"] = names
+                    description_payload["description_people_source"] = "recent_recognized"
             llm_cfg = _load_llm_config(conn)
             if str(llm_cfg.get("provider", "openai")).lower() == "ollama":
                 analysis = _call_ollama_vision_json(describe_prompt, frame, llm_cfg)

@@ -49,6 +49,17 @@
       }
       .meta { font-size: 12px; color: var(--muted); }
       .row { display: flex; gap: 12px; flex-wrap: wrap; }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 10px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: rgba(230, 124, 46, 0.08);
+        font-size: 12px;
+      }
+      .pill-group { display: flex; gap: 8px; flex-wrap: wrap; }
       .recording {
         padding: 12px;
         border: 1px solid var(--line);
@@ -108,6 +119,9 @@
             <option value="kitchen-cam">kitchen-cam</option>
           </select>
           <input id="search" type="text" placeholder="Search descriptions..." />
+          <select id="person-filter">
+            <option value="">All people</option>
+          </select>
           <button id="refresh">Refresh</button>
         </div>
         <div id="list" class="scroll-box"></div>
@@ -131,6 +145,7 @@
       const playerMeta = document.getElementById("player-meta");
       const livePlayer = document.getElementById("live-player");
       const liveMeta = document.getElementById("live-meta");
+      const personFilter = document.getElementById("person-filter");
 
       let allItems = [];
       const render = (items) => {
@@ -172,6 +187,22 @@
             descErr.textContent = `summary unavailable (${item.description_error})`;
             card.appendChild(descErr);
           }
+          if (Array.isArray(item.description_people) && item.description_people.length) {
+            const group = document.createElement("div");
+            group.className = "pill-group";
+            item.description_people.forEach((name) => {
+              const pill = document.createElement("span");
+              pill.className = "pill";
+              pill.textContent = name;
+              group.appendChild(pill);
+            });
+            const peopleMeta = document.createElement("div");
+            peopleMeta.className = "meta";
+            const peopleSource = item.description_people_source ? ` (${item.description_people_source})` : "";
+            peopleMeta.textContent = `people candidates${peopleSource}`;
+            card.appendChild(peopleMeta);
+            card.appendChild(group);
+          }
           card.appendChild(play);
           listNode.appendChild(card);
         });
@@ -179,9 +210,12 @@
 
       const filterItems = () => {
         const query = document.getElementById("search").value.trim().toLowerCase();
+        const person = personFilter.value;
         if (!query) {
-          render(allItems);
-          return;
+          if (!person) {
+            render(allItems);
+            return;
+          }
         }
         const filtered = allItems.filter((item) => {
           const desc = (item.description || "").toLowerCase();
@@ -189,9 +223,34 @@
           const objects = Array.isArray(item.description_objects)
             ? item.description_objects.join(" ").toLowerCase()
             : "";
-          return desc.includes(query) || activity.includes(query) || objects.includes(query);
+          const people = Array.isArray(item.description_people)
+            ? item.description_people.join(" ").toLowerCase()
+            : "";
+          const matchText = desc.includes(query) || activity.includes(query) || objects.includes(query);
+          const matchPerson = !person || (Array.isArray(item.description_people) && item.description_people.includes(person));
+          return matchText && matchPerson;
         });
         render(filtered);
+      };
+
+      const refreshPeople = () => {
+        const existing = new Set([""]);
+        personFilter.innerHTML = "";
+        const optionAll = document.createElement("option");
+        optionAll.value = "";
+        optionAll.textContent = "All people";
+        personFilter.appendChild(optionAll);
+        allItems.forEach((item) => {
+          if (!Array.isArray(item.description_people)) return;
+          item.description_people.forEach((name) => {
+            if (existing.has(name)) return;
+            existing.add(name);
+            const opt = document.createElement("option");
+            opt.value = name;
+            opt.textContent = name;
+            personFilter.appendChild(opt);
+          });
+        });
       };
 
       const load = async () => {
@@ -201,6 +260,7 @@
           const data = await res.json();
           allItems = Array.isArray(data.recordings) ? data.recordings : [];
           countNode.textContent = `${allItems.length} clips`;
+          refreshPeople();
           filterItems();
         } catch (err) {
           listNode.textContent = "Failed to load recordings.";
@@ -209,6 +269,7 @@
 
       document.getElementById("refresh").addEventListener("click", load);
       document.getElementById("search").addEventListener("input", filterItems);
+      personFilter.addEventListener("change", filterItems);
       load();
       setInterval(load, 30000);
 
