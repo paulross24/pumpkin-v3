@@ -58,6 +58,11 @@
         gap: 6px;
         margin-bottom: 10px;
       }
+      .scroll-box {
+        max-height: 360px;
+        overflow: auto;
+        padding-right: 6px;
+      }
       video { width: 100%; border-radius: 12px; background: #000; }
       button {
         border: 1px solid var(--line);
@@ -102,9 +107,10 @@
           <select id="camera-id">
             <option value="kitchen-cam">kitchen-cam</option>
           </select>
+          <input id="search" type="text" placeholder="Search descriptions..." />
           <button id="refresh">Refresh</button>
         </div>
-        <div id="list"></div>
+        <div id="list" class="scroll-box"></div>
       </section>
       <section class="card">
         <div class="meta">Live feed</div>
@@ -126,6 +132,7 @@
       const livePlayer = document.getElementById("live-player");
       const liveMeta = document.getElementById("live-meta");
 
+      let allItems = [];
       const render = (items) => {
         listNode.innerHTML = "";
         if (!items.length) {
@@ -169,20 +176,38 @@
         });
       };
 
+      const filterItems = () => {
+        const query = document.getElementById("search").value.trim().toLowerCase();
+        if (!query) {
+          render(allItems);
+          return;
+        }
+        const filtered = allItems.filter((item) => {
+          const desc = (item.description || "").toLowerCase();
+          const activity = (item.description_activity || "").toLowerCase();
+          const objects = Array.isArray(item.description_objects)
+            ? item.description_objects.join(" ").toLowerCase()
+            : "";
+          return desc.includes(query) || activity.includes(query) || objects.includes(query);
+        });
+        render(filtered);
+      };
+
       const load = async () => {
         try {
           const cameraId = document.getElementById("camera-id").value.trim();
           const res = await fetch(`/camera/recordings?camera_id=${encodeURIComponent(cameraId)}`);
           const data = await res.json();
-          const items = Array.isArray(data.recordings) ? data.recordings : [];
-          countNode.textContent = `${items.length} clips`;
-          render(items);
+          allItems = Array.isArray(data.recordings) ? data.recordings : [];
+          countNode.textContent = `${allItems.length} clips`;
+          filterItems();
         } catch (err) {
           listNode.textContent = "Failed to load recordings.";
         }
       };
 
       document.getElementById("refresh").addEventListener("click", load);
+      document.getElementById("search").addEventListener("input", filterItems);
       load();
       setInterval(load, 30000);
 
