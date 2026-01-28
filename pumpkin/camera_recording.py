@@ -242,21 +242,31 @@ def _call_ollama_vision_json(prompt: str, image_bytes: bytes, cfg: Dict[str, Any
     url = cfg.get("ollama_url") or "http://127.0.0.1:11434"
     model = cfg.get("ollama_model") or "llava"
     image_b64 = base64.b64encode(image_bytes).decode("ascii")
-    payload = {
-        "model": model,
-        "messages": [
-            {
-                "role": "user",
-                "content": prompt,
-                "images": [image_b64],
-            }
-        ],
-        "stream": False,
-    }
+    use_generate = str(model).lower().startswith("moondream")
+    if use_generate:
+        payload = {
+            "model": model,
+            "prompt": prompt,
+            "images": [image_b64],
+            "stream": False,
+        }
+    else:
+        payload = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt,
+                    "images": [image_b64],
+                }
+            ],
+            "stream": False,
+        }
     try:
         data = json.dumps(payload).encode("utf-8")
+        endpoint = "/api/generate" if use_generate else "/api/chat"
         req = request.Request(
-            f"{url.rstrip('/')}/api/chat",
+            f"{url.rstrip('/')}{endpoint}",
             data=data,
             headers={"Content-Type": "application/json"},
             method="POST",
@@ -269,7 +279,10 @@ def _call_ollama_vision_json(prompt: str, image_bytes: bytes, cfg: Dict[str, Any
         return {"error": "ollama_request_failed", "detail": str(exc)}
     try:
         data = json.loads(raw)
-        content = data.get("message", {}).get("content")
+        if use_generate:
+            content = data.get("response")
+        else:
+            content = data.get("message", {}).get("content")
         if not content:
             return {"error": "ollama_empty_response", "detail": raw[:200]}
         try:
