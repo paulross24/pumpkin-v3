@@ -234,7 +234,7 @@ def _call_ollama_vision_json(prompt: str, image_bytes: bytes, cfg: Dict[str, Any
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with request.urlopen(req, timeout=30) as resp:
+        with request.urlopen(req, timeout=120) as resp:
             raw = resp.read().decode("utf-8")
     except url_error.HTTPError as exc:
         return {"error": "ollama_http_error", "detail": str(exc)}
