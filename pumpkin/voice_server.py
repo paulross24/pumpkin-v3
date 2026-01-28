@@ -457,6 +457,21 @@ def _format_thought_message(event_type: str, payload: Dict[str, Any]) -> str:
 def _collect_thoughts(conn: sqlite3.Connection, limit: int = 12) -> List[Dict[str, Any]]:
     rows = store.list_events(conn, limit=120)
     items: List[Dict[str, Any]] = []
+    llm_status = store.get_memory(conn, "llm.last_status")
+    if isinstance(llm_status, dict):
+        provider = llm_status.get("provider") or "unknown"
+        model = llm_status.get("model") or "unknown"
+        latency = llm_status.get("latency_ms")
+        latency_text = f"{latency}ms" if isinstance(latency, (int, float)) else "n/a"
+        items.append(
+            {
+                "id": 0,
+                "ts": llm_status.get("ts"),
+                "type": "llm.status",
+                "severity": "info",
+                "message": f"llm: {provider} {model} ({latency_text})",
+            }
+        )
     for row in rows:
         event_type = row["type"] or ""
         if event_type in THOUGHT_EVENT_TYPES or event_type.startswith("insight."):
@@ -732,6 +747,7 @@ def _summarize_conversation(memory: Dict[str, Any], llm_ctx: Dict[str, Any]) -> 
             api_key=api_key,
             model=llm_ctx.get("model"),
             base_url=llm_ctx.get("base_url"),
+            conn=conn,
         )
     except Exception:
         return None
@@ -1537,6 +1553,7 @@ def _compute_ask_reply(
             api_key=api_key,
             model=llm_config.get("model"),
             base_url=llm_config.get("base_url"),
+            conn=conn,
         )
     except ValueError as exc:
         return None, "llm_fallback", str(exc)
@@ -1626,21 +1643,62 @@ def _call_llm(
     api_key: str | None = None,
     model: str | None = None,
     base_url: str | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> str:
     provider = str(llm_config.get("provider", "openai")).lower()
+    started = time.time()
     if provider == "ollama":
         ollama_model = llm_config.get("ollama_text_model") or "llama3.1"
         ollama_url = llm_config.get("ollama_url") or "http://127.0.0.1:11434"
-        return _call_ollama_text(prompt, ollama_model, ollama_url)
-    return _call_openai(prompt, api_key=api_key, model=model, base_url=base_url)
+        result = _call_ollama_text(prompt, ollama_model, ollama_url)
+        _record_llm_status(conn, provider, ollama_model, started)
+        return result
+    result = _call_openai(prompt, api_key=api_key, model=model, base_url=base_url)
+    _record_llm_status(conn, provider, model or llm_config.get("model"), started)
+    return result
 
 
-def _call_llm_json(prompt: str, llm_config: Dict[str, Any], api_key: str | None, model: str | None, base_url: str | None) -> Dict[str, Any]:
-    content = _call_llm(prompt, llm_config=llm_config, api_key=api_key, model=model, base_url=base_url)
+def _call_llm_json(
+    prompt: str,
+    llm_config: Dict[str, Any],
+    api_key: str | None,
+    model: str | None,
+    base_url: str | None,
+    conn: sqlite3.Connection | None = None,
+) -> Dict[str, Any]:
+    content = _call_llm(
+        prompt,
+        llm_config=llm_config,
+        api_key=api_key,
+        model=model,
+        base_url=base_url,
+        conn=conn,
+    )
     try:
         return _parse_json(content.encode("utf-8"))
     except ValueError:
         return {"error": "invalid_json", "raw": content}
+
+
+def _record_llm_status(
+    conn: sqlite3.Connection | None,
+    provider: str,
+    model: str | None,
+    started: float,
+) -> None:
+    if conn is None:
+        return
+    elapsed_ms = int(max(0.0, (time.time() - started) * 1000.0))
+    payload = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "provider": provider,
+        "model": model or "unknown",
+        "latency_ms": elapsed_ms,
+    }
+    try:
+        store.set_memory(conn, "llm.last_status", payload)
+    except Exception:
+        pass
 
 
 def _call_openai_json(prompt: str, api_key: str | None, model: str | None, base_url: str | None) -> Dict[str, Any]:
