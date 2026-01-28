@@ -1,0 +1,15 @@
+[Unit]
+Description=Ollama local LLM (Pumpkin)
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+ExecStartPre=-/usr/bin/docker rm -f pumpkin-ollama
+ExecStart=/usr/bin/docker run --rm --name pumpkin-ollama -p 11434:11434 -v /home/rossp/ollama:/root/.ollama ollama/ollama:latest
+ExecStop=/usr/bin/docker stop pumpkin-ollama
+
+[Install]
+WantedBy=multi-user.target

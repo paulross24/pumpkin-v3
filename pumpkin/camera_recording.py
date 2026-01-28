@@ -193,12 +193,61 @@ def _motion_detected(conn, camera_id: str, frame_bytes: bytes | None, threshold:
 
 
 def _load_llm_config(conn) -> Dict[str, Any]:
+    provider = store.get_memory(conn, "llm.provider") or os.getenv("PUMPKIN_LLM_PROVIDER", "openai")
     api_key = store.get_memory(conn, "llm.openai_api_key") or os.getenv("PUMPKIN_OPENAI_API_KEY")
     model = store.get_memory(conn, "llm.openai_model") or os.getenv("PUMPKIN_OPENAI_MODEL", "gpt-4o-mini")
     base_url = store.get_memory(conn, "llm.openai_base_url") or os.getenv(
         "PUMPKIN_OPENAI_BASE_URL", "https://api.openai.com/v1/chat/completions"
     )
-    return {"api_key": api_key, "model": model, "base_url": base_url}
+    ollama_url = store.get_memory(conn, "llm.ollama_url") or os.getenv("PUMPKIN_OLLAMA_URL", "http://127.0.0.1:11434")
+    ollama_model = store.get_memory(conn, "llm.ollama_model") or os.getenv("PUMPKIN_OLLAMA_MODEL", "llava")
+    return {
+        "provider": provider,
+        "api_key": api_key,
+        "model": model,
+        "base_url": base_url,
+        "ollama_url": ollama_url,
+        "ollama_model": ollama_model,
+    }
+
+
+def _call_ollama_vision_json(prompt: str, image_bytes: bytes, cfg: Dict[str, Any]) -> Dict[str, Any]:
+    url = cfg.get("ollama_url") or "http://127.0.0.1:11434"
+    model = cfg.get("ollama_model") or "llava"
+    image_b64 = base64.b64encode(image_bytes).decode("ascii")
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt,
+                "images": [image_b64],
+            }
+        ],
+        "stream": False,
+    }
+    try:
+        data = json.dumps(payload).encode("utf-8")
+        req = request.Request(
+            f"{url.rstrip('/')}/api/chat",
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with request.urlopen(req, timeout=30) as resp:
+            raw = resp.read().decode("utf-8")
+    except url_error.HTTPError as exc:
+        return {"error": "ollama_http_error", "detail": str(exc)}
+    except Exception as exc:
+        return {"error": "ollama_request_failed", "detail": str(exc)}
+    try:
+        data = json.loads(raw)
+        content = data.get("message", {}).get("content")
+        if not content:
+            return {"error": "ollama_empty_response", "detail": raw[:200]}
+        return json.loads(content)
+    except Exception:
+        return {"error": "ollama_parse_failed", "detail": raw[:200]}
 
 
 def _call_openai_vision_json(prompt: str, image_bytes: bytes, cfg: Dict[str, Any]) -> Dict[str, Any]:
@@ -424,7 +473,10 @@ def run_recording(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
         frame = _capture_frame(output_path, ffmpeg_path, describe_sample_seconds)
         if frame:
             llm_cfg = _load_llm_config(conn)
-            analysis = _call_openai_vision_json(describe_prompt, frame, llm_cfg)
+            if str(llm_cfg.get("provider", "openai")).lower() == "ollama":
+                analysis = _call_ollama_vision_json(describe_prompt, frame, llm_cfg)
+            else:
+                analysis = _call_openai_vision_json(describe_prompt, frame, llm_cfg)
             if isinstance(analysis, dict) and analysis.get("error"):
                 description_payload = {
                     "description_error": analysis.get("error"),

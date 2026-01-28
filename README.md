@@ -79,6 +79,9 @@ Pumpkin records:
   - `PUMPKIN_HA_TOKEN`
   - `PUMPKIN_COMPRE_FACE_KEY`
   - `PUMPKIN_OPENAI_API_KEY`
+  - `PUMPKIN_LLM_PROVIDER` (openai|ollama)
+  - `PUMPKIN_OLLAMA_URL` (e.g., http://127.0.0.1:11434)
+  - `PUMPKIN_OLLAMA_MODEL` (e.g., llava)
   - `PUMPKIN_INGEST_KEY`
 
 ## Status and ingest
