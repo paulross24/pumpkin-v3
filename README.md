@@ -81,8 +81,14 @@ Pumpkin records:
   - `PUMPKIN_OPENAI_API_KEY`
   - `PUMPKIN_LLM_PROVIDER` (openai|ollama)
   - `PUMPKIN_OLLAMA_URL` (e.g., http://127.0.0.1:11434)
-  - `PUMPKIN_OLLAMA_MODEL` (e.g., llava)
+  - `PUMPKIN_OLLAMA_MODEL` (e.g., llava) — vision descriptions
+  - `PUMPKIN_OLLAMA_TEXT_MODEL` (e.g., llama3.1) — text reasoning/summaries
   - `PUMPKIN_INGEST_KEY`
+
+## Memory
+- Conversation memory: rolling summary + extracted facts per device/person
+- Working memory: last 200 user/assistant turns stored in `llm.working_memory`
+- LLM context includes last 50 working-memory entries for continuity
 
 ## Status and ingest
 - `GET /status` for the Command Center state snapshot

@@ -712,8 +712,9 @@ def _should_summarize(memory: Dict[str, Any]) -> bool:
 
 
 def _summarize_conversation(memory: Dict[str, Any], llm_ctx: Dict[str, Any]) -> str | None:
+    provider = str(llm_ctx.get("provider", "openai")).lower()
     api_key = llm_ctx.get("api_key")
-    if not api_key:
+    if provider == "openai" and not api_key:
         return None
     recent = memory.get("recent", [])
     if not isinstance(recent, list):
@@ -725,8 +726,9 @@ def _summarize_conversation(memory: Dict[str, Any], llm_ctx: Dict[str, Any]) -> 
         f"RECENT_TURNS: {json.dumps(recent, ensure_ascii=True)}"
     )
     try:
-        return _call_openai(
+        return _call_llm(
             prompt,
+            llm_config=llm_ctx,
             api_key=api_key,
             model=llm_ctx.get("model"),
             base_url=llm_ctx.get("base_url"),
@@ -768,6 +770,13 @@ def _update_conversation_memory(
             memory["last_summary_ts"] = time.time()
     memory["updated_ts"] = time.time()
     _store_conversation_memory(conn, key, memory)
+    _append_working_memory(conn, {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "device": device,
+        "person_id": profile.get("person_id") if isinstance(profile, dict) else None,
+        "user": _truncate_text(str(payload.get("text", "")), 300),
+        "assistant": _truncate_text(reply, 300),
+    })
     if isinstance(device, str) and device.strip():
         store.set_memory(conn, "voice.last_device", device.strip())
         _update_profile_activity(conn, device, str(payload.get("text", "")), reply)
@@ -784,6 +793,21 @@ def _update_conversation_memory(
             },
             severity="info",
         )
+    except Exception:
+        pass
+
+
+def _append_working_memory(conn, entry: Dict[str, Any], max_entries: int = 200) -> None:
+    try:
+        history = store.get_memory(conn, "llm.working_memory")
+    except Exception:
+        history = None
+    if not isinstance(history, list):
+        history = []
+    history.append(entry)
+    history = history[-max_entries:]
+    try:
+        store.set_memory(conn, "llm.working_memory", history)
     except Exception:
         pass
 
@@ -1507,18 +1531,19 @@ def _compute_ask_reply(
         f"CONTEXT: {json.dumps(context, ensure_ascii=True)}"
     )
     try:
-        reply = _call_openai(
+        reply = _call_llm(
             prompt,
+            llm_config=llm_config,
             api_key=api_key,
-            model=llm_config["model"],
-            base_url=llm_config["base_url"],
+            model=llm_config.get("model"),
+            base_url=llm_config.get("base_url"),
         )
     except ValueError as exc:
         return None, "llm_fallback", str(exc)
     except urllib.error.HTTPError as exc:
-        return None, "llm_fallback", f"openai_http_{exc.code}"
+        return None, "llm_fallback", f"llm_http_{exc.code}"
     except Exception:
-        return None, "llm_fallback", "openai_request_failed"
+        return None, "llm_fallback", "llm_request_failed"
     return reply, "llm_fallback", None
 
 
@@ -1565,6 +1590,57 @@ def _call_openai(
     if not isinstance(content, str) or not content.strip():
         raise ValueError("openai_empty_content")
     return content.strip()
+
+
+def _call_ollama_text(prompt: str, model: str, url: str) -> str:
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are Pumpkin, a helpful, calm assistant for a home automation system. "
+                    "Use the CONTEXT data when relevant. Be concise, friendly, and clear. "
+                    "If you are unsure, say so."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ],
+        "stream": False,
+    }
+    data = json.dumps(payload, ensure_ascii=True).encode("utf-8")
+    req = urllib.request.Request(f"{url.rstrip('/')}/api/chat", data=data, method="POST")
+    req.add_header("Content-Type", "application/json")
+    with urllib.request.urlopen(req, timeout=OPENAI_TIMEOUT_SECONDS) as resp:
+        raw = resp.read().decode("utf-8")
+    decoded = json.loads(raw)
+    content = decoded.get("message", {}).get("content")
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError("ollama_empty_content")
+    return content.strip()
+
+
+def _call_llm(
+    prompt: str,
+    llm_config: Dict[str, Any],
+    api_key: str | None = None,
+    model: str | None = None,
+    base_url: str | None = None,
+) -> str:
+    provider = str(llm_config.get("provider", "openai")).lower()
+    if provider == "ollama":
+        ollama_model = llm_config.get("ollama_text_model") or "llama3.1"
+        ollama_url = llm_config.get("ollama_url") or "http://127.0.0.1:11434"
+        return _call_ollama_text(prompt, ollama_model, ollama_url)
+    return _call_openai(prompt, api_key=api_key, model=model, base_url=base_url)
+
+
+def _call_llm_json(prompt: str, llm_config: Dict[str, Any], api_key: str | None, model: str | None, base_url: str | None) -> Dict[str, Any]:
+    content = _call_llm(prompt, llm_config=llm_config, api_key=api_key, model=model, base_url=base_url)
+    try:
+        return _parse_json(content.encode("utf-8"))
+    except ValueError:
+        return {"error": "invalid_json", "raw": content}
 
 
 def _call_openai_json(prompt: str, api_key: str | None, model: str | None, base_url: str | None) -> Dict[str, Any]:
@@ -1644,11 +1720,12 @@ def _llm_route_text(
         "confidence must be a number 0-1.\n\n"
         f"REQUEST: {text}"
     )
-    payload = _call_openai_json(
+    payload = _call_llm_json(
         prompt,
+        llm_config=llm_config,
         api_key=api_key,
-        model=llm_config["model"],
-        base_url=llm_config["base_url"],
+        model=llm_config.get("model"),
+        base_url=llm_config.get("base_url"),
     )
     return payload if isinstance(payload, dict) else {}
 
@@ -1776,7 +1853,7 @@ def _maybe_code_patch(
     if not key:
         return "OpenAI API key is missing for code assistant."
     prompt = _build_code_prompt(text, repo_root)
-    result = _call_openai_json(prompt, key, llm_config["model"], llm_config["base_url"])
+    result = _call_llm_json(prompt, llm_config, key, llm_config.get("model"), llm_config.get("base_url"))
     if result.get("needs_clarification"):
         questions = result.get("questions") or []
         if isinstance(questions, list) and questions:
@@ -1838,14 +1915,22 @@ def _latest_event(conn, event_type: str) -> Dict[str, Any] | None:
 
 
 def _load_llm_config(conn) -> Dict[str, Any]:
+    provider = store.get_memory(conn, "llm.provider") or os.getenv("PUMPKIN_LLM_PROVIDER", "openai")
     api_key = store.get_memory(conn, "llm.openai_api_key")
     model = store.get_memory(conn, "llm.openai_model")
     base_url = store.get_memory(conn, "llm.openai_base_url")
+    ollama_url = store.get_memory(conn, "llm.ollama_url") or os.getenv("PUMPKIN_OLLAMA_URL", "http://127.0.0.1:11434")
+    ollama_text_model = store.get_memory(conn, "llm.ollama_text_model") or os.getenv(
+        "PUMPKIN_OLLAMA_TEXT_MODEL", "llama3.1"
+    )
     return {
+        "provider": provider,
         "api_key": api_key or os.getenv("PUMPKIN_OPENAI_API_KEY"),
         "model": model or os.getenv("PUMPKIN_OPENAI_MODEL", "gpt-4o-mini"),
         "base_url": base_url
         or os.getenv("PUMPKIN_OPENAI_BASE_URL", "https://api.openai.com/v1/chat/completions"),
+        "ollama_url": ollama_url,
+        "ollama_text_model": ollama_text_model,
     }
 
 
@@ -3397,6 +3482,9 @@ def _build_llm_context(conn, device: str | None) -> Dict[str, Any]:
                 "turns": stored.get("turns"),
                 "last_updated": stored.get("updated_ts"),
             }
+    working_memory = store.get_memory(conn, "llm.working_memory")
+    if not isinstance(working_memory, list):
+        working_memory = []
     return {
         "system_snapshot": system_snapshot,
         "issues": issues,
@@ -3409,6 +3497,7 @@ def _build_llm_context(conn, device: str | None) -> Dict[str, Any]:
         "recent_errors": errors,
         "speaker_profile": profile_summary,
         "conversation_memory": memory_snapshot,
+        "working_memory": working_memory[-50:],
     }
 
 
