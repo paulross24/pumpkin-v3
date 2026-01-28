@@ -63,14 +63,14 @@ def _playlist_fresh(path: Path, stale_seconds: int) -> bool:
 
 
 def _load_state(conn) -> Dict[str, Any]:
-    state = store.get_memory(conn, "camera.live")
+    state = store.get_memory(conn, "camera.live.state")
     if not isinstance(state, dict):
         state = {}
     return state
 
 
 def _save_state(conn, state: Dict[str, Any]) -> None:
-    store.set_memory(conn, "camera.live", state)
+    store.set_memory(conn, "camera.live.state", state)
 
 
 def _start_live(
