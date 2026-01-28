@@ -803,6 +803,79 @@ def _record_pulse(
     _record_cooldown(conn, "system.pulse")
 
 
+def _normalize_ts(value: str | None) -> datetime | None:
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _recent_alerts(
+    conn: sqlite3.Connection, lookback_seconds: int = 6 * 3600
+) -> Dict[str, Any]:
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=lookback_seconds)
+    rows = store.list_events(conn, limit=200)
+    counts: Dict[str, int] = {}
+    last_ts: datetime | None = None
+    for row in rows:
+        event_type = row["type"]
+        if event_type not in {"face.alert", "behavior.alert", "car.alert"}:
+            continue
+        ts = _normalize_ts(row["ts"])
+        if not ts or ts < cutoff:
+            continue
+        counts[event_type] = counts.get(event_type, 0) + 1
+        if last_ts is None or ts > last_ts:
+            last_ts = ts
+    return {
+        "counts": counts,
+        "last_ts": last_ts.isoformat() if last_ts else None,
+    }
+
+
+def _update_awareness_snapshot(
+    conn: sqlite3.Connection,
+    ha_summary: Dict[str, Any],
+    network_snapshot: Dict[str, Any],
+) -> None:
+    people_home = ha_summary.get("people_home") or []
+    device_count = 0
+    if isinstance(network_snapshot, dict):
+        devices = network_snapshot.get("devices") or []
+        if isinstance(devices, list):
+            device_count = len(devices)
+    pending_proposals = len(store.list_proposals(conn, status="pending", limit=500))
+    alerts = _recent_alerts(conn)
+    alert_counts = alerts.get("counts") or {}
+    alert_total = sum(alert_counts.values()) if isinstance(alert_counts, dict) else 0
+    parts = [
+        f"{len(people_home)} home",
+        f"{device_count} devices",
+        f"{pending_proposals} proposals",
+    ]
+    if alert_total:
+        parts.append(f"{alert_total} alerts")
+    summary = ", ".join(parts)
+    payload = {
+        "people_home": len(people_home),
+        "device_count": device_count,
+        "pending_proposals": pending_proposals,
+        "alert_counts": alert_counts,
+        "last_alert_ts": alerts.get("last_ts"),
+        "summary": summary,
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+    blob = json.dumps(payload, sort_keys=True, ensure_ascii=True)
+    signature = hashlib.md5(blob.encode("utf-8")).hexdigest()
+    prev_signature = store.get_memory(conn, "awareness.snapshot_hash")
+    if signature != prev_signature:
+        store.insert_event(conn, "system", "awareness.snapshot", payload, severity="info")
+        store.set_memory(conn, "awareness.snapshot", payload)
+        store.set_memory(conn, "awareness.snapshot_hash", signature)
+
+
 def _maybe_hourly_briefing(
     conn,
     ha_summary: Dict[str, Any],
@@ -2499,6 +2572,11 @@ def run_once() -> Dict[str, Any]:
         network_snapshot=network_snapshot if isinstance(network_snapshot, dict) else {},
         inventory=inventory_snapshot if isinstance(inventory_snapshot, dict) else {},
         insights_list=all_insights,
+    )
+    _update_awareness_snapshot(
+        conn,
+        ha_summary if isinstance(ha_summary, dict) else {},
+        network_snapshot if isinstance(network_snapshot, dict) else {},
     )
     brief_times = insights.briefing_times()
     for idx, briefing_time in enumerate(brief_times):

@@ -69,6 +69,7 @@ THOUGHT_EVENT_TYPES = {
     "insight.generated",
     "insight.briefing",
     "action.summary",
+    "awareness.snapshot",
     "system.pulse",
 }
 
@@ -434,6 +435,11 @@ def _format_thought_message(event_type: str, payload: Dict[str, Any]) -> str:
         return f"vision behavior: {_truncate_text(str(message or 'dog alert'), 80)}"
     if event_type == "action.summary":
         return f"action: {_truncate_text(str(summary or message or 'executed'), 80)}"
+    if event_type == "awareness.snapshot":
+        summary_text = payload.get("summary") if isinstance(payload, dict) else None
+        if summary_text:
+            return f"awareness: {_truncate_text(str(summary_text), 80)}"
+        return "awareness: snapshot updated"
     if event_type == "system.pulse":
         if isinstance(payload, dict):
             people = payload.get("people_home")
