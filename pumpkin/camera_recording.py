@@ -145,6 +145,31 @@ def _capture_frame_scaled(output_path: Path, ffmpeg_path: str, sample_seconds: i
     return result.stdout if result.stdout else None
 
 
+def _capture_frame_thumbnail(output_path: Path, ffmpeg_path: str, width: int = 512) -> bytes | None:
+    args = [
+        ffmpeg_path,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(output_path),
+        "-frames:v",
+        "1",
+        "-vf",
+        f"thumbnail,scale={width}:-1",
+        "-f",
+        "image2pipe",
+        "-vcodec",
+        "png",
+        "pipe:1",
+    ]
+    try:
+        result = subprocess.run(args, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+    except Exception:
+        return None
+    return result.stdout if result.stdout else None
+
+
 def _capture_frame_gray(output_path: Path, ffmpeg_path: str, sample_seconds: int, size: int = 32) -> bytes | None:
     args = [
         ffmpeg_path,
@@ -415,6 +440,24 @@ def _heuristic_description(conn, camera_id: str, frame_bytes: bytes) -> Dict[str
     return {"summary": summary, "activity": activity, "confidence": round(confidence, 2)}
 
 
+def _looks_like_composite(text: str | None) -> bool:
+    if not isinstance(text, str):
+        return False
+    lowered = text.lower()
+    return any(
+        keyword in lowered
+        for keyword in (
+            "composite",
+            "stitched",
+            "collage",
+            "montage",
+            "contact sheet",
+            "multiple frames",
+            "progression",
+        )
+    )
+
+
 def _recent_recognized_names(
     conn, camera_id: str, window_seconds: int = 600, max_names: int = 3
 ) -> List[str]:
@@ -682,6 +725,11 @@ def run_recording(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
                     )
                     description_payload["description_people"] = names
                     description_payload["description_people_source"] = "recent_recognized"
+            describe_prompt = (
+                f"{describe_prompt}\n"
+                "This is a single camera frame (not a collage or montage). "
+                "Describe only what is visible in this frame."
+            )
             llm_cfg = _load_llm_config(conn)
             if str(llm_cfg.get("provider", "openai")).lower() == "ollama":
                 analysis = _call_ollama_vision_json(describe_prompt, frame, llm_cfg)
@@ -705,6 +753,17 @@ def run_recording(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
                             }
                         )
             elif isinstance(analysis, dict):
+                if _looks_like_composite(str(analysis.get("summary"))):
+                    alt_frame = _capture_frame_thumbnail(output_path, ffmpeg_path, width=512)
+                    if alt_frame:
+                        alt_prompt = (
+                            f"{describe_prompt}\n"
+                            "If you are unsure, describe the most prominent objects in the single frame."
+                        )
+                        if str(llm_cfg.get("provider", "openai")).lower() == "ollama":
+                            analysis = _call_ollama_vision_json(alt_prompt, alt_frame, llm_cfg)
+                        else:
+                            analysis = _call_openai_vision_json(alt_prompt, alt_frame, llm_cfg)
                 description_payload = {
                     "description": analysis.get("summary"),
                     "description_objects": analysis.get("objects"),
