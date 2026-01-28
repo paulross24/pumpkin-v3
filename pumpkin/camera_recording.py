@@ -118,6 +118,33 @@ def _capture_frame(output_path: Path, ffmpeg_path: str, sample_seconds: int) -> 
     return result.stdout if result.stdout else None
 
 
+def _capture_frame_scaled(output_path: Path, ffmpeg_path: str, sample_seconds: int, width: int = 512) -> bytes | None:
+    args = [
+        ffmpeg_path,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-ss",
+        str(sample_seconds),
+        "-i",
+        str(output_path),
+        "-frames:v",
+        "1",
+        "-vf",
+        f"scale={width}:-1",
+        "-f",
+        "image2pipe",
+        "-vcodec",
+        "png",
+        "pipe:1",
+    ]
+    try:
+        result = subprocess.run(args, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+    except Exception:
+        return None
+    return result.stdout if result.stdout else None
+
+
 def _capture_frame_gray(output_path: Path, ffmpeg_path: str, sample_seconds: int, size: int = 32) -> bytes | None:
     args = [
         ffmpeg_path,
@@ -479,7 +506,7 @@ def run_recording(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     description_payload: Dict[str, Any] = {}
     if describe_enabled:
-        frame = _capture_frame(output_path, ffmpeg_path, describe_sample_seconds)
+        frame = _capture_frame_scaled(output_path, ffmpeg_path, describe_sample_seconds, width=512)
         if frame:
             llm_cfg = _load_llm_config(conn)
             if str(llm_cfg.get("provider", "openai")).lower() == "ollama":
