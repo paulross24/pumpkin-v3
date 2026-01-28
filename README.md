@@ -83,6 +83,8 @@ Pumpkin records:
   - `PUMPKIN_OLLAMA_URL` (e.g., http://127.0.0.1:11434)
   - `PUMPKIN_OLLAMA_MODEL` (e.g., llava) — vision descriptions
   - `PUMPKIN_OLLAMA_TEXT_MODEL` (e.g., llama3.1) — text reasoning/summaries
+  - `PUMPKIN_OLLAMA_CODER_MODEL` (e.g., qwen2.5-coder) — local code generation
+  - `PUMPKIN_LLM_CODER_MODEL` (override for any provider)
   - `PUMPKIN_INGEST_KEY`
 
 ## Memory

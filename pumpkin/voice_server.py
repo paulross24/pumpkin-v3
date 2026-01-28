@@ -1648,7 +1648,7 @@ def _call_llm(
     provider = str(llm_config.get("provider", "openai")).lower()
     started = time.time()
     if provider == "ollama":
-        ollama_model = llm_config.get("ollama_text_model") or "llama3.1"
+        ollama_model = model or llm_config.get("ollama_text_model") or "llama3.1"
         ollama_url = llm_config.get("ollama_url") or "http://127.0.0.1:11434"
         result = _call_ollama_text(prompt, ollama_model, ollama_url)
         _record_llm_status(conn, provider, ollama_model, started)
@@ -1784,6 +1784,7 @@ def _llm_route_text(
         api_key=api_key,
         model=llm_config.get("model"),
         base_url=llm_config.get("base_url"),
+        conn=conn,
     )
     return payload if isinstance(payload, dict) else {}
 
@@ -1908,10 +1909,18 @@ def _maybe_code_patch(
         return "Code assistant repo_root is not configured."
     llm_config = _load_llm_config(conn)
     key = api_key or llm_config["api_key"]
-    if not key:
+    provider = str(llm_config.get("provider", "openai")).lower()
+    if provider == "openai" and not key:
         return "OpenAI API key is missing for code assistant."
     prompt = _build_code_prompt(text, repo_root)
-    result = _call_llm_json(prompt, llm_config, key, llm_config.get("model"), llm_config.get("base_url"))
+    result = _call_llm_json(
+        prompt,
+        llm_config,
+        key,
+        llm_config.get("coder_model") or llm_config.get("model"),
+        llm_config.get("base_url"),
+        conn=conn,
+    )
     if result.get("needs_clarification"):
         questions = result.get("questions") or []
         if isinstance(questions, list) and questions:
@@ -1981,6 +1990,12 @@ def _load_llm_config(conn) -> Dict[str, Any]:
     ollama_text_model = store.get_memory(conn, "llm.ollama_text_model") or os.getenv(
         "PUMPKIN_OLLAMA_TEXT_MODEL", "llama3.1"
     )
+    coder_model = store.get_memory(conn, "llm.coder_model") or os.getenv("PUMPKIN_LLM_CODER_MODEL")
+    if not isinstance(coder_model, str) or not coder_model.strip():
+        if str(provider).lower() == "ollama":
+            coder_model = os.getenv("PUMPKIN_OLLAMA_CODER_MODEL", "qwen2.5-coder")
+        else:
+            coder_model = os.getenv("PUMPKIN_OPENAI_CODER_MODEL")
     return {
         "provider": provider,
         "api_key": api_key or os.getenv("PUMPKIN_OPENAI_API_KEY"),
@@ -1989,6 +2004,7 @@ def _load_llm_config(conn) -> Dict[str, Any]:
         or os.getenv("PUMPKIN_OPENAI_BASE_URL", "https://api.openai.com/v1/chat/completions"),
         "ollama_url": ollama_url,
         "ollama_text_model": ollama_text_model,
+        "coder_model": coder_model,
     }
 
 
@@ -5647,9 +5663,10 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "port": bind_port,
                         },
                         "llm": {
-                            "provider": "openai",
+                            "provider": llm_config.get("provider", "openai"),
                             "model": llm_config["model"],
-                            "enabled": bool(llm_config["api_key"]),
+                            "coder_model": llm_config.get("coder_model"),
+                            "enabled": bool(llm_config["api_key"]) or llm_config.get("provider") == "ollama",
                         },
                         "upstream": {
                             "planner_mode": os.getenv("PUMPKIN_PLANNER_MODE", "stub"),
@@ -6260,10 +6277,11 @@ class VoiceHandler(BaseHTTPRequestHandler):
                     self,
                     200,
                     {
-                        "provider": "openai",
+                        "provider": llm_config.get("provider", "openai"),
                         "model": llm_config["model"],
+                        "coder_model": llm_config.get("coder_model"),
                         "base_url": llm_config["base_url"],
-                        "enabled": bool(llm_config["api_key"]),
+                        "enabled": bool(llm_config["api_key"]) or llm_config.get("provider") == "ollama",
                     },
                 )
                 return
@@ -7528,12 +7546,16 @@ class VoiceHandler(BaseHTTPRequestHandler):
             return
         api_key = data.get("api_key")
         model = data.get("model")
+        coder_model = data.get("coder_model")
         base_url = data.get("base_url")
         if api_key is not None and not isinstance(api_key, str):
             _bad_request(self, "api_key must be a string")
             return
         if model is not None and not isinstance(model, str):
             _bad_request(self, "model must be a string")
+            return
+        if coder_model is not None and not isinstance(coder_model, str):
+            _bad_request(self, "coder_model must be a string")
             return
         if base_url is not None and not isinstance(base_url, str):
             _bad_request(self, "base_url must be a string")
@@ -7550,6 +7572,10 @@ class VoiceHandler(BaseHTTPRequestHandler):
             store.set_memory(conn, "llm.openai_model", cleaned)
             os.environ["PUMPKIN_OPENAI_MODEL"] = cleaned
             env_updates["PUMPKIN_OPENAI_MODEL"] = cleaned
+        if coder_model is not None:
+            cleaned = coder_model.strip()
+            store.set_memory(conn, "llm.coder_model", cleaned)
+            env_updates["PUMPKIN_LLM_CODER_MODEL"] = cleaned
         if base_url is not None:
             cleaned = base_url.strip()
             store.set_memory(conn, "llm.openai_base_url", cleaned)
