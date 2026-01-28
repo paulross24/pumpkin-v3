@@ -163,7 +163,8 @@
           if (item.description) {
             const desc = document.createElement("div");
             desc.className = "meta";
-            desc.textContent = `summary: ${item.description}`;
+            const sourceTag = item.description_source ? ` (${item.description_source})` : "";
+            desc.textContent = `summary: ${item.description}${sourceTag}`;
             card.appendChild(desc);
           } else if (item.description_error) {
             const descErr = document.createElement("div");

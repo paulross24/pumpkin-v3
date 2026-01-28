@@ -229,6 +229,7 @@ modules:
     describe_enabled: true
     describe_sample_seconds: 1
     describe_prompt: "Describe what is happening in this camera frame. Return JSON: {\"summary\": str, \"objects\": [str], \"activity\": str, \"confidence\": float}."
+    describe_fallback: true
   camera.live:
     enabled: true
     camera_id: kitchen-cam

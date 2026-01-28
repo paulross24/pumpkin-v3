@@ -118,6 +118,31 @@ def _capture_frame(output_path: Path, ffmpeg_path: str, sample_seconds: int) -> 
     return result.stdout if result.stdout else None
 
 
+def _capture_frame_gray(output_path: Path, ffmpeg_path: str, sample_seconds: int, size: int = 32) -> bytes | None:
+    args = [
+        ffmpeg_path,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-ss",
+        str(sample_seconds),
+        "-i",
+        str(output_path),
+        "-frames:v",
+        "1",
+        "-vf",
+        f"scale={size}:{size}:flags=area,format=gray",
+        "-f",
+        "rawvideo",
+        "pipe:1",
+    ]
+    try:
+        result = subprocess.run(args, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+    except Exception:
+        return None
+    return result.stdout if result.stdout else None
+
+
 def _load_llm_config(conn) -> Dict[str, Any]:
     api_key = store.get_memory(conn, "llm.openai_api_key") or os.getenv("PUMPKIN_OPENAI_API_KEY")
     model = store.get_memory(conn, "llm.openai_model") or os.getenv("PUMPKIN_OPENAI_MODEL", "gpt-4o-mini")
@@ -188,6 +213,52 @@ def _call_openai_vision_json(prompt: str, image_bytes: bytes, cfg: Dict[str, Any
         return {"error": "openai_response_invalid_json", "raw": content}
 
 
+def _heuristic_description(conn, camera_id: str, frame_bytes: bytes) -> Dict[str, Any]:
+    last_key = f"camera.recording.last_frame.{camera_id}"
+    prev_b64 = store.get_memory(conn, last_key)
+    prev = None
+    if isinstance(prev_b64, str):
+        try:
+            prev = base64.b64decode(prev_b64.encode("ascii"))
+        except Exception:
+            prev = None
+    # store current frame
+    store.set_memory(conn, last_key, base64.b64encode(frame_bytes).decode("ascii"))
+    if not frame_bytes:
+        return {"summary": "no frame data", "activity": "unknown", "confidence": 0.1}
+
+    # compute mean brightness and diff
+    mean_val = sum(frame_bytes) / max(1, len(frame_bytes))
+    diff_ratio = None
+    if prev and len(prev) == len(frame_bytes):
+        diff = sum(abs(a - b) for a, b in zip(prev, frame_bytes))
+        diff_ratio = diff / (len(frame_bytes) * 255.0)
+
+    activity = "still"
+    confidence = 0.4
+    if diff_ratio is None:
+        activity = "unknown"
+        confidence = 0.2
+    elif diff_ratio > 0.2:
+        activity = "high movement"
+        confidence = min(0.9, 0.5 + diff_ratio)
+    elif diff_ratio > 0.08:
+        activity = "moderate movement"
+        confidence = min(0.8, 0.4 + diff_ratio)
+    else:
+        activity = "low movement"
+        confidence = max(0.3, 0.2 + diff_ratio)
+
+    lighting = "normal"
+    if mean_val < 40:
+        lighting = "dark"
+    elif mean_val > 200:
+        lighting = "bright"
+
+    summary = f"{activity}; lighting {lighting}"
+    return {"summary": summary, "activity": activity, "confidence": round(confidence, 2)}
+
+
 def _cleanup_old(recording_root: Path, retention_hours: int) -> int:
     if retention_hours <= 0:
         return 0
@@ -223,6 +294,7 @@ def run_recording(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
         "describe_prompt",
         "Describe what is happening in this camera frame. Return JSON: {\"summary\": str, \"objects\": [str], \"activity\": str, \"confidence\": float}.",
     )
+    describe_fallback = bool(module_cfg.get("describe_fallback", True))
 
     registry = cameras_mod.load_registry(conn)
     rtsp_url = None
@@ -281,12 +353,25 @@ def run_recording(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
                     "description_error": analysis.get("error"),
                     "description_error_detail": analysis.get("detail"),
                 }
+                if describe_fallback:
+                    gray = _capture_frame_gray(output_path, ffmpeg_path, describe_sample_seconds)
+                    if gray:
+                        fallback = _heuristic_description(conn, str(camera_id), gray)
+                        description_payload.update(
+                            {
+                                "description": fallback.get("summary"),
+                                "description_activity": fallback.get("activity"),
+                                "description_confidence": fallback.get("confidence"),
+                                "description_source": "heuristic",
+                            }
+                        )
             elif isinstance(analysis, dict):
                 description_payload = {
                     "description": analysis.get("summary"),
                     "description_objects": analysis.get("objects"),
                     "description_activity": analysis.get("activity"),
                     "description_confidence": analysis.get("confidence"),
+                    "description_source": "llm",
                 }
 
     cameras_mod.record_event(
