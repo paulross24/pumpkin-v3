@@ -56,7 +56,10 @@ def _playlist_fresh(path: Path, stale_seconds: int) -> bool:
     if not path.exists():
         return False
     try:
-        mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+        stat = path.stat()
+        if stat.st_size <= 0:
+            return False
+        mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
     except Exception:
         return False
     return (datetime.now(timezone.utc) - mtime) <= timedelta(seconds=stale_seconds)
@@ -113,10 +116,15 @@ def _start_live(
         "-y",
         str(playlist),
     ]
+    log_path = live_dir / "ffmpeg.log"
+    try:
+        log_handle = log_path.open("a", encoding="utf-8")
+    except Exception:
+        log_handle = subprocess.DEVNULL
     proc = subprocess.Popen(
         args,
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stderr=log_handle,
         start_new_session=True,
     )
     return {
