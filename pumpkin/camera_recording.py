@@ -415,6 +415,39 @@ def _heuristic_description(conn, camera_id: str, frame_bytes: bytes) -> Dict[str
     return {"summary": summary, "activity": activity, "confidence": round(confidence, 2)}
 
 
+def _recent_recognized_names(
+    conn, camera_id: str, window_seconds: int = 600, max_names: int = 3
+) -> List[str]:
+    names: List[str] = []
+    rows = store.list_events(conn, limit=200, source="vision", event_type="person.recognized")
+    if not rows:
+        return names
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=window_seconds)
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"]) if row.get("payload_json") else {}
+        except Exception:
+            payload = {}
+        if str(payload.get("camera_id")) != str(camera_id):
+            continue
+        ts_raw = row.get("ts")
+        if isinstance(ts_raw, str):
+            try:
+                ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+            except ValueError:
+                ts = None
+        else:
+            ts = None
+        if ts and ts < cutoff:
+            continue
+        name = payload.get("ha_person_name") or payload.get("name")
+        if isinstance(name, str) and name and name not in names:
+            names.append(name)
+        if len(names) >= max_names:
+            break
+    return names
+
+
 def _cleanup_old(recording_root: Path, retention_hours: int) -> int:
     if retention_hours <= 0:
         return 0
@@ -447,6 +480,9 @@ def run_recording(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
     describe_enabled = bool(module_cfg.get("describe_enabled", False))
     describe_sample_seconds = int(module_cfg.get("describe_sample_seconds", 1))
     describe_fallback = bool(module_cfg.get("describe_fallback", True))
+    describe_include_people = bool(module_cfg.get("describe_include_people", True))
+    describe_people_window = int(module_cfg.get("describe_people_window_seconds", 600))
+    describe_people_max = int(module_cfg.get("describe_people_max", 3))
     motion_only = bool(module_cfg.get("motion_only", False))
     motion_threshold = float(module_cfg.get("motion_threshold", 0.08))
     motion_sample_seconds = int(module_cfg.get("motion_sample_seconds", 1))
@@ -530,6 +566,20 @@ def run_recording(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
     if describe_enabled:
         frame = _capture_frame_scaled(output_path, ffmpeg_path, describe_sample_seconds, width=512)
         if frame:
+            if describe_include_people:
+                names = _recent_recognized_names(
+                    conn,
+                    str(camera_id),
+                    window_seconds=describe_people_window,
+                    max_names=describe_people_max,
+                )
+                if names:
+                    names_text = ", ".join(names)
+                    describe_prompt = (
+                        f"{describe_prompt}\n"
+                        f"Known people recently seen on this camera: {names_text}. "
+                        "If you can see them, mention by name; otherwise ignore."
+                    )
             llm_cfg = _load_llm_config(conn)
             if str(llm_cfg.get("provider", "openai")).lower() == "ollama":
                 analysis = _call_ollama_vision_json(describe_prompt, frame, llm_cfg)
