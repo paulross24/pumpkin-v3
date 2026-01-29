@@ -613,6 +613,40 @@
           node.appendChild(li);
         });
       };
+      const setDecisionList = (node, decisions) => {
+        if (!node) return;
+        node.innerHTML = "";
+        if (!decisions.length) {
+          node.style.display = "none";
+          return;
+        }
+        node.style.display = "grid";
+        decisions.forEach((item) => {
+          const li = document.createElement("li");
+          const title = document.createElement("div");
+          title.textContent = `${item.ts} • ${item.detection_summary || item.observation || item.decision || "decision"}`;
+          const actions = document.createElement("div");
+          actions.style.display = "flex";
+          actions.style.gap = "8px";
+          const helpful = document.createElement("button");
+          helpful.textContent = "Helpful";
+          helpful.addEventListener("click", (evt) => {
+            evt.stopPropagation();
+            sendFeedback("helpful", item.id);
+          });
+          const unhelpful = document.createElement("button");
+          unhelpful.textContent = "Not helpful";
+          unhelpful.addEventListener("click", (evt) => {
+            evt.stopPropagation();
+            sendFeedback("unhelpful", item.id);
+          });
+          actions.appendChild(helpful);
+          actions.appendChild(unhelpful);
+          li.appendChild(title);
+          li.appendChild(actions);
+          node.appendChild(li);
+        });
+      };
 
       const subtitle = byId("subtitle");
       const heartbeat = byId("heartbeat");
@@ -753,7 +787,7 @@
         }
       };
 
-      const sendFeedback = async (rating) => {
+      const sendFeedback = async (rating, targetId = null) => {
         if (!feedbackStatus) return;
         feedbackStatus.textContent = "Sending...";
         try {
@@ -762,7 +796,7 @@
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               target_type: "command_center",
-              target_id: latestDecisionId || "latest",
+              target_id: targetId || latestDecisionId || "latest",
               rating,
             }),
           });
@@ -985,13 +1019,7 @@
           const decisions = Array.isArray(decisionsData?.decisions) ? decisionsData.decisions : [];
           latestDecisionId = decisions.length ? decisions[0].id : null;
           setText(decisionCount, decisions.length);
-          setList(
-            decisionList,
-            decisions.map(
-              (item) =>
-                `${item.ts} • ${item.detection_summary || item.observation || item.decision || "decision"} — ${truncate(item.reasoning || item.decision, 140)}`
-            )
-          );
+          setDecisionList(decisionList, decisions);
 
           const briefings = Array.isArray(briefingsData?.briefings) ? briefingsData.briefings : [];
           setText(briefingCount, briefings.length);
