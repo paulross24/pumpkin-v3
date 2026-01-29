@@ -6255,6 +6255,21 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 feedback_recent = feedback_events[-20:]
                 feedback_helpful = len([e for e in feedback_recent if e.get("rating") == "helpful"])
                 feedback_unhelpful = len([e for e in feedback_recent if e.get("rating") == "unhelpful"])
+                feedback_stats = store.get_memory(conn, "feedback.stats")
+                if not isinstance(feedback_stats, dict):
+                    feedback_stats = {}
+                feedback_tuning = store.get_memory(conn, "feedback.tuning")
+                if not isinstance(feedback_tuning, dict):
+                    feedback_tuning = {}
+                learning_state = store.get_memory(conn, "learning.state")
+                if not isinstance(learning_state, dict):
+                    learning_state = {}
+                distilled_insights = store.get_memory(conn, "insights.distilled")
+                if not isinstance(distilled_insights, dict):
+                    distilled_insights = {}
+                capability_map = store.get_memory(conn, "capability.map")
+                if not isinstance(capability_map, dict):
+                    capability_map = {}
                 router_rows = store.list_events(
                     conn,
                     limit=5,
@@ -6313,6 +6328,13 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "helpful": feedback_helpful,
                             "unhelpful": feedback_unhelpful,
                             "recent": feedback_recent,
+                        },
+                        "learning": {
+                            "state": learning_state,
+                            "feedback_stats": feedback_stats,
+                            "feedback_tuning": feedback_tuning,
+                            "distilled": distilled_insights,
+                            "capability_map": capability_map,
                         },
                         "router_events": router_events,
                         "proposals": proposal_items,

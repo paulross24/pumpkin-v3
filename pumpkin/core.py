@@ -184,6 +184,111 @@ def _record_policy_snapshot_if_changed(conn, policy: policy_mod.Policy) -> None:
         store.set_memory(conn, "policy.last_hash", policy.policy_hash)
 
 
+def _update_feedback_learning(conn) -> Dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    events = store.get_memory(conn, "feedback.events") or []
+    if not isinstance(events, list):
+        events = []
+    recent = events[-200:]
+    helpful = 0
+    unhelpful = 0
+    by_type: Dict[str, Dict[str, int]] = {}
+    last_ts = None
+    for item in recent:
+        if not isinstance(item, dict):
+            continue
+        rating = item.get("rating")
+        target_type = item.get("target_type") or "unknown"
+        if rating == "helpful":
+            helpful += 1
+        elif rating == "unhelpful":
+            unhelpful += 1
+        slot = by_type.setdefault(str(target_type), {"helpful": 0, "unhelpful": 0})
+        if rating in slot:
+            slot[rating] += 1
+        ts = item.get("ts")
+        if isinstance(ts, str):
+            last_ts = ts
+    total = helpful + unhelpful
+    helpful_ratio = round(helpful / total, 3) if total else None
+    stats = {
+        "ts": now.isoformat(),
+        "total": total,
+        "helpful": helpful,
+        "unhelpful": unhelpful,
+        "helpful_ratio": helpful_ratio,
+        "by_type": by_type,
+        "last_feedback_ts": last_ts,
+    }
+    tuning: Dict[str, Any] = {"ts": now.isoformat(), "next_focus": []}
+    if total >= 5 and helpful_ratio is not None and helpful_ratio < 0.6:
+        tuning["next_focus"].append("Explain decisions with more context and evidence.")
+    if unhelpful >= helpful and total >= 3:
+        tuning["next_focus"].append("Reduce noisy alerts by tightening suppression windows.")
+    if not tuning["next_focus"]:
+        tuning["next_focus"].append("Maintain current alert thresholds and monitor feedback.")
+    store.set_memory(conn, "feedback.stats", stats)
+    store.set_memory(conn, "feedback.tuning", tuning)
+    return {"stats": stats, "tuning": tuning}
+
+
+def _update_capability_map(
+    conn, inventory_snapshot: Dict[str, Any], camera_registry: List[Dict[str, Any]], network_snapshot: Dict[str, Any]
+) -> Dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    inventory_summary = inventory_mod.summary(inventory_snapshot)
+    cameras = []
+    for cam in camera_registry:
+        if not isinstance(cam, dict):
+            continue
+        camera_id = cam.get("id") or cam.get("ip")
+        if camera_id:
+            cameras.append(str(camera_id))
+    cap_map = {
+        "ts": now.isoformat(),
+        "ha_domains": sorted(list((inventory_summary.get("ha_domains") or {}).keys())),
+        "ha_area_count": inventory_summary.get("ha_area_count", 0),
+        "network_devices": network_snapshot.get("device_count") if isinstance(network_snapshot, dict) else 0,
+        "cameras": sorted(cameras),
+        "enabled_modules": inventory_summary.get("enabled_modules", []),
+    }
+    store.set_memory(conn, "capability.map", cap_map)
+    return cap_map
+
+
+def _distill_self_evolution(
+    conn,
+    insights_list: List[Dict[str, Any]],
+    feedback_stats: Dict[str, Any],
+    capability_map: Dict[str, Any],
+) -> Dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    type_counts: Dict[str, int] = {}
+    for item in insights_list:
+        if isinstance(item, dict):
+            insight_type = str(item.get("type") or "insight")
+            type_counts[insight_type] = type_counts.get(insight_type, 0) + 1
+    top_types = sorted(type_counts.items(), key=lambda kv: kv[1], reverse=True)[:5]
+    highlights = [f"{count}x {name.replace('insight.', '').replace('_', ' ')}" for name, count in top_types]
+    next_focus: List[str] = []
+    helpful_ratio = feedback_stats.get("helpful_ratio")
+    if isinstance(helpful_ratio, float) and helpful_ratio < 0.6:
+        next_focus.append("Raise explanation clarity; include evidence links in decisions.")
+    if capability_map.get("network_devices", 0) and not capability_map.get("cameras"):
+        next_focus.append("Add camera onboarding to grow visual awareness.")
+    if not next_focus:
+        next_focus.append("Keep autonomy steady and expand hardware opportunities.")
+    distilled = {
+        "ts": now.isoformat(),
+        "highlights": highlights,
+        "next_focus": next_focus,
+        "feedback_ratio": helpful_ratio,
+    }
+    store.set_memory(conn, "insights.distilled", distilled)
+    store.set_memory(conn, "learning.state", {"ts": now.isoformat(), "summary": distilled})
+    return distilled
+
+
 def _maybe_remediate_ha_request_failed(conn, base_url: str | None) -> None:
     if not base_url:
         return
@@ -2860,6 +2965,17 @@ def run_once() -> Dict[str, Any]:
     insights.record_insights(conn, event_insights)
     all_insights = list(insight_items) + list(event_insights)
     inventory_snapshot = inventory_mod.snapshot(conn)
+    camera_registry = store.get_memory(conn, "camera.registry")
+    if not isinstance(camera_registry, list):
+        camera_registry = []
+    capability_map = _update_capability_map(
+        conn,
+        inventory_snapshot if isinstance(inventory_snapshot, dict) else {},
+        camera_registry,
+        network_snapshot if isinstance(network_snapshot, dict) else {},
+    )
+    feedback_learning = _update_feedback_learning(conn)
+    _distill_self_evolution(conn, all_insights, feedback_learning.get("stats", {}), capability_map)
     _update_world_state(
         conn,
         system_snapshot=system_snapshot,
@@ -2919,6 +3035,15 @@ def run_once() -> Dict[str, Any]:
         pulse_interval,
     )
 
+    detections = _build_detections_from_events(conn, new_events)
+    detections.extend(
+        _build_proactive_detections(
+            conn,
+            ha_summary if isinstance(ha_summary, dict) else {},
+            network_snapshot if isinstance(network_snapshot, dict) else {},
+        )
+    )
+    auto_actions = _process_detections(conn, policy, autonomy_cfg, detections)
     _append_recent_memory(
         conn,
         "loop.events",
@@ -2941,16 +3066,6 @@ def run_once() -> Dict[str, Any]:
     if now - last_selfcheck >= settings.selfcheck_interval_seconds():
         selfcheck.run_self_check(conn)
         store.set_memory(conn, "selfcheck.last_ts", now)
-
-    detections = _build_detections_from_events(conn, new_events)
-    detections.extend(
-        _build_proactive_detections(
-            conn,
-            ha_summary if isinstance(ha_summary, dict) else {},
-            network_snapshot if isinstance(network_snapshot, dict) else {},
-        )
-    )
-    auto_actions = _process_detections(conn, policy, autonomy_cfg, detections)
 
     _requeue_orphaned_suggestions(conn, policy.policy_hash)
     _cleanup_confirm_plan_proposals(conn, autonomy_cfg)
