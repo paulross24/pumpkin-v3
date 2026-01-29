@@ -184,6 +184,42 @@ def _record_policy_snapshot_if_changed(conn, policy: policy_mod.Policy) -> None:
         store.set_memory(conn, "policy.last_hash", policy.policy_hash)
 
 
+def _maybe_remediate_ha_request_failed(conn, base_url: str | None) -> None:
+    if not base_url:
+        return
+    last_ts = store.get_memory(conn, "ha.request_failed.last_ts") or 0
+    try:
+        last_ts = float(last_ts)
+    except (TypeError, ValueError):
+        last_ts = 0.0
+    now = time.time()
+    if now - last_ts < 300:
+        return
+    store.set_memory(conn, "ha.request_failed.last_ts", now)
+    try:
+        req = urllib.request.Request(base_url.rstrip("/") + "/")
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            ok = 200 <= resp.status < 500
+    except Exception as exc:
+        store.insert_event(
+            conn,
+            source="homeassistant",
+            event_type="homeassistant.remediation_failed",
+            payload={"error": str(exc)},
+            severity="warn",
+        )
+        return
+    if ok:
+        store.set_memory(conn, "ha.request", 0)
+        store.insert_event(
+            conn,
+            source="homeassistant",
+            event_type="homeassistant.request_recovered",
+            payload={"base_url": base_url},
+            severity="info",
+        )
+
+
 def _seed_bootstrap(conn) -> None:
     if not store.latest_identity(conn):
         store.insert_identity(conn, "Pumpkin", notes="Bootstrap identity")
@@ -393,6 +429,7 @@ def _collect_module_events(conn) -> List[Dict[str, Any]]:
             store.set_memory(conn, "homeassistant.sync", sync)
         if any(ev["type"] in {"homeassistant.request_failed", "homeassistant.states_failed"} for ev in ha_events):
             _record_cooldown(conn, "ha.request")
+            _maybe_remediate_ha_request_failed(conn, base_url)
         ha_error_types = {
             "homeassistant.request_failed",
             "homeassistant.states_failed",
