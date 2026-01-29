@@ -93,6 +93,11 @@
         border-radius: 10px;
         cursor: pointer;
       }
+      .feedback-row {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
     </style>
   </head>
   <body>
@@ -124,6 +129,22 @@
       const countNode = document.getElementById("count");
       const listNode = document.getElementById("alert-list");
 
+      const sendFeedback = async (targetType, targetId, rating) => {
+        try {
+          await fetch("/feedback", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              target_type: targetType,
+              target_id: targetId,
+              rating,
+            }),
+          });
+        } catch (err) {
+          // ignore network errors
+        }
+      };
+
       const render = (items) => {
         listNode.innerHTML = "";
         if (!items.length) {
@@ -142,9 +163,20 @@
           const link = document.createElement("a");
           link.href = alert.report_url || "/ui/car";
           link.textContent = "Open report →";
+          const feedbackRow = document.createElement("div");
+          feedbackRow.className = "feedback-row";
+          const helpfulBtn = document.createElement("button");
+          helpfulBtn.textContent = "Helpful";
+          helpfulBtn.addEventListener("click", () => sendFeedback("alert", alert.id || alert.ts || "unknown", "helpful"));
+          const unhelpfulBtn = document.createElement("button");
+          unhelpfulBtn.textContent = "Not helpful";
+          unhelpfulBtn.addEventListener("click", () => sendFeedback("alert", alert.id || alert.ts || "unknown", "unhelpful"));
+          feedbackRow.appendChild(helpfulBtn);
+          feedbackRow.appendChild(unhelpfulBtn);
           li.appendChild(title);
           li.appendChild(meta);
           li.appendChild(link);
+          li.appendChild(feedbackRow);
           listNode.appendChild(li);
         });
       };

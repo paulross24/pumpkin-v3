@@ -218,6 +218,39 @@ def _seed_bootstrap(conn) -> None:
         )
 
 
+def _ensure_goals(conn) -> None:
+    goals = store.get_memory(conn, "goals.list")
+    if isinstance(goals, list) and goals:
+        return
+    defaults = [
+        {
+            "id": "safety",
+            "title": "Keep the home safe and monitored",
+            "priority": "high",
+            "tags": ["security"],
+        },
+        {
+            "id": "comfort",
+            "title": "Maintain comfort without manual effort",
+            "priority": "med",
+            "tags": ["comfort"],
+        },
+        {
+            "id": "energy",
+            "title": "Reduce wasted energy automatically",
+            "priority": "med",
+            "tags": ["energy"],
+        },
+        {
+            "id": "clarity",
+            "title": "Summarize important changes clearly",
+            "priority": "high",
+            "tags": ["insights"],
+        },
+    ]
+    store.set_memory(conn, "goals.list", defaults)
+
+
 def _insert_events(conn, events: List[Dict[str, Any]]) -> List[int]:
     event_ids = []
     for event in events:
@@ -2751,6 +2784,7 @@ def run_once() -> Dict[str, Any]:
     policy = policy_mod.load_policy(str(settings.policy_path()))
     _record_policy_snapshot_if_changed(conn, policy)
     _seed_bootstrap(conn)
+    _ensure_goals(conn)
 
     prev_entities = store.get_memory(conn, "homeassistant.entities") or {}
     prev_network = store.get_memory(conn, "network.discovery.snapshot") or {}

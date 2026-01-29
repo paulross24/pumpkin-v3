@@ -4362,6 +4362,26 @@ def _format_ts(value: datetime | None) -> str | None:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _decision_tags(detection_type: str | None) -> list[str]:
+    if not detection_type:
+        return []
+    dtype = detection_type.lower()
+    tags: list[str] = []
+    if "vision" in dtype or "face" in dtype or "camera" in dtype:
+        tags.append("security")
+    if "network" in dtype or "discovery" in dtype or "device" in dtype:
+        tags.append("devices")
+    if "homeassistant" in dtype or "ha." in dtype:
+        tags.append("automation")
+    if "car" in dtype or "obd" in dtype:
+        tags.append("vehicle")
+    if "selfcheck" in dtype or "health" in dtype:
+        tags.append("reliability")
+    if "insight" in dtype:
+        tags.append("insights")
+    return tags
+
+
 def _collect_car_telemetry(conn, limit: int = 200) -> list[Dict[str, Any]]:
     rows = store.list_events(conn, limit=limit, source="voice", event_type="voice.ingest")
     items: list[Dict[str, Any]] = []
@@ -5221,6 +5241,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
             if self.path == "/demo/incidents":
                 self._handle_demo_incident()
                 return
+            if self.path == "/feedback":
+                self._handle_feedback()
+                return
             self.send_response(404)
             self.end_headers()
             return
@@ -5308,6 +5331,70 @@ class VoiceHandler(BaseHTTPRequestHandler):
         )
 
         _send_json(self, 200, {"event_id": event_id})
+
+    def _handle_feedback(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+        try:
+            data = _parse_json(body)
+        except ValueError:
+            _bad_request(self, "invalid JSON")
+            return
+        if not isinstance(data, dict):
+            _bad_request(self, "JSON body must be an object")
+            return
+        target_type = data.get("target_type")
+        target_id = data.get("target_id")
+        rating = data.get("rating")
+        notes = data.get("notes")
+        if not isinstance(target_type, str) or not target_type.strip():
+            _bad_request(self, "target_type required")
+            return
+        if target_id is not None and not isinstance(target_id, (str, int)):
+            _bad_request(self, "target_id must be string or int")
+            return
+        if not isinstance(rating, str) or rating not in {"helpful", "unhelpful"}:
+            _bad_request(self, "rating must be helpful|unhelpful")
+            return
+        if notes is not None and not isinstance(notes, str):
+            _bad_request(self, "notes must be string")
+            return
+        conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
+        payload = {
+            "target_type": target_type.strip(),
+            "target_id": str(target_id) if target_id is not None else None,
+            "rating": rating,
+            "notes": notes.strip() if isinstance(notes, str) and notes.strip() else None,
+        }
+        event_id = store.insert_event(
+            conn,
+            source="ui",
+            event_type="feedback.received",
+            payload=payload,
+            severity="low",
+        )
+        feedback_events = store.get_memory(conn, "feedback.events") or []
+        if not isinstance(feedback_events, list):
+            feedback_events = []
+        feedback_events.append(
+            {
+                "ts": utc_now_iso(),
+                "target_type": payload["target_type"],
+                "target_id": payload["target_id"],
+                "rating": payload["rating"],
+                "notes": payload["notes"],
+            }
+        )
+        store.set_memory(conn, "feedback.events", feedback_events[-200:])
+        append_jsonl(
+            str(settings.audit_path()),
+            {
+                "kind": "feedback.received",
+                "event_id": event_id,
+                "payload": payload,
+            },
+        )
+        _send_json(self, 200, {"status": "ok", "event_id": event_id})
 
     def do_GET(self) -> None:
         try:
@@ -5415,6 +5502,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "POST /restricted/deny",
                             "POST /autonomy/mode",
                             "POST /demo/incidents",
+                            "POST /feedback",
                         ],
                     },
                 )
@@ -5865,6 +5953,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "detection_id": row["detection_id"],
                             "detection_summary": detection_summary,
                             "detection_type": detection_type,
+                            "tags": _decision_tags(detection_type),
                             "detection_severity": detection_severity,
                             "detection_details": detection_details,
                             "observation": row["observation"],
@@ -6157,6 +6246,15 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 shopping_list = store.get_memory(conn, "shopping.list")
                 if not isinstance(shopping_list, list):
                     shopping_list = []
+                goals = store.get_memory(conn, "goals.list")
+                if not isinstance(goals, list):
+                    goals = []
+                feedback_events = store.get_memory(conn, "feedback.events") or []
+                if not isinstance(feedback_events, list):
+                    feedback_events = []
+                feedback_recent = feedback_events[-20:]
+                feedback_helpful = len([e for e in feedback_recent if e.get("rating") == "helpful"])
+                feedback_unhelpful = len([e for e in feedback_recent if e.get("rating") == "unhelpful"])
                 router_rows = store.list_events(
                     conn,
                     limit=5,
@@ -6209,6 +6307,13 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "briefing": briefing,
                         "audit_tail": audit_tail,
                         "shopping_list": shopping_list[:20],
+                        "goals": goals,
+                        "feedback": {
+                            "count": len(feedback_recent),
+                            "helpful": feedback_helpful,
+                            "unhelpful": feedback_unhelpful,
+                            "recent": feedback_recent,
+                        },
                         "router_events": router_events,
                         "proposals": proposal_items,
                         "proposal_count": len(proposal_items),
@@ -6792,6 +6897,27 @@ class VoiceHandler(BaseHTTPRequestHandler):
                                                     "type": "object",
                                                     "properties": {"id": {"type": "integer"}},
                                                     "required": ["id"],
+                                                }
+                                            }
+                                        }
+                                    },
+                                }
+                            },
+                            "/feedback": {
+                                "post": {
+                                    "summary": "Submit feedback on a decision or alert",
+                                    "requestBody": {
+                                        "content": {
+                                            "application/json": {
+                                                "schema": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "target_type": {"type": "string"},
+                                                        "target_id": {"type": ["string", "integer"]},
+                                                        "rating": {"type": "string"},
+                                                        "notes": {"type": "string"},
+                                                    },
+                                                    "required": ["target_type", "rating"],
                                                 }
                                             }
                                         }

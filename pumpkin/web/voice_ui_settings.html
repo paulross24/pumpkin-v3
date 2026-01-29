@@ -175,6 +175,10 @@
           <li><a class="link" href="/ui/homeassistant">Home Assistant config →</a></li>
         </ul>
       </section>
+      <section class="card">
+        <div class="section-title">System Goals</div>
+        <ul class="list" id="goals-list"></ul>
+      </section>
     </main>
     <script>
       const qs = (id) => document.getElementById(id);
@@ -203,6 +207,7 @@
       const llmBaseUrlInput = qs("llm-base-url-input");
       const llmSave = qs("llm-save");
       const llmSaveStatus = qs("llm-save-status");
+      const goalsList = qs("goals-list");
 
       const loadSummary = async () => {
         const res = await fetch("/summary");
@@ -217,6 +222,17 @@
           `pending proposals: ${summary.proposal_count || 0}`,
           `max actions per loop: ${guardrails.max_actions_per_loop ?? "n/a"}`,
         ]);
+        const goals = Array.isArray(summary.goals) ? summary.goals : [];
+        setList(
+          goalsList,
+          goals.map((goal) => {
+            if (typeof goal === "string") return goal;
+            const title = goal.title || "goal";
+            const priority = goal.priority ? ` (${goal.priority})` : "";
+            const tags = Array.isArray(goal.tags) && goal.tags.length ? ` • ${goal.tags.join(", ")}` : "";
+            return `${title}${priority}${tags}`;
+          })
+        );
       };
 
       const loadLlmConfig = async () => {

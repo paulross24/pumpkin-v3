@@ -98,6 +98,11 @@
         border-radius: 10px;
         cursor: pointer;
       }
+      .feedback-row {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
       a { color: var(--pumpkin-dark); text-decoration: none; }
     </style>
   </head>
@@ -129,6 +134,22 @@
     <script>
       const listNode = document.getElementById("list");
       const countNode = document.getElementById("count");
+
+      const sendFeedback = async (targetType, targetId, rating) => {
+        try {
+          await fetch("/feedback", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              target_type: targetType,
+              target_id: targetId,
+              rating,
+            }),
+          });
+        } catch (err) {
+          // ignore network errors
+        }
+      };
 
       const render = (items) => {
         listNode.innerHTML = "";
@@ -188,6 +209,23 @@
             badge.textContent = "scores: n/a";
             badges.appendChild(badge);
           }
+          if (Array.isArray(item.tags) && item.tags.length) {
+            const tagBadge = document.createElement("div");
+            tagBadge.className = "badge";
+            tagBadge.textContent = `tags: ${item.tags.join(", ")}`;
+            badges.appendChild(tagBadge);
+          }
+
+          const feedbackRow = document.createElement("div");
+          feedbackRow.className = "feedback-row";
+          const helpfulBtn = document.createElement("button");
+          helpfulBtn.textContent = "Helpful";
+          helpfulBtn.addEventListener("click", () => sendFeedback("decision", item.id, "helpful"));
+          const unhelpfulBtn = document.createElement("button");
+          unhelpfulBtn.textContent = "Not helpful";
+          unhelpfulBtn.addEventListener("click", () => sendFeedback("decision", item.id, "unhelpful"));
+          feedbackRow.appendChild(helpfulBtn);
+          feedbackRow.appendChild(unhelpfulBtn);
 
           card.appendChild(title);
           card.appendChild(meta);
@@ -195,6 +233,7 @@
           card.appendChild(observation);
           card.appendChild(reasoning);
           card.appendChild(details);
+          card.appendChild(feedbackRow);
           listNode.appendChild(card);
         });
       };

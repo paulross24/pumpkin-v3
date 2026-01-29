@@ -32,6 +32,8 @@ Pumpkin v3 is a persistent, context-aware digital steward that observes, decides
 - Shopping list for suggested hardware, with mark acquired
 - Proposal workflow with approvals, follow-through queue, and audit log
 - UI auto-curation: hides low-signal panels and keeps high-signal ones prominent, while preserving full access via menu
+- Feedback loop: mark decisions/alerts as helpful or not to improve signal quality
+- System goals: seeded objectives shown in settings to guide evolution
 
 ## Autonomy modes and safety lanes
 Autonomy is controlled by mode + policy lanes:
@@ -111,6 +113,7 @@ Pumpkin records:
 - `/ui/proposals` Proposals + restricted approvals
 - `/ui/audit` Audit log feed
 - `/ui/settings` Autonomy + LLM configuration
+- `/ui/settings` also displays system goals
 - Decision cards include risk/confidence/reversibility scoring
 - `/ui/vision` Vision review + enroll + correction
 - `/ui/recordings` Camera recordings with playback
