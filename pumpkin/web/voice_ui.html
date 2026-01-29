@@ -315,6 +315,11 @@
         height: 170px;
         margin: 0 auto;
         position: relative;
+        border-radius: 28px;
+      }
+      .ambient-breath {
+        animation: ambientBreath 6s ease-in-out infinite;
+        box-shadow: 0 0 0 rgba(230, 124, 46, 0.0);
       }
       .pumpkin-svg {
         width: 170px;
@@ -397,12 +402,77 @@
       .pulse-shell[data-mood="alert"] .reel-track {
         animation-duration: 6s;
       }
+      .ticker {
+        margin-top: 10px;
+        padding: 6px 10px;
+        border-radius: 12px;
+        border: 1px solid var(--line);
+        background: rgba(255, 248, 242, 0.8);
+        overflow: hidden;
+      }
+      .ticker-track {
+        display: flex;
+        gap: 24px;
+        white-space: nowrap;
+        animation: tickerScroll 22s linear infinite;
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .ticker-track span {
+        padding-right: 24px;
+      }
+      [data-mood="engaged"] .ticker-track {
+        animation-duration: 16s;
+      }
+      [data-mood="focused"] .ticker-track {
+        animation-duration: 12s;
+      }
+      [data-mood="alert"] .ticker-track {
+        animation-duration: 8s;
+        color: var(--bad);
+      }
+      .memory-scroll {
+        overflow: hidden;
+        border-radius: 12px;
+        border: 1px dashed var(--line);
+        background: rgba(255, 255, 255, 0.6);
+        padding: 8px 10px;
+      }
+      .memory-track {
+        display: flex;
+        gap: 24px;
+        white-space: nowrap;
+        animation: tickerScroll 30s linear infinite;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .memory-track span {
+        padding-right: 24px;
+      }
       @keyframes reelScroll {
         0% {
           transform: translateX(0);
         }
         100% {
           transform: translateX(-50%);
+        }
+      }
+      @keyframes tickerScroll {
+        0% {
+          transform: translateX(0);
+        }
+        100% {
+          transform: translateX(-50%);
+        }
+      }
+      @keyframes ambientBreath {
+        0%, 100% {
+          transform: scale(1);
+          box-shadow: 0 0 0 rgba(230, 124, 46, 0.0);
+        }
+        50% {
+          transform: scale(1.02);
+          box-shadow: 0 18px 40px rgba(230, 124, 46, 0.25);
         }
       }
       @keyframes fadeUp {
@@ -492,7 +562,7 @@
         <ul class="list" id="command-recent"></ul>
       </section>
       <section class="card grid-span pulse-card is-link" data-link="/ui/thoughts" data-card="thought-pulse">
-        <div class="pulse-shell" id="thought-pulse" data-level="0">
+        <div class="pulse-shell ambient-breath" id="thought-pulse" data-level="0">
           <svg class="pumpkin-svg" viewBox="0 0 200 200" aria-hidden="true">
             <rect x="90" y="24" width="20" height="36" rx="6" fill="#5b4b41" />
             <ellipse cx="100" cy="120" rx="78" ry="58" fill="var(--pumpkin)" />
@@ -517,7 +587,14 @@
             <span class="card-cta">Open →</span>
           </div>
           <div class="stat" id="thought-status">Listening...</div>
+          <div class="sub" id="focus-badge">Focus: warming up</div>
           <ul class="list" id="thought-meta"></ul>
+          <div class="ticker">
+            <div class="ticker-track" id="narration-ticker">
+              <span>Loading narration…</span>
+              <span>Loading narration…</span>
+            </div>
+          </div>
         </div>
       </section>
       <section class="card is-link" data-link="/ui/health" data-card="health">
@@ -554,6 +631,12 @@
         </div>
         <div class="stat" id="memory-title">Last learned</div>
         <div class="memory-strip" id="memory-strip"></div>
+        <div class="memory-scroll">
+          <div class="memory-track" id="memory-track">
+            <span>Loading memory highlights…</span>
+            <span>Loading memory highlights…</span>
+          </div>
+        </div>
       </section>
       <section class="card" data-card="curiosity">
         <div class="card-head">
@@ -785,6 +868,9 @@
       const thoughtStatus = byId("thought-status");
       const thoughtMeta = byId("thought-meta");
       const thoughtReel = byId("thought-reel");
+      const focusBadge = byId("focus-badge");
+      const narrationTicker = byId("narration-ticker");
+      const memoryTrack = byId("memory-track");
       const curationStatus = byId("curation-status");
       const llmStatus = byId("llm-status");
       const llmModelLabel = byId("llm-model-label");
@@ -929,6 +1015,32 @@
           thoughtReel.appendChild(spanA);
           thoughtReel.appendChild(spanB);
         }
+      };
+
+      const buildTicker = (items) => {
+        if (!narrationTicker) return;
+        const content = items.length ? items : ["awaiting new signals"];
+        const line = content.join(" • ");
+        narrationTicker.innerHTML = "";
+        const spanA = document.createElement("span");
+        const spanB = document.createElement("span");
+        spanA.textContent = line;
+        spanB.textContent = line;
+        narrationTicker.appendChild(spanA);
+        narrationTicker.appendChild(spanB);
+      };
+
+      const buildMemoryTrack = (items) => {
+        if (!memoryTrack) return;
+        const content = items.length ? items : ["no memory highlights yet"];
+        const line = content.join(" • ");
+        memoryTrack.innerHTML = "";
+        const spanA = document.createElement("span");
+        const spanB = document.createElement("span");
+        spanA.textContent = line;
+        spanB.textContent = line;
+        memoryTrack.appendChild(spanA);
+        memoryTrack.appendChild(spanB);
       };
 
       const sendFeedback = async (rating, targetId = null) => {
@@ -1221,6 +1333,11 @@
             pulseMeta.push(`heartbeat age: ${pulse.heartbeatAge.toFixed(0)}s`);
           }
           setList(thoughtMeta, pulseMeta);
+          if (focusBadge) {
+            const focusItems = Array.isArray(selfModel.focus) ? selfModel.focus : [];
+            const focusText = focusItems.length ? focusItems.join(", ") : "steady awareness";
+            focusBadge.textContent = `Focus: ${focusText}`;
+          }
 
           const mood = deriveMood(summary, alertData.count, insights.length, decisions.length);
           setText(byId("mood-label"), mood.label);
@@ -1239,10 +1356,15 @@
           const narration = buildNarration(summary, decisions, insights, alertData.items || []);
           setText(byId("narration-line"), truncate(narration.line, 140));
           setText(byId("narration-source"), narration.source || "Live");
+          const tickerItems = [];
+          if (narration.line) tickerItems.push(truncate(narration.line, 120));
+          if (decisions.length) tickerItems.push(`decision: ${truncate(decisions[0].detection_summary || decisions[0].decision || "update", 80)}`);
+          if (insights.length) tickerItems.push(`insight: ${truncate(insights[0].summary || insights[0].type || "signal", 80)}`);
+          buildTicker(tickerItems);
 
           const memoryStrip = byId("memory-strip");
+          const journal = Array.isArray(summary.self_journal) ? summary.self_journal : [];
           if (memoryStrip) {
-            const journal = Array.isArray(summary.self_journal) ? summary.self_journal : [];
             if (!journal.length) {
               memoryStrip.textContent = "No memory highlights yet.";
             } else {
@@ -1255,6 +1377,12 @@
               });
             }
           }
+          buildMemoryTrack(
+            journal.slice(0, 6).map((item) => {
+              if (typeof item === "string") return truncate(item, 120);
+              return truncate(item.message || item.summary || JSON.stringify(item), 120);
+            })
+          );
 
           const curiosityTitle = byId("curiosity-title");
           const curiosityDetail = byId("curiosity-detail");
