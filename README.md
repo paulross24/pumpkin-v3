@@ -36,6 +36,7 @@ Pumpkin v3 is a persistent, context-aware digital steward that observes, decides
 - System goals: seeded objectives shown in settings to guide evolution
 - Learning loop: feedback stats + distilled highlights + next-focus suggestions
 - Capability map: consolidated view of HA domains, cameras, and network device counts
+- Self model: live confidence, focus, and narrative of decisions
 
 ## Autonomy modes and safety lanes
 Autonomy is controlled by mode + policy lanes:
@@ -117,6 +118,7 @@ Pumpkin records:
 - `/ui/audit` Audit log feed
 - `/ui/settings` Autonomy + LLM configuration
 - `/ui/settings` also displays system goals + learning loop stats
+- Command Center includes Self Model card with confidence + narrative
 - Decision cards include risk/confidence/reversibility scoring
 - `/ui/vision` Vision review + enroll + correction
 - `/ui/recordings` Camera recordings with playback

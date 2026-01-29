@@ -483,6 +483,15 @@
         <div class="stat" id="health-status">...</div>
         <ul class="list" id="health-details"></ul>
       </section>
+      <section class="card" data-card="self-model">
+        <div class="card-head">
+          <h3>Self Model</h3>
+          <span class="card-cta">Live</span>
+        </div>
+        <div class="stat" id="self-status">--</div>
+        <div class="sub" id="self-narrative">Awaiting narrative...</div>
+        <ul class="list" id="self-list"></ul>
+      </section>
       <section class="card is-link" data-link="/ui/identity" data-card="identity">
         <div class="card-head">
           <h3>Identity</h3>
@@ -674,6 +683,9 @@
       const briefingText = byId("briefing-text");
       const decisionCount = byId("decision-count");
       const decisionList = byId("decision-list");
+      const selfStatus = byId("self-status");
+      const selfNarrative = byId("self-narrative");
+      const selfList = byId("self-list");
       const briefingCount = byId("briefing-count");
       const briefingList = byId("briefing-list");
       const thoughtPulse = byId("thought-pulse");
@@ -1015,6 +1027,31 @@
               setText(commandAwareness, "Awareness: warming up");
             }
           }
+          const selfModel = summary.self_model || {};
+          const selfNarr = summary.self_narrative || {};
+          if (selfStatus) {
+            const confidence = selfModel.confidence != null ? `${Math.round(selfModel.confidence * 100)}%` : "--";
+            setText(selfStatus, `confidence ${confidence}`);
+          }
+          if (selfNarrative) {
+            setText(
+              selfNarrative,
+              selfNarr.observed
+                ? `Observed: ${selfNarr.observed} • Decided: ${selfNarr.decided || "n/a"}`
+                : "Awaiting narrative..."
+            );
+          }
+          const selfItems = [
+            `mode: ${selfModel.mode || "OPERATOR"}`,
+            `insights: ${selfModel.insights ?? 0}`,
+            `detections: ${selfModel.detections ?? 0}`,
+            `auto actions: ${selfModel.auto_actions ?? 0}`,
+            `proposals: ${selfModel.proposals ?? 0}`,
+            `warnings: ${selfModel.warnings ?? 0}`,
+          ];
+          const focus = Array.isArray(selfModel.focus) ? selfModel.focus.slice(0, 2) : [];
+          focus.forEach((item) => selfItems.push(`focus: ${item}`));
+          setList(selfList, selfItems);
 
           const decisions = Array.isArray(decisionsData?.decisions) ? decisionsData.decisions : [];
           latestDecisionId = decisions.length ? decisions[0].id : null;
