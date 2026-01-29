@@ -8779,6 +8779,17 @@ def _restart_service(service: str) -> tuple[bool, str]:
         return False, f"restart_failed:{type(exc).__name__}"
 
 
+def _recording_ffmpeg_active() -> bool:
+    cmd = ["pgrep", "-fa", "ffmpeg"]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
+    except Exception:
+        return False
+    if proc.returncode != 0:
+        return False
+    return "camera_recordings" in proc.stdout
+
+
 def _core_watchdog_loop(stop_event: threading.Event) -> None:
     while not stop_event.is_set():
         cfg = _load_selfheal_cfg()
@@ -8808,12 +8819,34 @@ def _core_watchdog_loop(stop_event: threading.Event) -> None:
         age = (datetime.now(timezone.utc) - ts).total_seconds()
         if age <= stale_seconds:
             continue
+        recording_active = _recording_ffmpeg_active()
+        if recording_active:
+            store.insert_event(
+                conn,
+                source="selfheal",
+                event_type="selfheal.suppressed",
+                payload={
+                    "reason": "recording_active",
+                    "heartbeat_age_seconds": round(age, 2),
+                    "stale_seconds": stale_seconds,
+                },
+                severity="info",
+            )
+            continue
         ok, detail = _restart_service("pumpkin.service")
         store.insert_event(
             conn,
             source="selfheal",
             event_type="selfheal.action",
-            payload={"action": "restart_service", "service": "pumpkin.service", "ok": ok, "detail": detail},
+            payload={
+                "action": "restart_service",
+                "service": "pumpkin.service",
+                "ok": ok,
+                "detail": detail,
+                "heartbeat_age_seconds": round(age, 2),
+                "stale_seconds": stale_seconds,
+                "recording_active": recording_active,
+            },
             severity="info" if ok else "warn",
         )
         store.set_memory(conn, "selfheal.last_core_restart_ts", now)
