@@ -6276,6 +6276,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 self_narrative = store.get_memory(conn, "self.narrative")
                 if not isinstance(self_narrative, dict):
                     self_narrative = {}
+                evolution_timeline = store.get_memory(conn, "evolution.timeline")
+                if not isinstance(evolution_timeline, list):
+                    evolution_timeline = []
                 router_rows = store.list_events(
                     conn,
                     limit=5,
@@ -6344,6 +6347,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         },
                         "self_model": self_model,
                         "self_narrative": self_narrative,
+                        "evolution_timeline": evolution_timeline[-10:],
                         "router_events": router_events,
                         "proposals": proposal_items,
                         "proposal_count": len(proposal_items),

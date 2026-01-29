@@ -252,6 +252,39 @@ def _update_capability_map(
         "cameras": sorted(cameras),
         "enabled_modules": inventory_summary.get("enabled_modules", []),
     }
+    prev_map = store.get_memory(conn, "capability.map.prev")
+    if isinstance(prev_map, dict):
+        def _as_set(value):
+            if isinstance(value, list):
+                return {str(item) for item in value}
+            return set()
+        gained_domains = sorted(list(_as_set(cap_map.get("ha_domains")) - _as_set(prev_map.get("ha_domains"))))
+        lost_domains = sorted(list(_as_set(prev_map.get("ha_domains")) - _as_set(cap_map.get("ha_domains"))))
+        gained_cameras = sorted(list(_as_set(cap_map.get("cameras")) - _as_set(prev_map.get("cameras"))))
+        lost_cameras = sorted(list(_as_set(prev_map.get("cameras")) - _as_set(cap_map.get("cameras"))))
+        gained_modules = sorted(list(_as_set(cap_map.get("enabled_modules")) - _as_set(prev_map.get("enabled_modules"))))
+        lost_modules = sorted(list(_as_set(prev_map.get("enabled_modules")) - _as_set(cap_map.get("enabled_modules"))))
+        if gained_domains or lost_domains or gained_cameras or lost_cameras or gained_modules or lost_modules:
+            timeline = store.get_memory(conn, "evolution.timeline")
+            if not isinstance(timeline, list):
+                timeline = []
+            timeline.append(
+                {
+                    "ts": now.isoformat(),
+                    "gained": {
+                        "ha_domains": gained_domains,
+                        "cameras": gained_cameras,
+                        "modules": gained_modules,
+                    },
+                    "lost": {
+                        "ha_domains": lost_domains,
+                        "cameras": lost_cameras,
+                        "modules": lost_modules,
+                    },
+                }
+            )
+            store.set_memory(conn, "evolution.timeline", timeline[-20:])
+    store.set_memory(conn, "capability.map.prev", cap_map)
     store.set_memory(conn, "capability.map", cap_map)
     return cap_map
 
@@ -315,35 +348,63 @@ def _update_self_model(
     capability_map: Dict[str, Any],
     distilled: Dict[str, Any],
     autonomy_cfg: Dict[str, Any],
+    goals: List[Dict[str, Any]] | List[str],
 ) -> Dict[str, Any]:
     now = datetime.now(timezone.utc)
     helpful_ratio = feedback_stats.get("helpful_ratio")
     confidence = _compute_confidence(warn_count, helpful_ratio if isinstance(helpful_ratio, float) else None)
+    uncertainty = round(1.0 - confidence, 3)
     autonomy_mode = None
     if isinstance(autonomy_cfg, dict):
         autonomy_mode = autonomy_cfg.get("mode")
+    total_goals = len(goals) if isinstance(goals, list) else 0
+    matched_goals = 0
+    focus_list = distilled.get("next_focus") if isinstance(distilled.get("next_focus"), list) else []
+    for goal in goals:
+        if isinstance(goal, str):
+            goal_text = goal.lower()
+        elif isinstance(goal, dict):
+            goal_text = str(goal.get("title") or "").lower()
+            tags = goal.get("tags") if isinstance(goal.get("tags"), list) else []
+            goal_text = " ".join([goal_text] + [str(t).lower() for t in tags])
+        else:
+            goal_text = ""
+        if not goal_text:
+            continue
+        if any(goal_text in str(focus).lower() for focus in focus_list):
+            matched_goals += 1
+    goal_alignment = round(matched_goals / total_goals, 3) if total_goals else None
     summary = {
         "ts": now.isoformat(),
         "mode": autonomy_mode or "OPERATOR",
         "confidence": confidence,
+        "uncertainty": uncertainty,
         "insights": insight_count,
         "detections": detections_count,
         "auto_actions": auto_actions,
         "proposals": proposals_count,
         "warnings": warn_count,
+        "goal_alignment": goal_alignment,
         "capabilities": {
             "ha_domains": len(capability_map.get("ha_domains") or []),
             "network_devices": capability_map.get("network_devices", 0),
             "cameras": len(capability_map.get("cameras") or []),
         },
-        "focus": distilled.get("next_focus") or [],
+        "focus": focus_list,
     }
+    counterfactuals: List[str] = []
+    if proposals_count > 0:
+        counterfactuals.append("Would auto-act on proposals, but approvals are required.")
+    if warn_count > 0:
+        counterfactuals.append("Could suppress alerts, but preserved visibility for investigation.")
+    if not counterfactuals:
+        counterfactuals.append("Could expand automation scope, but stayed within safe lane.")
     narrative = {
         "ts": now.isoformat(),
         "observed": f"{insight_count} insights, {detections_count} detections",
         "decided": f"{auto_actions} auto actions, {proposals_count} proposals",
         "confidence": confidence,
-        "counterfactual": "Would auto-act more if policy allowed wider lane B.",
+        "counterfactuals": counterfactuals,
     }
     store.set_memory(conn, "self.model", summary)
     store.set_memory(conn, "self.narrative", narrative)
@@ -3121,6 +3182,7 @@ def run_once() -> Dict[str, Any]:
         capability_map=capability_map,
         distilled=store.get_memory(conn, "insights.distilled") or {},
         autonomy_cfg=autonomy_cfg,
+        goals=store.get_memory(conn, "goals.list") or [],
     )
     _append_recent_memory(
         conn,
