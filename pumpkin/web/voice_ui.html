@@ -650,6 +650,11 @@
         const source = camera.source || "unknown";
         return `${label} (${source})`;
       };
+      const truncate = (value, limit = 120) => {
+        if (!value) return "";
+        const text = String(value);
+        return text.length > limit ? `${text.slice(0, limit)}…` : text;
+      };
 
       const pulseLevel = (summary, alertsCountValue) => {
         const issues = summary.issues || [];
@@ -904,7 +909,7 @@
             decisionList,
             decisions.map(
               (item) =>
-                `${item.ts} • ${item.detection_summary || item.observation || item.decision || "decision"}`
+                `${item.ts} • ${item.detection_summary || item.observation || item.decision || "decision"} — ${truncate(item.reasoning || item.decision, 140)}`
             )
           );
 

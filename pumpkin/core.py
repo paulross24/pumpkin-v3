@@ -440,6 +440,7 @@ def _collect_module_events(conn) -> List[Dict[str, Any]]:
                 }
             )
             store.set_memory(conn, "network.discovery.snapshot", snapshot)
+            store.set_memory(conn, "network.discovery.last_ts", datetime.now(timezone.utc).isoformat())
             _record_cooldown(conn, "network.discovery")
 
     if "face.recognition" in enabled:
@@ -1464,6 +1465,94 @@ def _build_detections_from_events(conn, events: List[Any]) -> List[Dict[str, Any
     return detections
 
 
+def _build_proactive_detections(
+    conn,
+    ha_summary: Dict[str, Any],
+    network_snapshot: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    detections: List[Dict[str, Any]] = []
+    detection_cfg = _load_detection_config(conn)
+    now = datetime.now(timezone.utc)
+
+    pending = store.count_proposals_by_status(conn).get("pending", 0)
+    if pending >= 5:
+        summary = f"Proposal backlog ({pending} pending)"
+        detection_type = "system.proactive.proposals"
+        signature = f"{detection_type}:{pending}"
+        if _should_emit_detection(conn, detection_type, signature, detection_cfg):
+            detections.append(
+                {
+                    "event_id": None,
+                    "source": "system",
+                    "detection_type": detection_type,
+                    "severity": "warn",
+                    "summary": summary,
+                    "details": {"pending_proposals": pending},
+                    "signature": signature,
+                }
+            )
+
+    alerts = _recent_alerts(conn)
+    alert_counts = alerts.get("counts") or {}
+    alert_total = sum(alert_counts.values()) if isinstance(alert_counts, dict) else 0
+    if alert_total >= 1:
+        summary = f"Active alerts ({alert_total} in last 6h)"
+        detection_type = "system.proactive.alerts"
+        signature = f"{detection_type}:{alert_total}"
+        if _should_emit_detection(conn, detection_type, signature, detection_cfg):
+            detections.append(
+                {
+                    "event_id": None,
+                    "source": "system",
+                    "detection_type": detection_type,
+                    "severity": "warn",
+                    "summary": summary,
+                    "details": {"alert_counts": alert_counts, "last_alert_ts": alerts.get("last_ts")},
+                    "signature": signature,
+                }
+            )
+
+    last_scan = store.get_memory(conn, "network.discovery.last_ts")
+    last_scan_dt = _normalize_ts(last_scan) if isinstance(last_scan, str) else None
+    if last_scan_dt:
+        age_seconds = (now - last_scan_dt).total_seconds()
+        if age_seconds >= 1800:
+            summary = "Network discovery stale"
+            detection_type = "system.proactive.network_scan"
+            signature = f"{detection_type}:{int(age_seconds // 60)}"
+            if _should_emit_detection(conn, detection_type, signature, detection_cfg):
+                detections.append(
+                    {
+                        "event_id": None,
+                        "source": "system",
+                        "detection_type": detection_type,
+                        "severity": "warn",
+                        "summary": summary,
+                        "details": {"age_seconds": age_seconds},
+                        "signature": signature,
+                    }
+                )
+
+    people_home = ha_summary.get("people_home") or []
+    if isinstance(people_home, list) and not people_home:
+        summary = "House appears empty"
+        detection_type = "system.proactive.empty_house"
+        signature = detection_type
+        if _should_emit_detection(conn, detection_type, signature, detection_cfg):
+            detections.append(
+                {
+                    "event_id": None,
+                    "source": "system",
+                    "detection_type": detection_type,
+                    "severity": "info",
+                    "summary": summary,
+                    "details": {"people_home": 0},
+                    "signature": signature,
+                }
+            )
+
+    return detections
+
 def _allowlisted_action(policy: policy_mod.Policy, action_type: str, params: Dict[str, Any]) -> bool:
     allowlist = policy_mod.allowlist_for_action(policy, action_type)
     if not allowlist:
@@ -1573,6 +1662,38 @@ def _score_decision(
     }
 
 
+def _build_reasoning(
+    detection: Dict[str, Any],
+    lane: str,
+    mode: str,
+    scores: Dict[str, Any],
+    action_type: str,
+) -> str:
+    summary = detection.get("summary") or "detection"
+    severity = detection.get("severity") or "info"
+    details = detection.get("details") if isinstance(detection.get("details"), dict) else {}
+    event_type = details.get("event_type")
+    confidence = scores.get("confidence")
+    risk = scores.get("risk")
+    reversibility = scores.get("reversibility")
+    parts = [
+        f"Observed: {summary}.",
+        f"Severity {severity}.",
+    ]
+    if event_type:
+        parts.append(f"Signal: {event_type}.")
+    parts.append(
+        f"Policy lane {lane} in {mode} mode; action {action_type} (risk {risk}, confidence {confidence}, reversibility {reversibility})."
+    )
+    if lane == "C":
+        parts.append("Opening restricted request for safety.")
+    elif lane == "B":
+        parts.append("Opening proposal for approval.")
+    else:
+        parts.append("Proceeding with low-risk action or proposal per mode.")
+    return " ".join(parts)
+
+
 def _process_detections(
     conn,
     policy: policy_mod.Policy,
@@ -1595,6 +1716,7 @@ def _process_detections(
         verification_status = None
         outcome = {}
         scores = _score_decision(detection, action_type, lane, mode)
+        reasoning = _build_reasoning(detection, lane, mode, scores, action_type)
 
         detection_id = store.insert_detection(
             conn,
@@ -2634,6 +2756,13 @@ def run_once() -> Dict[str, Any]:
         store.set_memory(conn, "selfcheck.last_ts", now)
 
     detections = _build_detections_from_events(conn, new_events)
+    detections.extend(
+        _build_proactive_detections(
+            conn,
+            ha_summary if isinstance(ha_summary, dict) else {},
+            network_snapshot if isinstance(network_snapshot, dict) else {},
+        )
+    )
     auto_actions = _process_detections(conn, policy, autonomy_cfg, detections)
 
     _requeue_orphaned_suggestions(conn, policy.policy_hash)
