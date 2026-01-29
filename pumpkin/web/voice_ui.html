@@ -172,6 +172,37 @@
         letter-spacing: 0.08em;
         color: var(--muted);
       }
+      .mood-meter {
+        display: grid;
+        gap: 6px;
+      }
+      .mood-bar {
+        height: 10px;
+        border-radius: 999px;
+        background: rgba(43, 27, 18, 0.1);
+        overflow: hidden;
+        position: relative;
+      }
+      .mood-bar span {
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        border-radius: 999px;
+        background: linear-gradient(90deg, #2f9d57, #f0b24c, #c43b2b);
+        transition: width 0.3s ease;
+      }
+      .narration {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--pumpkin-dark);
+      }
+      .memory-strip {
+        display: grid;
+        gap: 6px;
+        font-size: 12px;
+        color: var(--muted);
+      }
       .stat {
         font-size: 22px;
         font-weight: 700;
@@ -485,6 +516,33 @@
         <div class="stat" id="health-status">...</div>
         <ul class="list" id="health-details"></ul>
       </section>
+      <section class="card" data-card="mood">
+        <div class="card-head">
+          <h3>Mood Meter</h3>
+          <span class="card-cta">Live</span>
+        </div>
+        <div class="stat" id="mood-label">Calm</div>
+        <div class="mood-meter">
+          <div class="mood-bar"><span id="mood-bar"></span></div>
+          <div class="sub" id="mood-sub">Based on alerts, insights, and activity.</div>
+        </div>
+      </section>
+      <section class="card" data-card="narration">
+        <div class="card-head">
+          <h3>Micro Narration</h3>
+          <span class="card-cta">Live</span>
+        </div>
+        <div class="narration" id="narration-line">Warming up...</div>
+        <div class="sub" id="narration-source">Waiting for new signals.</div>
+      </section>
+      <section class="card" data-card="memory-strip">
+        <div class="card-head">
+          <h3>Memory Highlights</h3>
+          <span class="card-cta">Recent</span>
+        </div>
+        <div class="stat" id="memory-title">Last learned</div>
+        <div class="memory-strip" id="memory-strip"></div>
+      </section>
       <section class="card" data-card="self-model">
         <div class="card-head">
           <h3>Self Model</h3>
@@ -767,6 +825,45 @@
         }
         const status = level === 3 ? "Stalled" : level === 2 ? "Alert" : level === 1 ? "Active" : "Idle";
         return { level, status, heartbeatAge };
+      };
+
+      const deriveMood = (summary, alertsCountValue, insightCount, decisionCount) => {
+        const issues = summary.issues || [];
+        const base = Math.min(100, alertsCountValue * 10 + insightCount * 4 + decisionCount * 3 + issues.length * 8);
+        let label = "Calm";
+        if (base > 60) label = "Alert";
+        else if (base > 30) label = "Focused";
+        else if (base > 10) label = "Engaged";
+        return { score: Math.min(100, Math.max(5, base)), label };
+      };
+
+      const buildNarration = (summary, decisions, insights, alertItems) => {
+        if (alertItems.length) {
+          const alert = alertItems[0];
+          return {
+            line: `I noticed an alert at ${alert.ts || "just now"}.`,
+            source: alert.message || "Alert monitor",
+          };
+        }
+        if (decisions.length) {
+          const decision = decisions[0];
+          return {
+            line: decision.reasoning || "I am evaluating the latest change.",
+            source: decision.detection_summary || "Decision loop",
+          };
+        }
+        if (insights.length) {
+          const insight = insights[0];
+          return {
+            line: insight.summary || "I am scanning for new signals.",
+            source: insight.type || "Insights",
+          };
+        }
+        const awareness = summary.awareness || {};
+        if (awareness.summary) {
+          return { line: awareness.summary, source: "Awareness" };
+        }
+        return { line: "Listening for changes across the home.", source: "Idle" };
       };
 
       const loadAlerts = async () => {
@@ -1093,6 +1190,37 @@
             pulseMeta.push(`heartbeat age: ${pulse.heartbeatAge.toFixed(0)}s`);
           }
           setList(thoughtMeta, pulseMeta);
+
+          const mood = deriveMood(summary, alertData.count, insights.length, decisions.length);
+          setText(byId("mood-label"), mood.label);
+          const moodBar = byId("mood-bar");
+          if (moodBar) {
+            moodBar.style.width = `${mood.score}%`;
+          }
+          setText(
+            byId("mood-sub"),
+            `activity score ${mood.score} • ${alertData.count} alerts, ${insights.length} insights`
+          );
+
+          const narration = buildNarration(summary, decisions, insights, alertData.items || []);
+          setText(byId("narration-line"), truncate(narration.line, 140));
+          setText(byId("narration-source"), narration.source || "Live");
+
+          const memoryStrip = byId("memory-strip");
+          if (memoryStrip) {
+            const journal = Array.isArray(summary.self_journal) ? summary.self_journal : [];
+            if (!journal.length) {
+              memoryStrip.textContent = "No memory highlights yet.";
+            } else {
+              memoryStrip.innerHTML = "";
+              journal.slice(0, 4).forEach((item) => {
+                const div = document.createElement("div");
+                const msg = typeof item === "string" ? item : item.message || item.summary || JSON.stringify(item);
+                div.textContent = truncate(msg, 120);
+                memoryStrip.appendChild(div);
+              });
+            }
+          }
 
           if (feedbackHelpful) {
             feedbackHelpful.onclick = () => sendFeedback("helpful");
