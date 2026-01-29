@@ -6034,6 +6034,10 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 awareness = store.get_memory(conn, "awareness.snapshot")
                 if not isinstance(awareness, dict):
                     awareness = None
+                ui_hidden = store.get_memory(conn, "ui.hidden_cards")
+                if not isinstance(ui_hidden, list):
+                    ui_hidden = []
+                ui_curation_ts = store.get_memory(conn, "ui.curation.last_ts")
                 network_discovery = store.get_memory(conn, "network.discovery.snapshot")
                 deep_scan_state = store.get_memory(conn, "network.discovery.deep_scan")
                 network_discovery = _merge_deep_scan_devices(network_discovery, deep_scan_state)
@@ -6183,6 +6187,10 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "system_snapshot": system_snapshot,
                         "world_state": world_state,
                         "awareness": awareness,
+                        "ui": {
+                            "hidden_cards": ui_hidden,
+                            "last_curated_ts": ui_curation_ts,
+                        },
                         "homeassistant": ha_summary,
                         "homeassistant_last_event": ha_last_event,
                         "homeassistant_sync": ha_sync,

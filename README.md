@@ -31,6 +31,7 @@ Pumpkin v3 is a persistent, context-aware digital steward that observes, decides
 - Dog watch alerts (camera-based behavior alerts)
 - Shopping list for suggested hardware, with mark acquired
 - Proposal workflow with approvals, follow-through queue, and audit log
+- UI auto-curation: hides low-signal panels and keeps high-signal ones prominent, while preserving full access via menu
 
 ## Autonomy modes and safety lanes
 Autonomy is controlled by mode + policy lanes:
@@ -104,6 +105,7 @@ Pumpkin records:
 
 ## UI pages
 - `/ui` Command Center (health score, approvals, recent changes)
+  - Auto-curation hides low-signal panels but never removes them from the menu
 - `/ui/decisions` Decisions feed
 - `/ui/briefings` Hourly and daily briefings
 - `/ui/proposals` Proposals + restricted approvals

@@ -1873,6 +1873,104 @@ def _update_world_state(
     )
 
 
+def _auto_curate_ui(conn, network_snapshot: Dict[str, Any]) -> None:
+    now = datetime.now(timezone.utc)
+    since_ts = (now - timedelta(hours=24)).isoformat()
+    hidden = store.get_memory(conn, "ui.hidden_cards") or []
+    if not isinstance(hidden, list):
+        hidden = []
+    hidden_set = {str(item) for item in hidden}
+
+    def count_events(event_type: str) -> int:
+        try:
+            return int(
+                conn.execute(
+                    "SELECT count(*) FROM events WHERE type = ? AND ts >= ?",
+                    (event_type, since_ts),
+                ).fetchone()[0]
+            )
+        except Exception:
+            return 0
+
+    def count_events_like(prefix: str) -> int:
+        try:
+            return int(
+                conn.execute(
+                    "SELECT count(*) FROM events WHERE type LIKE ? AND ts >= ?",
+                    (prefix, since_ts),
+                ).fetchone()[0]
+            )
+        except Exception:
+            return 0
+
+    proposals_pending = store.count_proposals_by_status(conn).get("pending", 0)
+    alerts_recent = (
+        count_events("face.alert")
+        + count_events("behavior.alert")
+        + count_events("car.alert")
+    )
+    network_devices = 0
+    if isinstance(network_snapshot, dict):
+        devices = network_snapshot.get("devices") or []
+        if isinstance(devices, list):
+            network_devices = len(devices)
+    cameras = store.get_memory(conn, "camera.registry")
+    camera_count = len(cameras) if isinstance(cameras, list) else 0
+    insights_recent = count_events_like("insight.%")
+    try:
+        decisions_recent = int(
+            conn.execute(
+                "SELECT count(*) FROM decisions WHERE ts >= ?",
+                (since_ts,),
+            ).fetchone()[0]
+        )
+    except Exception:
+        decisions_recent = 0
+    try:
+        briefings_recent = int(
+            conn.execute(
+                "SELECT count(*) FROM briefings WHERE ts >= ?",
+                (since_ts,),
+            ).fetchone()[0]
+        )
+    except Exception:
+        briefings_recent = 0
+    recordings_recent = count_events("camera.recorded")
+
+    metrics = {
+        "proposals": proposals_pending,
+        "alerts": alerts_recent,
+        "network": network_devices,
+        "cameras": camera_count,
+        "insights": insights_recent,
+        "decisions": decisions_recent,
+        "briefings": briefings_recent,
+        "recordings": recordings_recent,
+    }
+    updated = set(hidden_set)
+    for key, value in metrics.items():
+        if value <= 0:
+            updated.add(key)
+        else:
+            updated.discard(key)
+
+    updated_list = sorted(updated)
+    if set(updated_list) != hidden_set:
+        store.set_memory(conn, "ui.hidden_cards", updated_list)
+        store.set_memory(conn, "ui.curation.last_ts", now.isoformat())
+        store.insert_event(
+            conn,
+            "system",
+            "ui.curation",
+            {
+                "hidden_cards": updated_list,
+                "metrics": metrics,
+                "ts": now.isoformat(),
+            },
+            severity="info",
+        )
+
+
 def _parse_ts(value: str) -> datetime | None:
     if not value:
         return None
@@ -2699,6 +2797,7 @@ def run_once() -> Dict[str, Any]:
         inventory=inventory_snapshot if isinstance(inventory_snapshot, dict) else {},
         insights_list=all_insights,
     )
+    _auto_curate_ui(conn, network_snapshot if isinstance(network_snapshot, dict) else {})
     _update_awareness_snapshot(
         conn,
         ha_summary if isinstance(ha_summary, dict) else {},

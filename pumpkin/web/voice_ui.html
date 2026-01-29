@@ -405,7 +405,7 @@
           <div class="sub" id="subtitle">Loading status...</div>
         </header>
         <main>
-      <section class="card grid-span" id="command-center-card">
+      <section class="card grid-span" id="command-center-card" data-card="command">
         <div class="card-head">
           <h3>Command Center</h3>
           <span class="card-cta">Live state</span>
@@ -416,7 +416,7 @@
         <div class="sub">Recent changes</div>
         <ul class="list" id="command-recent"></ul>
       </section>
-      <section class="card grid-span pulse-card is-link" data-link="/ui/thoughts">
+      <section class="card grid-span pulse-card is-link" data-link="/ui/thoughts" data-card="thought-pulse">
         <div class="pulse-shell" id="thought-pulse" data-level="0">
           <svg class="pumpkin-svg" viewBox="0 0 200 200" aria-hidden="true">
             <rect x="90" y="24" width="20" height="36" rx="6" fill="#5b4b41" />
@@ -445,7 +445,7 @@
           <ul class="list" id="thought-meta"></ul>
         </div>
       </section>
-      <section class="card is-link" data-link="/ui/health">
+      <section class="card is-link" data-link="/ui/health" data-card="health">
         <div class="card-head">
           <h3>System Health</h3>
           <span class="card-cta">Open →</span>
@@ -453,7 +453,7 @@
         <div class="stat" id="health-status">...</div>
         <ul class="list" id="health-details"></ul>
       </section>
-      <section class="card is-link" data-link="/ui/identity">
+      <section class="card is-link" data-link="/ui/identity" data-card="identity">
         <div class="card-head">
           <h3>Identity</h3>
           <span class="card-cta">Open →</span>
@@ -461,7 +461,7 @@
         <div class="stat" id="identity-name">Unknown</div>
         <ul class="list" id="identity-meta"></ul>
       </section>
-      <section class="card is-link" data-link="/ui/proposals">
+      <section class="card is-link" data-link="/ui/proposals" data-card="proposals">
         <div class="card-head">
           <h3>Proposals</h3>
           <span class="card-cta">Open →</span>
@@ -472,7 +472,7 @@
         </div>
         <ul class="list" id="proposal-list"></ul>
       </section>
-      <section class="card is-link" data-link="/ui/settings">
+      <section class="card is-link" data-link="/ui/settings" data-card="settings">
         <div class="card-head">
           <h3>Settings</h3>
           <span class="card-cta">Open →</span>
@@ -483,7 +483,7 @@
         </div>
         <ul class="list" id="settings-list"></ul>
       </section>
-      <section class="card is-link" data-link="/ui/scoreboard">
+      <section class="card is-link" data-link="/ui/scoreboard" data-card="scoreboard">
         <div class="card-head">
           <h3>Scoreboard</h3>
           <span class="card-cta">Open →</span>
@@ -494,7 +494,7 @@
         </div>
         <ul class="list" id="scoreboard-list"></ul>
       </section>
-      <section class="card is-link" data-link="/ui/alerts">
+      <section class="card is-link" data-link="/ui/alerts" data-card="alerts">
         <div class="card-head">
           <h3>Alerts</h3>
           <span class="card-cta">Open →</span>
@@ -505,7 +505,7 @@
         </div>
         <ul class="list" id="alerts-list"></ul>
       </section>
-      <section class="card is-link" data-link="/ui/network">
+      <section class="card is-link" data-link="/ui/network" data-card="network">
         <div class="card-head">
           <h3>Network</h3>
           <span class="card-cta">Open →</span>
@@ -516,7 +516,7 @@
         </div>
         <ul class="list" id="network-list"></ul>
       </section>
-      <section class="card is-link" data-link="/ui/vision">
+      <section class="card is-link" data-link="/ui/vision" data-card="cameras">
         <div class="card-head">
           <h3>Cameras</h3>
           <span class="card-cta">Open →</span>
@@ -528,7 +528,7 @@
         </div>
         <ul class="list" id="camera-list"></ul>
       </section>
-      <section class="card is-link" data-link="/ui/insights">
+      <section class="card is-link" data-link="/ui/insights" data-card="insights">
         <div class="card-head">
           <h3>Insights</h3>
           <span class="card-cta">Open →</span>
@@ -537,7 +537,7 @@
         <div class="sub" id="briefing-text">No briefing yet.</div>
         <ul class="list" id="insight-list"></ul>
       </section>
-      <section class="card grid-span is-link" data-link="/ui/decisions">
+      <section class="card grid-span is-link" data-link="/ui/decisions" data-card="decisions">
         <div class="card-head">
           <h3>Decisions</h3>
           <span class="card-cta">Open →</span>
@@ -545,7 +545,7 @@
         <div class="stat" id="decision-count">0</div>
         <ul class="list" id="decision-list"></ul>
       </section>
-      <section class="card grid-span is-link" data-link="/ui/briefings">
+      <section class="card grid-span is-link" data-link="/ui/briefings" data-card="briefings">
         <div class="card-head">
           <h3>Briefings</h3>
           <span class="card-cta">Open →</span>
@@ -782,6 +782,17 @@
         }
       };
 
+      const applyCuration = (summary) => {
+        const uiState = summary.ui || {};
+        const hidden = Array.isArray(uiState.hidden_cards) ? uiState.hidden_cards : [];
+        const cards = document.querySelectorAll("[data-card]");
+        cards.forEach((card) => {
+          const key = card.dataset.card;
+          if (!key) return;
+          card.style.display = hidden.includes(key) ? "none" : "";
+        });
+      };
+
       const load = async () => {
         try {
           linkCards();
@@ -800,6 +811,7 @@
           const status = await safeJson(statusRes, null);
           const decisionsData = await safeJson(decisionsRes, null);
           const briefingsData = await safeJson(briefingsRes, null);
+          applyCuration(summary);
 
           setText(
             subtitle,
