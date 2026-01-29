@@ -294,6 +294,8 @@ def _self_heal(conn, failures: List[Dict[str, Any]]) -> None:
     if any(str(check).startswith("ha.") for check in checks):
         if module_cfg.get("reset_ha_cooldown", True):
             actions.append({"action": "reset_cooldown", "key": "ha.request"})
+        if module_cfg.get("probe_ha", True):
+            actions.append({"action": "ha_probe"})
     if any(str(check).startswith("network.discovery") for check in checks):
         if module_cfg.get("rescan_network", True):
             actions.append({"action": "network_discovery"})
@@ -314,6 +316,8 @@ def _self_heal(conn, failures: List[Dict[str, Any]]) -> None:
             detail = f"key={key}" if key else "missing_key"
             if ok:
                 store.set_memory(conn, key, 0)
+        elif action == "ha_probe":
+            ok, detail = _probe_homeassistant(conn)
         elif action == "network_discovery":
             ok, detail = _run_network_discovery(conn)
         else:
@@ -386,3 +390,30 @@ def _run_network_discovery(conn) -> Tuple[bool, str]:
     )
     store.set_memory(conn, "network.discovery", time.time())
     return True, f"device_count={snapshot.get('device_count', 0)}"
+
+
+def _probe_homeassistant(conn) -> Tuple[bool, str]:
+    cfg = module_config.load_config(str(settings.modules_config_path()))
+    observer = cfg.get("modules", {}).get("homeassistant.observer", {}) if isinstance(cfg, dict) else {}
+    base_url = observer.get("base_url")
+    token_env = observer.get("token_env", "PUMPKIN_HA_TOKEN")
+    token = os.getenv(token_env)
+    if not base_url or not token:
+        return False, "missing_base_url_or_token"
+    url = base_url.rstrip("/") + "/"
+    req = urllib.request.Request(url)
+    try:
+        with urllib.request.urlopen(req, timeout=4) as resp:  # type: ignore[arg-type]
+            ok = 200 <= resp.status < 500
+    except Exception as exc:
+        return False, f"probe_failed:{type(exc).__name__}"
+    if ok:
+        store.set_memory(conn, "ha.request", 0)
+        store.insert_event(
+            conn,
+            source="homeassistant",
+            event_type="homeassistant.probe_ok",
+            payload={"base_url": base_url},
+            severity="info",
+        )
+    return ok, "probe_ok" if ok else "probe_bad_status"
