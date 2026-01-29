@@ -299,6 +299,8 @@ def _self_heal(conn, failures: List[Dict[str, Any]]) -> None:
     if any(str(check).startswith("network.discovery") for check in checks):
         if module_cfg.get("rescan_network", True):
             actions.append({"action": "network_discovery"})
+    if module_cfg.get("restart_core", False) and len(failures) >= 3:
+        actions.append({"action": "restart_service", "service": "pumpkin.service"})
 
     if not actions:
         return

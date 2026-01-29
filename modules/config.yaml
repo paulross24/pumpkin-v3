@@ -257,7 +257,9 @@ modules:
     cooldown_seconds: 300
     max_actions_per_run: 1
     restart_voice: true
+    restart_core: true
     reset_ha_cooldown: true
+    probe_ha: true
     rescan_network: true
     core_watchdog_enabled: true
     core_watchdog_interval_seconds: 60
