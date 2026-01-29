@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Causal Trace</title>
+    <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='29' y='10' width='6' height='12' fill='%235b4b41'/><circle cx='32' cy='36' r='20' fill='%23e67c2e'/><circle cx='20' cy='36' r='14' fill='%23f08a3a' opacity='0.85'/><circle cx='44' cy='36' r='14' fill='%23f08a3a' opacity='0.85'/></svg>" />
+    <style>
+      :root {
+        --bg: #f6efe8;
+        --ink: #2a1b12;
+        --muted: #5b4b41;
+        --card: #fff8f2;
+        --line: #e5d6c6;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Iowan Old Style", "Palatino", "Bookman", "Georgia", serif;
+        color: var(--ink);
+        background: linear-gradient(160deg, #f6efe8, #f2d6b5);
+        min-height: 100vh;
+      }
+      header {
+        padding: 26px 24px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .title {
+        font-size: 26px;
+        font-weight: 700;
+      }
+      .sub { color: var(--muted); }
+      main {
+        padding: 10px 24px 40px;
+        display: grid;
+        gap: 14px;
+      }
+      .trace {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 14px;
+        box-shadow: 0 12px 24px rgba(50, 33, 22, 0.08);
+        display: grid;
+        gap: 8px;
+      }
+      .label {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+      }
+      .pill {
+        display: inline-flex;
+        gap: 6px;
+        align-items: center;
+        padding: 4px 8px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .row { display: flex; flex-wrap: wrap; gap: 8px; }
+      .mono { font-family: "Courier New", monospace; font-size: 12px; color: var(--muted); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="title">Causal Trace</div>
+      <div class="sub">
+        Observation → Decision → Action → Outcome.
+        <a href="/ui">Back to dashboard →</a>
+      </div>
+    </header>
+    <main id="trace-list"></main>
+    <script>
+      const list = document.getElementById("trace-list");
+      const render = (item) => {
+        const card = document.createElement("section");
+        card.className = "trace";
+        const goalTags = Array.isArray(item.goal_tags) && item.goal_tags.length
+          ? item.goal_tags.join(", ")
+          : "none";
+        card.innerHTML = `
+          <div class="label">Observation</div>
+          <div>${item.observation || item.detection_summary || "n/a"}</div>
+          <div class="row">
+            <span class="pill">${item.detection_type || "signal"}</span>
+            <span class="pill">severity ${item.detection_severity || "n/a"}</span>
+            <span class="pill">goal tags: ${goalTags}</span>
+          </div>
+          <div class="label">Decision</div>
+          <div>${item.decision || "n/a"}</div>
+          <div class="mono">${item.reasoning || ""}</div>
+          <div class="label">Action</div>
+          <div>${item.action ? item.action.action_type : (item.action_type || "none")}</div>
+          <div class="mono">${item.action ? JSON.stringify(item.action.params || {}) : ""}</div>
+          <div class="label">Outcome</div>
+          <div>${item.outcome ? item.outcome.status : (item.verification_status || "n/a")}</div>
+          <div class="mono">${item.outcome ? JSON.stringify(item.outcome.evidence || {}) : ""}</div>
+          <div class="mono">${item.ts}</div>
+        `;
+        return card;
+      };
+      const load = async () => {
+        const res = await fetch("/decisions?limit=30&include=trace");
+        const data = await res.json();
+        list.innerHTML = "";
+        (data.decisions || []).forEach((item) => list.appendChild(render(item)));
+      };
+      load();
+    </script>
+  </body>
+</html>

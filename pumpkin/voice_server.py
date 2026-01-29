@@ -5560,6 +5560,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
             if path == "/ui/decisions":
                 _send_html(self, 200, _load_voice_ui_asset("voice_ui_decisions.html"))
                 return
+            if path == "/ui/trace":
+                _send_html(self, 200, _load_voice_ui_asset("voice_ui_trace.html"))
+                return
             if path == "/ui/briefings":
                 _send_html(self, 200, _load_voice_ui_asset("voice_ui_briefings.html"))
                 return
@@ -5921,6 +5924,8 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 return
             if path == "/decisions":
                 limit = _parse_limit(params.get("limit", [None])[0], default=20, max_limit=200)
+                include = params.get("include", [""])[0]
+                include_trace = isinstance(include, str) and "trace" in include
                 conn = init_db(str(settings.db_path()), str(settings.repo_root() / "migrations"))
                 rows = store.list_decisions(conn, limit=limit)
                 decisions = []
@@ -5949,6 +5954,54 @@ class VoiceHandler(BaseHTTPRequestHandler):
                                 )
                             except Exception:
                                 detection_details = {}
+                    action_payload = None
+                    outcome_payload = None
+                    if include_trace and row["action_id"]:
+                        action_row = conn.execute(
+                            "SELECT * FROM actions WHERE id = ?", (row["action_id"],)
+                        ).fetchone()
+                        if action_row:
+                            try:
+                                params_json = json.loads(action_row["params_json"])
+                            except Exception:
+                                params_json = {}
+                            try:
+                                result_json = (
+                                    json.loads(action_row["result_json"])
+                                    if action_row["result_json"]
+                                    else None
+                                )
+                            except Exception:
+                                result_json = None
+                            action_payload = {
+                                "id": action_row["id"],
+                                "proposal_id": action_row["proposal_id"],
+                                "ts_started": action_row["ts_started"],
+                                "ts_finished": action_row["ts_finished"],
+                                "action_type": action_row["action_type"],
+                                "params": params_json,
+                                "status": action_row["status"],
+                                "result": result_json,
+                            }
+                            outcome_row = conn.execute(
+                                "SELECT * FROM outcomes WHERE action_id = ? ORDER BY id DESC LIMIT 1",
+                                (action_row["id"],),
+                            ).fetchone()
+                            if outcome_row:
+                                try:
+                                    outcome_payload = (
+                                        json.loads(outcome_row["evidence_json"])
+                                        if outcome_row["evidence_json"]
+                                        else {}
+                                    )
+                                except Exception:
+                                    outcome_payload = {}
+                                outcome_payload = {
+                                    "id": outcome_row["id"],
+                                    "ts": outcome_row["ts"],
+                                    "status": outcome_row["status"],
+                                    "evidence": outcome_payload,
+                                }
                     decisions.append(
                         {
                             "id": row["id"],
@@ -5968,6 +6021,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "restricted_id": row["restricted_id"],
                             "verification_status": row["verification_status"],
                             "evidence": evidence,
+                            "goal_tags": evidence.get("goal_tags", []),
+                            "action": action_payload,
+                            "outcome": outcome_payload,
                         }
                     )
                 _send_json(self, 200, {"count": len(decisions), "decisions": decisions})
@@ -6285,6 +6341,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 self_history = store.get_memory(conn, "self.history")
                 if not isinstance(self_history, list):
                     self_history = []
+                self_journal = store.get_memory(conn, "self.journal")
+                if not isinstance(self_journal, list):
+                    self_journal = []
                 router_rows = store.list_events(
                     conn,
                     limit=5,
@@ -6354,6 +6413,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "self_model": self_model,
                         "self_narrative": self_narrative,
                         "self_history": self_history[-24:],
+                        "self_journal": self_journal[-10:],
                         "evolution_timeline": evolution_timeline[-10:],
                         "router_events": router_events,
                         "proposals": proposal_items,

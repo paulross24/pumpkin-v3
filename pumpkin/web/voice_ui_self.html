@@ -104,6 +104,17 @@
         <div class="section-title">Confidence Trend</div>
         <ul class="list" id="self-history"></ul>
       </section>
+      <section class="card">
+        <div class="section-title">Self Journal</div>
+        <ul class="list" id="self-journal"></ul>
+      </section>
+      <section class="card">
+        <div class="section-title">Causal Trace</div>
+        <ul class="list">
+          <li><a href="/ui/trace">Open causal trace viewer →</a></li>
+          <li>Tracks observation → decision → action → outcome.</li>
+        </ul>
+      </section>
     </main>
     <script>
       const qs = (id) => document.getElementById(id);
@@ -157,6 +168,11 @@
           return `${row.ts} • ${conf} • warnings ${warn}`;
         });
         setList(qs("self-history"), historyItems);
+        const journal = Array.isArray(summary.self_journal) ? summary.self_journal : [];
+        const journalItems = journal.map((entry) => {
+          return `${entry.ts} • ${entry.summary || "reflection"}`;
+        });
+        setList(qs("self-journal"), journalItems);
       };
       load();
     </script>
