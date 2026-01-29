@@ -93,6 +93,14 @@ def _record_segment(
     return {"status": "ok"}
 
 
+def _bump_heartbeat(conn, source: str) -> None:
+    policy_hash = store.get_memory(conn, "policy.last_hash") or "unknown"
+    try:
+        store.insert_heartbeat(conn, policy_hash, details={"source": source})
+    except Exception:
+        pass
+
+
 def _capture_frame(output_path: Path, ffmpeg_path: str, sample_seconds: int) -> bytes | None:
     args = [
         ffmpeg_path,
@@ -636,6 +644,7 @@ def run_recording(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
             )
             return events
 
+    _bump_heartbeat(conn, "camera.recording.start")
     start_ts = _now_iso()
     output_dir = _recording_dir(str(camera_id))
     filename = f"{camera_id}-{start_ts.replace(':', '').replace('-', '')}.mp4"
@@ -663,6 +672,7 @@ def run_recording(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
             return events
         segment_paths.append(segment_path)
         total_seconds += duration_seconds
+        _bump_heartbeat(conn, "camera.recording.segment")
 
         if not motion_only or not motion_extend:
             break
