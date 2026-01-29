@@ -121,6 +121,7 @@ Pumpkin records:
 - `/ui/settings` also displays system goals + learning loop stats
 - `/ui/settings` includes evolution timeline deltas
 - Command Center includes Self Model card with confidence + narrative
+- `/ui/self` Self Awareness Console with state vector and history
 - Decision cards include risk/confidence/reversibility scoring
 - `/ui/vision` Vision review + enroll + correction
 - `/ui/recordings` Camera recordings with playback
