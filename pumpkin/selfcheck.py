@@ -14,13 +14,21 @@ from typing import Any, Dict, List, Tuple
 from . import settings, module_config, store, ha_client, observe, policy as policy_mod
 
 
-def _http_json(url: str, method: str = "GET", payload: Dict[str, Any] | None = None, timeout: float = 5.0) -> Tuple[int, Dict[str, Any]]:
+def _http_json(
+    url: str,
+    method: str = "GET",
+    payload: Dict[str, Any] | None = None,
+    timeout: float = 5.0,
+    headers: Dict[str, str] | None = None,
+) -> Tuple[int, Dict[str, Any]]:
     data = None
-    headers: Dict[str, str] = {}
+    merged_headers: Dict[str, str] = {}
+    if headers:
+        merged_headers.update(headers)
     if payload is not None:
         data = json.dumps(payload, ensure_ascii=True).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        merged_headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, headers=merged_headers, method=method)
     with urllib.request.urlopen(req, timeout=timeout) as resp:  # type: ignore[arg-type]
         raw = resp.read().decode("utf-8")
         return resp.getcode(), json.loads(raw)
@@ -29,16 +37,28 @@ def _http_json(url: str, method: str = "GET", payload: Dict[str, Any] | None = N
 def _voice_checks(host: str, port: int) -> List[Dict[str, Any]]:
     base = f"http://{host}:{port}"
     results: List[Dict[str, Any]] = []
+    ingest_payload = {
+        "schema_version": 1,
+        "request_id": f"selfcheck-{int(time.time())}",
+        "text": "selfcheck ping",
+        "source": "selfcheck",
+        "device": "selfcheck",
+    }
+    ingest_headers: Dict[str, str] = {}
+    ingest_key = os.getenv("PUMPKIN_INGEST_KEY")
+    if ingest_key:
+        ingest_headers["X-Pumpkin-Key"] = ingest_key
     tests = [
         ("root", "GET", "/", None, ["service", "version", "endpoints"]),
         ("health", "GET", "/health", None, ["status"]),
         ("config", "GET", "/config", None, ["service", "http"]),
         ("openapi", "GET", "/openapi.json", None, ["openapi", "paths"]),
-        ("ingest", "POST", "/ingest", {"text": "self check", "source": "selfcheck", "device": "self"}, ["status", "received"]),
+        ("ingest", "POST", "/ingest", ingest_payload, ["accepted", "request_id"]),
     ]
     for name, method, path, payload, expected_keys in tests:
         try:
-            status, body = _http_json(base + path, method=method, payload=payload, timeout=5.0)
+            headers = ingest_headers if name == "ingest" else None
+            status, body = _http_json(base + path, method=method, payload=payload, timeout=5.0, headers=headers)
             ok = status == 200 and all(k in body for k in expected_keys)
             results.append({"check": f"voice.{name}", "ok": ok, "status": status, "body_keys": list(body.keys())})
         except Exception as exc:
