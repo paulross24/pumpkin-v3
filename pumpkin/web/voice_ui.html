@@ -400,6 +400,7 @@
             <div class="actions">
               <button id="refresh">Refresh now</button>
               <span class="pill" id="heartbeat">Waiting for heartbeat</span>
+              <span class="pill" id="curation-status">Curation: --</span>
             </div>
           </div>
           <div class="sub" id="subtitle">Loading status...</div>
@@ -608,6 +609,7 @@
       const thoughtStatus = byId("thought-status");
       const thoughtMeta = byId("thought-meta");
       const thoughtReel = byId("thought-reel");
+      const curationStatus = byId("curation-status");
       const llmStatus = byId("llm-status");
       const llmModelLabel = byId("llm-model-label");
       const llmKeyInput = byId("llm-key");
@@ -791,6 +793,11 @@
           if (!key) return;
           card.style.display = hidden.includes(key) ? "none" : "";
         });
+        if (curationStatus) {
+          const total = cards.length;
+          const last = uiState.last_curated_ts ? new Date(uiState.last_curated_ts).toLocaleTimeString() : "n/a";
+          curationStatus.textContent = `Curation: ${hidden.length}/${total} hidden • ${last}`;
+        }
       };
 
       const load = async () => {
