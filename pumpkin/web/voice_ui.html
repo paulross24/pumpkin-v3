@@ -116,6 +116,15 @@
         flex-wrap: wrap;
         align-items: center;
       }
+      .ambient-toggle {
+        background: rgba(230, 124, 46, 0.18);
+        border-color: rgba(230, 124, 46, 0.3);
+        font-weight: 600;
+      }
+      .ambient-toggle.active {
+        background: rgba(47, 157, 87, 0.2);
+        border-color: rgba(47, 157, 87, 0.4);
+      }
       button {
         border: 1px solid var(--line);
         background: var(--card);
@@ -543,6 +552,7 @@
             <div class="title">Command Center</div>
             <div class="actions">
               <button id="refresh">Refresh now</button>
+              <button id="ambient-toggle" class="ambient-toggle">Enable ambience</button>
               <span class="pill" id="heartbeat">Waiting for heartbeat</span>
               <span class="pill" id="curation-status">Curation: --</span>
             </div>
@@ -884,6 +894,57 @@
       const feedbackUnhelpful = byId("feedback-unhelpful");
       const feedbackStatus = byId("feedback-status");
       let latestDecisionId = null;
+      const ambientToggle = byId("ambient-toggle");
+      let ambientEnabled = false;
+      let audioCtx = null;
+      let baseOsc = null;
+      let baseGain = null;
+      let lastAlertCount = 0;
+
+      const initAmbient = () => {
+        if (audioCtx) return;
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtx) return;
+        audioCtx = new AudioCtx();
+        baseOsc = audioCtx.createOscillator();
+        baseGain = audioCtx.createGain();
+        baseOsc.type = "sine";
+        baseOsc.frequency.value = 180;
+        baseGain.gain.value = 0.0;
+        baseOsc.connect(baseGain).connect(audioCtx.destination);
+        baseOsc.start();
+      };
+
+      const setAmbientEnabled = (enabled) => {
+        ambientEnabled = enabled;
+        if (ambientToggle) {
+          ambientToggle.textContent = enabled ? "Ambience on" : "Enable ambience";
+          ambientToggle.classList.toggle("active", enabled);
+        }
+        localStorage.setItem("pumpkin_ambient", enabled ? "1" : "0");
+        if (!enabled || !baseGain) return;
+        baseGain.gain.value = 0.015;
+      };
+
+      const pulseAlert = () => {
+        if (!ambientEnabled || !audioCtx || !baseGain) return;
+        const now = audioCtx.currentTime;
+        baseGain.gain.cancelScheduledValues(now);
+        baseGain.gain.setValueAtTime(0.015, now);
+        baseGain.gain.linearRampToValueAtTime(0.06, now + 0.12);
+        baseGain.gain.linearRampToValueAtTime(0.015, now + 0.5);
+      };
+
+      const adjustMoodTone = (moodLabel) => {
+        if (!baseOsc) return;
+        const freqMap = {
+          calm: 160,
+          engaged: 190,
+          focused: 220,
+          alert: 260,
+        };
+        baseOsc.frequency.value = freqMap[moodLabel] || 180;
+      };
 
       const linkCards = () => {
         const cards = document.querySelectorAll(".card.is-link");
@@ -1352,6 +1413,7 @@
           if (thoughtPulse) {
             thoughtPulse.dataset.mood = mood.label.toLowerCase();
           }
+          adjustMoodTone(mood.label.toLowerCase());
 
           const narration = buildNarration(summary, decisions, insights, alertData.items || []);
           setText(byId("narration-line"), truncate(narration.line, 140));
@@ -1417,6 +1479,10 @@
           if (feedbackUnhelpful) {
             feedbackUnhelpful.onclick = () => sendFeedback("unhelpful");
           }
+          if (ambientEnabled && alertData.count > lastAlertCount) {
+            pulseAlert();
+          }
+          lastAlertCount = alertData.count;
         } catch (err) {
           setText(subtitle, "Failed to load status.");
         }
@@ -1428,6 +1494,20 @@
           load();
           loadLlmConfig();
         });
+      }
+      if (ambientToggle) {
+        ambientToggle.addEventListener("click", async () => {
+          initAmbient();
+          if (audioCtx && audioCtx.state === "suspended") {
+            await audioCtx.resume();
+          }
+          setAmbientEnabled(true);
+        });
+      }
+      const storedAmbient = localStorage.getItem("pumpkin_ambient");
+      if (storedAmbient === "1") {
+        initAmbient();
+        setAmbientEnabled(true);
       }
       if (llmSave) {
         llmSave.addEventListener("click", saveLlmConfig);
