@@ -6158,6 +6158,13 @@ class VoiceHandler(BaseHTTPRequestHandler):
                     last_device = None
                 snapshot_event = _latest_event(conn, "system.snapshot")
                 heartbeat_event = _latest_event(conn, "heartbeat")
+                heartbeat_age = None
+                if heartbeat_event and heartbeat_event.get("ts"):
+                    try:
+                        heartbeat_ts = datetime.fromisoformat(str(heartbeat_event["ts"]))
+                        heartbeat_age = (datetime.now(timezone.utc) - heartbeat_ts).total_seconds()
+                    except Exception:
+                        heartbeat_age = None
                 proposals = store.list_proposals(conn, status=status, limit=limit)
                 proposal_items = []
                 for row in proposals:
@@ -6371,6 +6378,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         "summary_status": "ok",
                         "identity": _identity_snapshot(conn, last_device),
                         "heartbeat": heartbeat_event,
+                        "heartbeat_age_seconds": heartbeat_age,
                         "system_snapshot": system_snapshot,
                         "world_state": world_state,
                         "awareness": awareness,
