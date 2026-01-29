@@ -85,6 +85,8 @@ def _start_live(
     audio_enabled: bool,
     audio_bitrate_kbps: int,
     audio_channels: int,
+    audio_filter: str,
+    max_delay_ms: int,
 ) -> Dict[str, Any]:
     live_dir = _live_dir(camera_id)
     live_dir.mkdir(parents=True, exist_ok=True)
@@ -99,6 +101,8 @@ def _start_live(
         "error",
         "-rtsp_transport",
         "tcp",
+        "-max_delay",
+        str(max_delay_ms * 1000),
         "-i",
         rtsp_url,
         "-map",
@@ -114,6 +118,8 @@ def _start_live(
             f"{audio_bitrate_kbps}k",
             "-ac",
             str(audio_channels),
+            "-af",
+            audio_filter,
         ]
     else:
         args += ["-an"]
@@ -165,6 +171,8 @@ def ensure_live(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
     audio_enabled = bool(module_cfg.get("audio_enabled", False))
     audio_bitrate_kbps = int(module_cfg.get("audio_bitrate_kbps", 96))
     audio_channels = int(module_cfg.get("audio_channels", 1))
+    audio_filter = str(module_cfg.get("audio_filter", "aresample=async=1:min_hard_comp=0.100:first_pts=0"))
+    max_delay_ms = int(module_cfg.get("max_delay_ms", 500))
 
     registry = cameras_mod.load_registry(conn)
     rtsp_url = None
@@ -211,6 +219,8 @@ def ensure_live(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
             audio_enabled,
             audio_bitrate_kbps,
             audio_channels,
+            audio_filter,
+            max_delay_ms,
         )
         cam_state.update(
             {

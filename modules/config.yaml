@@ -246,6 +246,8 @@ modules:
     audio_enabled: true
     audio_bitrate_kbps: 96
     audio_channels: 1
+    audio_filter: "aresample=async=1:min_hard_comp=0.100:first_pts=0"
+    max_delay_ms: 500
   car.telemetry:
     baseline:
       mode: auto
