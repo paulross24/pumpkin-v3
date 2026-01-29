@@ -154,6 +154,7 @@
         display: grid;
         gap: 8px;
         min-height: 170px;
+        overflow: hidden;
       }
       .card.is-link {
         cursor: pointer;
@@ -418,6 +419,7 @@
         border: 1px solid var(--line);
         background: rgba(255, 248, 242, 0.8);
         overflow: hidden;
+        max-width: 100%;
       }
       .ticker-track {
         display: flex;
@@ -426,6 +428,7 @@
         animation: tickerScroll 22s linear infinite;
         font-size: 11px;
         color: var(--muted);
+        min-width: 100%;
       }
       .ticker-track span {
         padding-right: 24px;
