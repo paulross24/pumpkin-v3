@@ -96,7 +96,15 @@ def _record_segment(
 def _bump_heartbeat(conn, source: str) -> None:
     policy_hash = store.get_memory(conn, "policy.last_hash") or "unknown"
     try:
-        store.insert_heartbeat(conn, policy_hash, details={"source": source})
+        details = {"source": source}
+        store.insert_event(
+            conn,
+            source="vision",
+            event_type="heartbeat",
+            payload=details,
+            severity="info",
+        )
+        store.insert_heartbeat(conn, policy_hash, details=details)
     except Exception:
         pass
 
