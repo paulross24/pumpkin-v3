@@ -82,6 +82,9 @@ def _start_live(
     segment_seconds: int,
     list_size: int,
     ffmpeg_path: str,
+    audio_enabled: bool,
+    audio_bitrate_kbps: int,
+    audio_channels: int,
 ) -> Dict[str, Any]:
     live_dir = _live_dir(camera_id)
     live_dir.mkdir(parents=True, exist_ok=True)
@@ -98,7 +101,23 @@ def _start_live(
         "tcp",
         "-i",
         rtsp_url,
-        "-an",
+        "-map",
+        "0:v:0",
+    ]
+    if audio_enabled:
+        args += [
+            "-map",
+            "0:a?",
+            "-c:a",
+            "aac",
+            "-b:a",
+            f"{audio_bitrate_kbps}k",
+            "-ac",
+            str(audio_channels),
+        ]
+    else:
+        args += ["-an"]
+    args += [
         "-c:v",
         "copy",
         "-f",
@@ -143,6 +162,9 @@ def ensure_live(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
     list_size = int(module_cfg.get("list_size", 6))
     ffmpeg_path = str(module_cfg.get("ffmpeg_path", "ffmpeg"))
     stale_seconds = int(module_cfg.get("stale_seconds", 10))
+    audio_enabled = bool(module_cfg.get("audio_enabled", False))
+    audio_bitrate_kbps = int(module_cfg.get("audio_bitrate_kbps", 96))
+    audio_channels = int(module_cfg.get("audio_channels", 1))
 
     registry = cameras_mod.load_registry(conn)
     rtsp_url = None
@@ -180,7 +202,16 @@ def ensure_live(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
         _terminate(pid)
 
     try:
-        started = _start_live(camera_id, rtsp_url, segment_seconds, list_size, ffmpeg_path)
+        started = _start_live(
+            camera_id,
+            rtsp_url,
+            segment_seconds,
+            list_size,
+            ffmpeg_path,
+            audio_enabled,
+            audio_bitrate_kbps,
+            audio_channels,
+        )
         cam_state.update(
             {
                 "pid": started["pid"],

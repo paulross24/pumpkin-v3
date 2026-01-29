@@ -243,6 +243,9 @@ modules:
     stale_seconds: 10
     poll_interval_seconds: 10
     ffmpeg_path: ffmpeg
+    audio_enabled: true
+    audio_bitrate_kbps: 96
+    audio_channels: 1
   car.telemetry:
     baseline:
       mode: auto

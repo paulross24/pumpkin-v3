@@ -128,6 +128,10 @@
       </section>
       <section class="card">
         <div class="meta">Live feed</div>
+        <div class="row" style="justify-content: flex-start; gap: 8px;">
+          <button id="live-audio">Enable audio</button>
+          <span class="meta" id="live-audio-status">Audio off</span>
+        </div>
         <video id="live-player" controls muted playsinline></video>
         <div class="meta" id="live-meta">Loading live stream…</div>
       </section>
@@ -145,6 +149,8 @@
       const playerMeta = document.getElementById("player-meta");
       const livePlayer = document.getElementById("live-player");
       const liveMeta = document.getElementById("live-meta");
+      const liveAudioBtn = document.getElementById("live-audio");
+      const liveAudioStatus = document.getElementById("live-audio-status");
       const personFilter = document.getElementById("person-filter");
 
       let allItems = [];
@@ -300,6 +306,17 @@
 
       startLive();
       document.getElementById("camera-id").addEventListener("change", startLive);
+      if (liveAudioBtn) {
+        liveAudioBtn.addEventListener("click", async () => {
+          livePlayer.muted = false;
+          try {
+            await livePlayer.play();
+            liveAudioStatus.textContent = "Audio on";
+          } catch (err) {
+            liveAudioStatus.textContent = "Tap play to enable audio";
+          }
+        });
+      }
     </script>
   </body>
 </html>
