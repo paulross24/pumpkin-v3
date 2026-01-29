@@ -490,6 +490,7 @@
         </div>
         <div class="stat" id="self-status">--</div>
         <div class="sub" id="self-narrative">Awaiting narrative...</div>
+        <div class="sub" id="self-counter">Counterfactual: n/a</div>
         <ul class="list" id="self-list"></ul>
       </section>
       <section class="card is-link" data-link="/ui/identity" data-card="identity">
@@ -686,6 +687,7 @@
       const selfStatus = byId("self-status");
       const selfNarrative = byId("self-narrative");
       const selfList = byId("self-list");
+      const selfCounter = byId("self-counter");
       const briefingCount = byId("briefing-count");
       const briefingList = byId("briefing-list");
       const thoughtPulse = byId("thought-pulse");
@@ -1048,10 +1050,16 @@
             `auto actions: ${selfModel.auto_actions ?? 0}`,
             `proposals: ${selfModel.proposals ?? 0}`,
             `warnings: ${selfModel.warnings ?? 0}`,
+            `uncertainty: ${selfModel.uncertainty != null ? Math.round(selfModel.uncertainty * 100) + "%" : "n/a"}`,
+            `goal alignment: ${selfModel.goal_alignment != null ? Math.round(selfModel.goal_alignment * 100) + "%" : "n/a"}`,
           ];
           const focus = Array.isArray(selfModel.focus) ? selfModel.focus.slice(0, 2) : [];
           focus.forEach((item) => selfItems.push(`focus: ${item}`));
           setList(selfList, selfItems);
+          const counter = Array.isArray(selfNarr.counterfactuals) ? selfNarr.counterfactuals : [];
+          if (selfCounter) {
+            selfCounter.textContent = counter.length ? `Counterfactual: ${counter[0]}` : "Counterfactual: n/a";
+          }
 
           const decisions = Array.isArray(decisionsData?.decisions) ? decisionsData.decisions : [];
           latestDecisionId = decisions.length ? decisions[0].id : null;

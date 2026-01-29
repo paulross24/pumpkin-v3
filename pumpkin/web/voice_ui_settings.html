@@ -188,6 +188,8 @@
         <ul class="list" id="learning-list"></ul>
         <div class="section-title" style="margin-top: 10px;">Capability Map</div>
         <ul class="list" id="capability-list"></ul>
+        <div class="section-title" style="margin-top: 10px;">Evolution Timeline</div>
+        <ul class="list" id="evolution-list"></ul>
       </section>
     </main>
     <script>
@@ -222,6 +224,7 @@
       const learningScore = qs("learning-score");
       const learningList = qs("learning-list");
       const capabilityList = qs("capability-list");
+      const evolutionList = qs("evolution-list");
 
       const loadSummary = async () => {
         const res = await fetch("/summary");
@@ -279,6 +282,15 @@
           `modules: ${(capMap.enabled_modules || []).length}`,
         ];
         setList(capabilityList, capItems);
+        const evolution = Array.isArray(summary.evolution_timeline) ? summary.evolution_timeline : [];
+        const evoItems = evolution.map((entry) => {
+          const gained = entry.gained || {};
+          const lost = entry.lost || {};
+          const gainedCount = (gained.ha_domains || []).length + (gained.cameras || []).length + (gained.modules || []).length;
+          const lostCount = (lost.ha_domains || []).length + (lost.cameras || []).length + (lost.modules || []).length;
+          return `${entry.ts} • +${gainedCount} / -${lostCount}`;
+        });
+        setList(evolutionList, evoItems.slice(0, 6));
       };
 
       const loadLlmConfig = async () => {
