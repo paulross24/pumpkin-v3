@@ -38,6 +38,8 @@ Pumpkin v3 is a persistent, context-aware digital steward that observes, decides
 - Capability map: consolidated view of HA domains, cameras, and network device counts
 - Self model: live confidence, focus, and narrative of decisions
 - Self narrative: counterfactuals and uncertainty tracking
+- Self journal: daily reflections and evolution summaries in `/ui/self`
+- Causal trace viewer: observation → decision → action → outcome at `/ui/trace`
 
 ## Autonomy modes and safety lanes
 Autonomy is controlled by mode + policy lanes:
