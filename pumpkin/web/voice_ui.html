@@ -194,6 +194,35 @@
         font-size: 12px;
         font-weight: 600;
       }
+      .feedback-footer {
+        grid-column: 1 / -1;
+        margin-top: 4px;
+        padding: 12px 16px;
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .feedback-footer .label {
+        font-size: 12px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        font-weight: 600;
+      }
+      .feedback-footer button {
+        border: 1px solid var(--line);
+        background: #fff;
+        color: var(--ink);
+        padding: 8px 12px;
+        border-radius: 999px;
+        cursor: pointer;
+        font-family: inherit;
+      }
       .field {
         display: flex;
         flex-direction: column;
@@ -554,6 +583,14 @@
         <div class="stat" id="briefing-count">0</div>
         <ul class="list" id="briefing-list"></ul>
       </section>
+      <div class="feedback-footer">
+        <span class="label">Quick feedback</span>
+        <div class="actions">
+          <button id="feedback-helpful">Helpful</button>
+          <button id="feedback-unhelpful">Not helpful</button>
+        </div>
+        <span class="sub" id="feedback-status"></span>
+      </div>
         </main>
       </div>
     </div>
@@ -618,6 +655,10 @@
       const llmSave = byId("llm-save");
       const llmSaveStatus = byId("llm-save-status");
       let llmLoadedOnce = false;
+      const feedbackHelpful = byId("feedback-helpful");
+      const feedbackUnhelpful = byId("feedback-unhelpful");
+      const feedbackStatus = byId("feedback-status");
+      let latestDecisionId = null;
 
       const linkCards = () => {
         const cards = document.querySelectorAll(".card.is-link");
@@ -709,6 +750,25 @@
           spanB.textContent = line;
           thoughtReel.appendChild(spanA);
           thoughtReel.appendChild(spanB);
+        }
+      };
+
+      const sendFeedback = async (rating) => {
+        if (!feedbackStatus) return;
+        feedbackStatus.textContent = "Sending...";
+        try {
+          await fetch("/feedback", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              target_type: "command_center",
+              target_id: latestDecisionId || "latest",
+              rating,
+            }),
+          });
+          feedbackStatus.textContent = "Thanks.";
+        } catch (err) {
+          feedbackStatus.textContent = "Failed.";
         }
       };
 
@@ -923,6 +983,7 @@
           }
 
           const decisions = Array.isArray(decisionsData?.decisions) ? decisionsData.decisions : [];
+          latestDecisionId = decisions.length ? decisions[0].id : null;
           setText(decisionCount, decisions.length);
           setList(
             decisionList,
@@ -957,6 +1018,13 @@
             pulseMeta.push(`heartbeat age: ${pulse.heartbeatAge.toFixed(0)}s`);
           }
           setList(thoughtMeta, pulseMeta);
+
+          if (feedbackHelpful) {
+            feedbackHelpful.onclick = () => sendFeedback("helpful");
+          }
+          if (feedbackUnhelpful) {
+            feedbackUnhelpful.onclick = () => sendFeedback("unhelpful");
+          }
         } catch (err) {
           setText(subtitle, "Failed to load status.");
         }
