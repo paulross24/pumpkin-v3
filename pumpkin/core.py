@@ -2068,10 +2068,14 @@ def _window_matches(window: Dict[str, Any]) -> bool:
 
 
 def _should_reflect(conn) -> bool:
-    last_date = store.get_memory(conn, "core.last_reflection_date")
-    today = datetime.now().date().isoformat()
-    if last_date == today:
-        return False
+    last_ts = store.get_memory(conn, "core.last_reflection_ts")
+    if isinstance(last_ts, str):
+        try:
+            parsed = datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
+            if (datetime.now(timezone.utc) - parsed).total_seconds() < 6 * 3600:
+                return False
+        except Exception:
+            pass
     return _in_quiet_hours(conn)
 
 
@@ -2729,7 +2733,7 @@ def run_once() -> Dict[str, Any]:
         improvement = propose.build_improvement_proposals(conn)
         if improvement:
             proposals.extend(improvement)
-        store.set_memory(conn, "core.last_reflection_date", datetime.now().date().isoformat())
+        store.set_memory(conn, "core.last_reflection_ts", datetime.now(timezone.utc).isoformat())
     _record_proposals(conn, policy, proposals)
     _update_shopping_list(conn)
     autonomy_cfg = _load_autonomy_config(conn)
@@ -2743,6 +2747,19 @@ def run_once() -> Dict[str, Any]:
         network_snapshot if isinstance(network_snapshot, dict) else {},
         len(proposals),
         pulse_interval,
+    )
+
+    _append_recent_memory(
+        conn,
+        "loop.events",
+        {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "new_events": len(new_events),
+            "detections": len(detections),
+            "auto_actions": auto_actions,
+            "pending_proposals": len(proposals),
+        },
+        limit=60,
     )
 
     now = time.time()
