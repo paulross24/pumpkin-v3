@@ -289,6 +289,67 @@ def _distill_self_evolution(
     return distilled
 
 
+def _compute_confidence(warn_count: int, helpful_ratio: float | None) -> float:
+    base = 0.8
+    penalty = min(0.4, warn_count * 0.08)
+    boost = 0.0
+    if helpful_ratio is not None:
+        if helpful_ratio >= 0.75:
+            boost = 0.1
+        elif helpful_ratio <= 0.5:
+            penalty += 0.1
+    score = max(0.1, min(0.98, base - penalty + boost))
+    return round(score, 3)
+
+
+def _update_self_model(
+    conn,
+    *,
+    system_snapshot: Dict[str, Any] | None,
+    insight_count: int,
+    warn_count: int,
+    proposals_count: int,
+    detections_count: int,
+    auto_actions: int,
+    feedback_stats: Dict[str, Any],
+    capability_map: Dict[str, Any],
+    distilled: Dict[str, Any],
+    autonomy_cfg: Dict[str, Any],
+) -> Dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    helpful_ratio = feedback_stats.get("helpful_ratio")
+    confidence = _compute_confidence(warn_count, helpful_ratio if isinstance(helpful_ratio, float) else None)
+    autonomy_mode = None
+    if isinstance(autonomy_cfg, dict):
+        autonomy_mode = autonomy_cfg.get("mode")
+    summary = {
+        "ts": now.isoformat(),
+        "mode": autonomy_mode or "OPERATOR",
+        "confidence": confidence,
+        "insights": insight_count,
+        "detections": detections_count,
+        "auto_actions": auto_actions,
+        "proposals": proposals_count,
+        "warnings": warn_count,
+        "capabilities": {
+            "ha_domains": len(capability_map.get("ha_domains") or []),
+            "network_devices": capability_map.get("network_devices", 0),
+            "cameras": len(capability_map.get("cameras") or []),
+        },
+        "focus": distilled.get("next_focus") or [],
+    }
+    narrative = {
+        "ts": now.isoformat(),
+        "observed": f"{insight_count} insights, {detections_count} detections",
+        "decided": f"{auto_actions} auto actions, {proposals_count} proposals",
+        "confidence": confidence,
+        "counterfactual": "Would auto-act more if policy allowed wider lane B.",
+    }
+    store.set_memory(conn, "self.model", summary)
+    store.set_memory(conn, "self.narrative", narrative)
+    return summary
+
+
 def _maybe_remediate_ha_request_failed(conn, base_url: str | None) -> None:
     if not base_url:
         return
@@ -3044,6 +3105,23 @@ def run_once() -> Dict[str, Any]:
         )
     )
     auto_actions = _process_detections(conn, policy, autonomy_cfg, detections)
+    warn_count = 0
+    for item in new_events:
+        if isinstance(item, dict) and item.get("severity") in {"warn", "error"}:
+            warn_count += 1
+    _update_self_model(
+        conn,
+        system_snapshot=system_snapshot if isinstance(system_snapshot, dict) else None,
+        insight_count=len(all_insights),
+        warn_count=warn_count,
+        proposals_count=len(proposals),
+        detections_count=len(detections),
+        auto_actions=auto_actions,
+        feedback_stats=feedback_learning.get("stats", {}),
+        capability_map=capability_map,
+        distilled=store.get_memory(conn, "insights.distilled") or {},
+        autonomy_cfg=autonomy_cfg,
+    )
     _append_recent_memory(
         conn,
         "loop.events",

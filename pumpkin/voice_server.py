@@ -6270,6 +6270,12 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 capability_map = store.get_memory(conn, "capability.map")
                 if not isinstance(capability_map, dict):
                     capability_map = {}
+                self_model = store.get_memory(conn, "self.model")
+                if not isinstance(self_model, dict):
+                    self_model = {}
+                self_narrative = store.get_memory(conn, "self.narrative")
+                if not isinstance(self_narrative, dict):
+                    self_narrative = {}
                 router_rows = store.list_events(
                     conn,
                     limit=5,
@@ -6336,6 +6342,8 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "distilled": distilled_insights,
                             "capability_map": capability_map,
                         },
+                        "self_model": self_model,
+                        "self_narrative": self_narrative,
                         "router_events": router_events,
                         "proposals": proposal_items,
                         "proposal_count": len(proposal_items),
