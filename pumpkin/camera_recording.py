@@ -224,6 +224,8 @@ def _capture_rtsp_gray(rtsp_url: str, ffmpeg_path: str, sample_seconds: int, siz
 
 def _motion_detected(conn, camera_id: str, frame_bytes: bytes | None, threshold: float) -> bool:
     if not frame_bytes:
+        store.set_memory(conn, f"camera.recording.motion_last_ratio.{camera_id}", None)
+        store.set_memory(conn, f"camera.recording.motion_last_frame_ok.{camera_id}", False)
         return False
     last_key = f"camera.recording.motion_last_frame.{camera_id}"
     prev_b64 = store.get_memory(conn, last_key)
@@ -235,9 +237,13 @@ def _motion_detected(conn, camera_id: str, frame_bytes: bytes | None, threshold:
             prev = None
     store.set_memory(conn, last_key, base64.b64encode(frame_bytes).decode("ascii"))
     if prev is None or len(prev) != len(frame_bytes):
+        store.set_memory(conn, f"camera.recording.motion_last_ratio.{camera_id}", 1.0)
+        store.set_memory(conn, f"camera.recording.motion_last_frame_ok.{camera_id}", True)
         return True
     diff = sum(abs(a - b) for a, b in zip(prev, frame_bytes))
     diff_ratio = diff / (len(frame_bytes) * 255.0)
+    store.set_memory(conn, f"camera.recording.motion_last_ratio.{camera_id}", round(diff_ratio, 4))
+    store.set_memory(conn, f"camera.recording.motion_last_frame_ok.{camera_id}", True)
     if diff_ratio >= threshold:
         store.set_memory(conn, f"camera.recording.motion_last_hit.{camera_id}", _now_iso())
         return True
@@ -611,11 +617,20 @@ def run_recording(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
                 except Exception:
                     has_motion = False
         if not has_motion:
+            last_ratio = store.get_memory(conn, f"camera.recording.motion_last_ratio.{camera_id}")
+            last_frame_ok = store.get_memory(conn, f"camera.recording.motion_last_frame_ok.{camera_id}")
             events.append(
                 {
                     "source": "vision",
                     "type": "camera.recording_idle",
-                    "payload": {"camera_id": camera_id, "label": label, "reason": "no_motion"},
+                    "payload": {
+                        "camera_id": camera_id,
+                        "label": label,
+                        "reason": "no_motion",
+                        "threshold": motion_threshold,
+                        "last_ratio": last_ratio,
+                        "frame_ok": last_frame_ok,
+                    },
                     "severity": "info",
                 }
             )
@@ -764,13 +779,27 @@ def run_recording(conn, module_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
                             analysis = _call_ollama_vision_json(alt_prompt, alt_frame, llm_cfg)
                         else:
                             analysis = _call_openai_vision_json(alt_prompt, alt_frame, llm_cfg)
-                description_payload = {
-                    "description": analysis.get("summary"),
-                    "description_objects": analysis.get("objects"),
-                    "description_activity": analysis.get("activity"),
-                    "description_confidence": analysis.get("confidence"),
-                    "description_source": "llm",
-                }
+                if _looks_like_composite(str(analysis.get("summary"))) and describe_fallback:
+                    gray = _capture_frame_gray(output_path, ffmpeg_path, describe_sample_seconds)
+                    if gray:
+                        fallback = _heuristic_description(conn, str(camera_id), gray)
+                        description_payload.update(
+                            {
+                                "description": fallback.get("summary"),
+                                "description_activity": fallback.get("activity"),
+                                "description_confidence": fallback.get("confidence"),
+                                "description_source": "heuristic",
+                            }
+                        )
+                        analysis = None
+                if isinstance(analysis, dict):
+                    description_payload = {
+                        "description": analysis.get("summary"),
+                        "description_objects": analysis.get("objects"),
+                        "description_activity": analysis.get("activity"),
+                        "description_confidence": analysis.get("confidence"),
+                        "description_source": "llm",
+                    }
 
     cameras_mod.record_event(
         conn,

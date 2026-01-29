@@ -231,9 +231,9 @@ modules:
     describe_prompt: "Describe what is happening in this camera frame. Return JSON: {\"summary\": str, \"objects\": [str], \"activity\": str, \"confidence\": float}."
     describe_fallback: true
     motion_only: true
-    motion_threshold: 0.02
+    motion_threshold: 0.008
     motion_sample_seconds: 1
-    motion_grace_seconds: 20
+    motion_grace_seconds: 45
     max_record_seconds: 600
   camera.live:
     enabled: true
