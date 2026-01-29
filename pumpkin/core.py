@@ -408,6 +408,23 @@ def _update_self_model(
     }
     store.set_memory(conn, "self.model", summary)
     store.set_memory(conn, "self.narrative", narrative)
+    history = store.get_memory(conn, "self.history")
+    if not isinstance(history, list):
+        history = []
+    history.append(
+        {
+            "ts": summary["ts"],
+            "confidence": summary.get("confidence"),
+            "uncertainty": summary.get("uncertainty"),
+            "goal_alignment": summary.get("goal_alignment"),
+            "insights": summary.get("insights"),
+            "detections": summary.get("detections"),
+            "auto_actions": summary.get("auto_actions"),
+            "proposals": summary.get("proposals"),
+            "warnings": summary.get("warnings"),
+        }
+    )
+    store.set_memory(conn, "self.history", history[-72:])
     return summary
 
 

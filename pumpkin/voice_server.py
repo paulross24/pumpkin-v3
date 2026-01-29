@@ -5530,6 +5530,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
             if path == "/ui/health":
                 _send_html(self, 200, _load_voice_ui_asset("voice_ui_health.html"))
                 return
+            if path == "/ui/self":
+                _send_html(self, 200, _load_voice_ui_asset("voice_ui_self.html"))
+                return
             if path == "/ui/identity":
                 _send_html(self, 200, _load_voice_ui_asset("voice_ui_identity.html"))
                 return
@@ -6279,6 +6282,9 @@ class VoiceHandler(BaseHTTPRequestHandler):
                 evolution_timeline = store.get_memory(conn, "evolution.timeline")
                 if not isinstance(evolution_timeline, list):
                     evolution_timeline = []
+                self_history = store.get_memory(conn, "self.history")
+                if not isinstance(self_history, list):
+                    self_history = []
                 router_rows = store.list_events(
                     conn,
                     limit=5,
@@ -6347,6 +6353,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                         },
                         "self_model": self_model,
                         "self_narrative": self_narrative,
+                        "self_history": self_history[-24:],
                         "evolution_timeline": evolution_timeline[-10:],
                         "router_events": router_events,
                         "proposals": proposal_items,
@@ -6762,6 +6769,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "/ui/memory": {"get": {"summary": "Memory dashboard"}},
                             "/ui/health": {"get": {"summary": "System health dashboard"}},
                             "/ui/identity": {"get": {"summary": "Identity dashboard"}},
+                            "/ui/self": {"get": {"summary": "Self awareness console"}},
                             "/ui/insights": {"get": {"summary": "Insights dashboard"}},
                             "/ui/thoughts": {"get": {"summary": "Thought stream dashboard"}},
                             "/ui/scoreboard": {"get": {"summary": "Scoreboard dashboard"}},
