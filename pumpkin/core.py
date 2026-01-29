@@ -738,8 +738,7 @@ def _collect_module_events(conn) -> List[Dict[str, Any]]:
                 _record_cooldown(conn, "ha.token_missing")
             return events
 
-        if not _cooldown_elapsed(conn, "ha.request", settings.ha_error_cooldown_seconds()):
-            return events
+        ha_skip_snapshot = not _cooldown_elapsed(conn, "ha.request", settings.ha_error_cooldown_seconds())
 
         include_domains = module_cfg.get("include_domains")
         include_entities = module_cfg.get("include_entities")
@@ -752,90 +751,91 @@ def _collect_module_events(conn) -> List[Dict[str, Any]]:
         previous = store.get_memory(conn, "homeassistant.entities") or {}
         previous_summary = store.get_memory(conn, "homeassistant.summary") or {}
 
-        ha_events, current_states, summary, details = observe.homeassistant_snapshot(
-            base_url=base_url,
-            token=token,
-            previous=previous,
-            previous_summary=previous_summary,
-            include_domains=include_domains,
-            include_entities=include_entities,
-            exclude_domains=exclude_domains,
-            exclude_entities=exclude_entities,
-            attribute_allowlist=attribute_allowlist,
-            calendar_enabled=calendar_enabled,
-            calendar_days_ahead=calendar_days_ahead,
-            calendar_limit=calendar_limit,
-        )
-        events.extend(ha_events)
-        if current_states:
-            store.set_memory(conn, "homeassistant.entities", current_states)
-        if summary:
-            store.set_memory(conn, "homeassistant.summary", summary)
-        if details.get("areas") is not None:
-            store.set_memory(conn, "homeassistant.areas", details.get("areas"))
-        if details.get("entity_registry") is not None:
-            store.set_memory(conn, "homeassistant.entity_registry", details.get("entity_registry"))
-        if details.get("device_registry") is not None:
-            store.set_memory(conn, "homeassistant.device_registry", details.get("device_registry"))
-        if summary or current_states:
-            sync = {
-                "last_sync": datetime.now().isoformat(),
-                "entity_count": len(current_states or {}),
-                "area_count": len(details.get("areas") or []) if details.get("areas") is not None else None,
-                "entity_registry_count": len(details.get("entity_registry") or [])
-                if details.get("entity_registry") is not None
-                else None,
-                "device_registry_count": len(details.get("device_registry") or [])
-                if details.get("device_registry") is not None
-                else None,
-            }
-            store.set_memory(conn, "homeassistant.sync", sync)
-        if any(ev["type"] in {"homeassistant.request_failed", "homeassistant.states_failed"} for ev in ha_events):
-            _record_cooldown(conn, "ha.request")
-            _maybe_remediate_ha_request_failed(conn, base_url)
-        ha_error_types = {
-            "homeassistant.request_failed",
-            "homeassistant.states_failed",
-            "homeassistant.areas_failed",
-            "homeassistant.entity_registry_failed",
-            "homeassistant.device_registry_failed",
-            "homeassistant.token_missing",
-            "homeassistant.misconfigured",
-        }
-        current_errors = {
-            ev.get("type")
-            for ev in events
-            if ev.get("source") == "homeassistant" and ev.get("type") in ha_error_types
-        }
-        previous_errors = store.get_memory(conn, "homeassistant.last_errors") or []
-        if not isinstance(previous_errors, list):
-            previous_errors = []
-        if not previous_errors and not current_errors:
-            row = conn.execute(
-                "SELECT type, ts FROM events WHERE source = 'homeassistant' "
-                "AND type IN ({}) ORDER BY id DESC LIMIT 1".format(
-                    ",".join("?" for _ in ha_error_types)
-                ),
-                tuple(ha_error_types),
-            ).fetchone()
-            if row:
-                ts = _parse_ts(row["ts"]) if isinstance(row, dict) else _parse_ts(row[1])
-                if ts and (datetime.now(timezone.utc) - ts).total_seconds() < 3600:
-                    previous_errors = [row["type"] if isinstance(row, dict) else row[0]]
-        if current_errors:
-            store.set_memory(conn, "homeassistant.last_errors", sorted(current_errors))
-            store.set_memory(conn, "homeassistant.last_error_ts", datetime.now().isoformat())
-        elif previous_errors:
-            events.append(
-                {
-                    "source": "homeassistant",
-                    "type": "homeassistant.recovered",
-                    "payload": {"cleared": previous_errors},
-                    "severity": "info",
-                }
+        if not ha_skip_snapshot:
+            ha_events, current_states, summary, details = observe.homeassistant_snapshot(
+                base_url=base_url,
+                token=token,
+                previous=previous,
+                previous_summary=previous_summary,
+                include_domains=include_domains,
+                include_entities=include_entities,
+                exclude_domains=exclude_domains,
+                exclude_entities=exclude_entities,
+                attribute_allowlist=attribute_allowlist,
+                calendar_enabled=calendar_enabled,
+                calendar_days_ahead=calendar_days_ahead,
+                calendar_limit=calendar_limit,
             )
-            store.set_memory(conn, "homeassistant.last_errors", [])
-            store.set_memory(conn, "homeassistant.last_recovered_ts", datetime.now().isoformat())
+            events.extend(ha_events)
+            if current_states:
+                store.set_memory(conn, "homeassistant.entities", current_states)
+            if summary:
+                store.set_memory(conn, "homeassistant.summary", summary)
+            if details.get("areas") is not None:
+                store.set_memory(conn, "homeassistant.areas", details.get("areas"))
+            if details.get("entity_registry") is not None:
+                store.set_memory(conn, "homeassistant.entity_registry", details.get("entity_registry"))
+            if details.get("device_registry") is not None:
+                store.set_memory(conn, "homeassistant.device_registry", details.get("device_registry"))
+            if summary or current_states:
+                sync = {
+                    "last_sync": datetime.now().isoformat(),
+                    "entity_count": len(current_states or {}),
+                    "area_count": len(details.get("areas") or []) if details.get("areas") is not None else None,
+                    "entity_registry_count": len(details.get("entity_registry") or [])
+                    if details.get("entity_registry") is not None
+                    else None,
+                    "device_registry_count": len(details.get("device_registry") or [])
+                    if details.get("device_registry") is not None
+                    else None,
+                }
+                store.set_memory(conn, "homeassistant.sync", sync)
+            if any(ev["type"] in {"homeassistant.request_failed", "homeassistant.states_failed"} for ev in ha_events):
+                _record_cooldown(conn, "ha.request")
+                _maybe_remediate_ha_request_failed(conn, base_url)
+            ha_error_types = {
+                "homeassistant.request_failed",
+                "homeassistant.states_failed",
+                "homeassistant.areas_failed",
+                "homeassistant.entity_registry_failed",
+                "homeassistant.device_registry_failed",
+                "homeassistant.token_missing",
+                "homeassistant.misconfigured",
+            }
+            current_errors = {
+                ev.get("type")
+                for ev in events
+                if ev.get("source") == "homeassistant" and ev.get("type") in ha_error_types
+            }
+            previous_errors = store.get_memory(conn, "homeassistant.last_errors") or []
+            if not isinstance(previous_errors, list):
+                previous_errors = []
+            if not previous_errors and not current_errors:
+                row = conn.execute(
+                    "SELECT type, ts FROM events WHERE source = 'homeassistant' "
+                    "AND type IN ({}) ORDER BY id DESC LIMIT 1".format(
+                        ",".join("?" for _ in ha_error_types)
+                    ),
+                    tuple(ha_error_types),
+                ).fetchone()
+                if row:
+                    ts = _parse_ts(row["ts"]) if isinstance(row, dict) else _parse_ts(row[1])
+                    if ts and (datetime.now(timezone.utc) - ts).total_seconds() < 3600:
+                        previous_errors = [row["type"] if isinstance(row, dict) else row[0]]
+            if current_errors:
+                store.set_memory(conn, "homeassistant.last_errors", sorted(current_errors))
+                store.set_memory(conn, "homeassistant.last_error_ts", datetime.now().isoformat())
+            elif previous_errors:
+                events.append(
+                    {
+                        "source": "homeassistant",
+                        "type": "homeassistant.recovered",
+                        "payload": {"cleared": previous_errors},
+                        "severity": "info",
+                    }
+                )
+                store.set_memory(conn, "homeassistant.last_errors", [])
+                store.set_memory(conn, "homeassistant.last_recovered_ts", datetime.now().isoformat())
 
     if "network.discovery" in enabled:
         module_cfg = modules_cfg.get("network.discovery", {})

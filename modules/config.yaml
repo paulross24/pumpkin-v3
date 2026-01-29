@@ -263,7 +263,7 @@ modules:
     rescan_network: true
     core_watchdog_enabled: true
     core_watchdog_interval_seconds: 60
-    core_watchdog_stale_seconds: 180
+    core_watchdog_stale_seconds: 900
     core_watchdog_cooldown_seconds: 300
   insights:
     door_open_warn_minutes: 10
