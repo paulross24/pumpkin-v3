@@ -12,7 +12,7 @@ import urllib.error
 import urllib.request
 import urllib.parse
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from . import audit
 from . import policy as policy_mod
@@ -427,6 +427,125 @@ def _update_self_model(
     store.set_memory(conn, "self.history", history[-72:])
     return summary
 
+
+def _match_goals_for_text(goals: List[Dict[str, Any]] | List[str], text: str) -> List[str]:
+    if not text or not isinstance(goals, list):
+        return []
+    haystack = str(text).lower()
+    matched: List[str] = []
+    for goal in goals:
+        if isinstance(goal, str):
+            candidates = [goal]
+        elif isinstance(goal, dict):
+            title = goal.get("title")
+            tags = goal.get("tags") if isinstance(goal.get("tags"), list) else []
+            candidates = [title] + list(tags)
+        else:
+            candidates = []
+        for candidate in candidates:
+            if not candidate:
+                continue
+            label = str(candidate)
+            if label.lower() in haystack and label not in matched:
+                matched.append(label)
+    return matched
+
+
+def _maybe_self_reflection(
+    conn,
+    summary: Dict[str, Any],
+    insights_list: List[Dict[str, Any]],
+    detections: List[Dict[str, Any]],
+    proposals: List[Dict[str, Any]],
+    auto_actions: int,
+) -> None:
+    if not isinstance(summary, dict) or not summary:
+        return
+    now = datetime.now(timezone.utc)
+    last_ts = store.get_memory(conn, "self.journal.last_ts")
+    try:
+        last_dt = datetime.fromisoformat(last_ts) if isinstance(last_ts, str) else None
+    except ValueError:
+        last_dt = None
+    if last_dt and last_dt.date() == now.date():
+        return
+    distilled = store.get_memory(conn, "insights.distilled") or {}
+    focus = distilled.get("next_focus") if isinstance(distilled, dict) else []
+    focus_text = ", ".join(focus[:3]) if isinstance(focus, list) and focus else "stability"
+    insight_sample = insights_list[-3:] if len(insights_list) >= 3 else list(insights_list)
+    detection_sample = detections[-3:] if len(detections) >= 3 else list(detections)
+    entry = {
+        "ts": now.isoformat(),
+        "summary": (
+            f"Learned from {len(insights_list)} insights and {len(detections)} detections. "
+            f"Auto actions: {auto_actions}. Proposals: {len(proposals)}. "
+            f"Next focus: {focus_text}."
+        ),
+        "confidence": summary.get("confidence"),
+        "uncertainty": summary.get("uncertainty"),
+        "insights": [item.get("summary") for item in insight_sample if isinstance(item, dict)],
+        "detections": [item.get("summary") for item in detection_sample if isinstance(item, dict)],
+    }
+    journal = store.get_memory(conn, "self.journal")
+    if not isinstance(journal, list):
+        journal = []
+    journal.append(entry)
+    store.set_memory(conn, "self.journal", journal[-14:])
+    store.set_memory(conn, "self.journal.last_ts", now.isoformat())
+    store.insert_audit_log(conn, "self.journal", entry)
+    _insert_events(
+        conn,
+        [
+            {
+                "source": "core",
+                "type": "self.reflect",
+                "payload": entry,
+                "severity": "info",
+            }
+        ],
+    )
+
+
+def _maybe_open_uncertainty_verification(
+    conn,
+    policy: policy_mod.Policy,
+    confidence: Optional[float],
+) -> None:
+    if confidence is None or confidence >= 0.65:
+        return
+    last_ts = store.get_memory(conn, "self.verification.last_ts")
+    try:
+        last_dt = datetime.fromisoformat(last_ts) if isinstance(last_ts, str) else None
+    except ValueError:
+        last_dt = None
+    now = datetime.now(timezone.utc)
+    if last_dt and (now - last_dt) < timedelta(minutes=45):
+        return
+    summary = "Verify low-confidence loop output"
+    details = {
+        "rationale": "Low confidence detected in self model. Requesting verification before escalation.",
+        "action_type": "ops.verify",
+        "action_params": {"focus": "recent_detections"},
+        "confidence": confidence,
+    }
+    store.insert_proposal(
+        conn,
+        kind="action.request",
+        summary=summary,
+        details=details,
+        risk=0.2,
+        expected_outcome="Verification checks completed and recorded.",
+        status="pending",
+        policy_hash=policy.policy_hash,
+        needs_new_capability=False,
+        capability_request=None,
+    )
+    store.set_memory(conn, "self.verification.last_ts", now.isoformat())
+    store.insert_audit_log(
+        conn,
+        "self.verification.requested",
+        {"ts": now.isoformat(), "summary": summary, "confidence": confidence},
+    )
 
 def _maybe_remediate_ha_request_failed(conn, base_url: str | None) -> None:
     if not base_url:
@@ -2115,6 +2234,17 @@ def _process_detections(
                 decision = "Proposal opened"
                 _notify_homeassistant(conn, "Pumpkin proposal", detection["summary"])
 
+        goals = store.get_memory(conn, "goals.list") or []
+        goal_tags = _match_goals_for_text(
+            goals,
+            " ".join(
+                [
+                    str(detection.get("summary") or ""),
+                    str(reasoning or ""),
+                    str(decision or ""),
+                ]
+            ),
+        )
         store.insert_decision(
             conn,
             detection_id=detection_id,
@@ -2129,6 +2259,7 @@ def _process_detections(
             evidence={
                 "scores": scores,
                 "outcome": outcome if isinstance(outcome, dict) else {},
+                "goal_tags": goal_tags,
             },
         )
     return auto_actions
@@ -3187,7 +3318,7 @@ def run_once() -> Dict[str, Any]:
     for item in new_events:
         if isinstance(item, dict) and item.get("severity") in {"warn", "error"}:
             warn_count += 1
-    _update_self_model(
+    self_summary = _update_self_model(
         conn,
         system_snapshot=system_snapshot if isinstance(system_snapshot, dict) else None,
         insight_count=len(all_insights),
@@ -3201,6 +3332,8 @@ def run_once() -> Dict[str, Any]:
         autonomy_cfg=autonomy_cfg,
         goals=store.get_memory(conn, "goals.list") or [],
     )
+    _maybe_self_reflection(conn, self_summary, all_insights, detections, proposals, auto_actions)
+    _maybe_open_uncertainty_verification(conn, policy, self_summary.get("confidence"))
     _append_recent_memory(
         conn,
         "loop.events",
