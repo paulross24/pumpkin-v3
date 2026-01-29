@@ -385,6 +385,18 @@
         animation-duration: 7s;
         color: var(--bad);
       }
+      .pulse-shell[data-mood="calm"] .reel-track {
+        animation-duration: 16s;
+      }
+      .pulse-shell[data-mood="engaged"] .reel-track {
+        animation-duration: 12s;
+      }
+      .pulse-shell[data-mood="focused"] .reel-track {
+        animation-duration: 9s;
+      }
+      .pulse-shell[data-mood="alert"] .reel-track {
+        animation-duration: 6s;
+      }
       @keyframes reelScroll {
         0% {
           transform: translateX(0);
@@ -542,6 +554,25 @@
         </div>
         <div class="stat" id="memory-title">Last learned</div>
         <div class="memory-strip" id="memory-strip"></div>
+      </section>
+      <section class="card" data-card="curiosity">
+        <div class="card-head">
+          <h3>Curiosity Ping</h3>
+          <span class="card-cta">Suggest</span>
+        </div>
+        <div class="stat" id="curiosity-title">Nothing to ask yet</div>
+        <div class="sub" id="curiosity-detail">I will surface a prompt when something looks worth improving.</div>
+        <div class="sub">
+          <a class="link" href="/ui/proposals">Open proposals →</a>
+        </div>
+      </section>
+      <section class="card" data-card="diary">
+        <div class="card-head">
+          <h3>Daily Diary</h3>
+          <span class="card-cta">Today</span>
+        </div>
+        <div class="stat" id="diary-title">No entry yet</div>
+        <div class="sub" id="diary-detail">I will summarize what I did for you today.</div>
       </section>
       <section class="card" data-card="self-model">
         <div class="card-head">
@@ -1201,6 +1232,9 @@
             byId("mood-sub"),
             `activity score ${mood.score} • ${alertData.count} alerts, ${insights.length} insights`
           );
+          if (thoughtPulse) {
+            thoughtPulse.dataset.mood = mood.label.toLowerCase();
+          }
 
           const narration = buildNarration(summary, decisions, insights, alertData.items || []);
           setText(byId("narration-line"), truncate(narration.line, 140));
@@ -1219,6 +1253,33 @@
                 div.textContent = truncate(msg, 120);
                 memoryStrip.appendChild(div);
               });
+            }
+          }
+
+          const curiosityTitle = byId("curiosity-title");
+          const curiosityDetail = byId("curiosity-detail");
+          if (curiosityTitle && curiosityDetail) {
+            if (insights.length) {
+              const latest = insights[0];
+              curiosityTitle.textContent = latest.summary || "I spotted a new opportunity";
+              curiosityDetail.textContent = latest.detail || latest.type || "Want me to draft a proposal?";
+            } else {
+              curiosityTitle.textContent = "Nothing to ask yet";
+              curiosityDetail.textContent = "I will surface a prompt when something looks worth improving.";
+            }
+          }
+
+          const diaryTitle = byId("diary-title");
+          const diaryDetail = byId("diary-detail");
+          if (diaryTitle && diaryDetail) {
+            if (summary.briefing && summary.briefing.summary) {
+              diaryTitle.textContent = summary.briefing.summary;
+              const details = summary.briefing.details || {};
+              const actions = Array.isArray(details.actions) ? details.actions.slice(0, 3).join(", ") : null;
+              diaryDetail.textContent = actions ? `Actions: ${actions}` : "Reviewing today’s changes.";
+            } else {
+              diaryTitle.textContent = "No entry yet";
+              diaryDetail.textContent = "I will summarize what I did for you today.";
             }
           }
 
