@@ -13,6 +13,7 @@ modules:
   homeassistant.observer:
     base_url: http://192.168.1.140:8123
     token_env: PUMPKIN_HA_TOKEN
+    default_media_player: ""
     include_domains:
       - '*'
     calendar_enabled: true

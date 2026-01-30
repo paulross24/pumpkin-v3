@@ -87,6 +87,7 @@ Pumpkin records:
 
 ## Configuration
 - `modules/config.yaml`: module settings and autonomy toggles
+  - `homeassistant.observer.default_media_player` can pin announcements to a specific speaker (e.g. Alexa)
 - `policy.yaml`: action boundaries and approval rules
 - Secrets (env only, see `.env.example`):
   - `PUMPKIN_HA_TOKEN`

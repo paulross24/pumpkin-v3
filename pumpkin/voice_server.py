@@ -1387,7 +1387,23 @@ def _handle_tts_command(text: str, conn) -> str | None:
     if not isinstance(entities, dict):
         entities = {}
     summary = store.get_memory(conn, "homeassistant.summary") or {}
-    player_id = _select_entity_for_domain(entities, summary, "media_player", text)
+    player_id = None
+    config_path = settings.modules_config_path()
+    if config_path.exists():
+        try:
+            config = module_config.load_config(str(config_path))
+        except Exception:
+            config = {}
+        modules_cfg = config.get("modules", {}) if isinstance(config, dict) else {}
+        voice_cfg = modules_cfg.get("voice", {}) if isinstance(modules_cfg, dict) else {}
+        ha_cfg = modules_cfg.get("homeassistant.observer", {}) if isinstance(modules_cfg, dict) else {}
+        preferred = voice_cfg.get("default_media_player") or ha_cfg.get("default_media_player")
+        if isinstance(preferred, str) and preferred.strip():
+            candidate = preferred.strip()
+            if candidate in entities:
+                player_id = candidate
+    if not player_id:
+        player_id = _select_entity_for_domain(entities, summary, "media_player", text)
     if not player_id:
         return "I couldn't find any media players for that announcement."
     result = ha_client.call_service(
@@ -1416,7 +1432,23 @@ def _handle_media_command(text: str, conn, device: str | None) -> str | None:
     if not isinstance(entities, dict):
         entities = {}
     summary = store.get_memory(conn, "homeassistant.summary") or {}
-    player_id = _select_entity_for_domain(entities, summary, "media_player", text)
+    player_id = None
+    config_path = settings.modules_config_path()
+    if config_path.exists():
+        try:
+            config = module_config.load_config(str(config_path))
+        except Exception:
+            config = {}
+        modules_cfg = config.get("modules", {}) if isinstance(config, dict) else {}
+        voice_cfg = modules_cfg.get("voice", {}) if isinstance(modules_cfg, dict) else {}
+        ha_cfg = modules_cfg.get("homeassistant.observer", {}) if isinstance(modules_cfg, dict) else {}
+        preferred = voice_cfg.get("default_media_player") or ha_cfg.get("default_media_player")
+        if isinstance(preferred, str) and preferred.strip():
+            candidate = preferred.strip()
+            if candidate in entities:
+                player_id = candidate
+    if not player_id:
+        player_id = _select_entity_for_domain(entities, summary, "media_player", text)
     if not player_id:
         return "I couldn't find any media players in Home Assistant."
     service = None
