@@ -574,6 +574,14 @@
         <div class="sub">Recent changes</div>
         <ul class="list" id="command-recent"></ul>
       </section>
+      <section class="card grid-span" data-card="thinking-timeline">
+        <div class="card-head">
+          <h3>Thinking Timeline</h3>
+          <span class="card-cta">Live</span>
+        </div>
+        <div class="sub">Observed → Reasoned → Decided → Verified</div>
+        <ul class="list" id="thinking-timeline-list"></ul>
+      </section>
       <section class="card grid-span pulse-card is-link" data-link="/ui/thoughts" data-card="thought-pulse">
         <div class="pulse-shell ambient-breath" id="thought-pulse" data-level="0">
           <svg class="pumpkin-svg" viewBox="0 0 200 200" aria-hidden="true">
@@ -669,6 +677,13 @@
         </div>
         <div class="stat" id="diary-title">No entry yet</div>
         <div class="sub" id="diary-detail">I will summarize what I did for you today.</div>
+      </section>
+      <section class="card" data-card="mini-briefs">
+        <div class="card-head">
+          <h3>Mini Briefs</h3>
+          <span class="card-cta">Hourly</span>
+        </div>
+        <ul class="list" id="mini-briefs-list"></ul>
       </section>
       <section class="card" data-card="self-model">
         <div class="card-head">
@@ -877,6 +892,8 @@
       const selfCounter = byId("self-counter");
       const briefingCount = byId("briefing-count");
       const briefingList = byId("briefing-list");
+      const thinkingTimelineList = byId("thinking-timeline-list");
+      const miniBriefsList = byId("mini-briefs-list");
       const thoughtPulse = byId("thought-pulse");
       const thoughtStatus = byId("thought-status");
       const thoughtMeta = byId("thought-meta");
@@ -1081,6 +1098,28 @@
         }
       };
 
+      const renderTimeline = (events) => {
+        if (!thinkingTimelineList) return;
+        const items = Array.isArray(events) && events.length
+          ? events.map((event) => {
+              const ts = event.ts || "unknown";
+              const source = event.source || "system";
+              const type = event.type || event.event_type || "event";
+              const msg = event.message || event.summary || "";
+              return `${ts} • ${source}: ${type}${msg ? " • " + msg : ""}`;
+            })
+          : ["No recent timeline events yet"];
+        setList(thinkingTimelineList, items);
+      };
+
+      const renderMiniBriefs = (briefings) => {
+        if (!miniBriefsList) return;
+        const items = Array.isArray(briefings) && briefings.length
+          ? briefings.slice(0, 3).map((item) => `${item.ts} • ${item.period}: ${item.summary}`)
+          : ["No briefings yet"];
+        setList(miniBriefsList, items);
+      };
+
       const buildTicker = (items) => {
         if (!narrationTicker) return;
         const content = items.length ? items : ["awaiting new signals"];
@@ -1217,7 +1256,7 @@
       const load = async () => {
         try {
           linkCards();
-          const [healthRes, summaryRes, configRes, statusRes, decisionsRes, briefingsRes] =
+          const [healthRes, summaryRes, configRes, statusRes, decisionsRes, briefingsRes, timelineRes] =
             await Promise.all([
               fetch("/health"),
               fetch("/summary"),
@@ -1225,6 +1264,7 @@
               fetch("/status"),
               fetch("/decisions?limit=5"),
               fetch("/briefings?limit=5"),
+              fetch("/timeline?limit=8"),
             ]);
           const health = await safeJson(healthRes, { status: "unknown", metrics: {} });
           const summary = await safeJson(summaryRes, {});
@@ -1232,6 +1272,7 @@
           const status = await safeJson(statusRes, null);
           const decisionsData = await safeJson(decisionsRes, null);
           const briefingsData = await safeJson(briefingsRes, null);
+          const timelineData = await safeJson(timelineRes, null);
           applyCuration(summary);
 
           setText(
@@ -1378,6 +1419,10 @@
             briefingList,
             briefings.map((item) => `${item.ts} • ${item.period}: ${item.summary}`)
           );
+          renderMiniBriefs(briefings);
+
+          const timelineEvents = Array.isArray(timelineData?.events) ? timelineData.events : [];
+          renderTimeline(timelineEvents);
 
           const alertData = await loadAlerts();
           const thoughts = await loadThoughts();

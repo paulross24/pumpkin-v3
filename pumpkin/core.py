@@ -1237,6 +1237,41 @@ def _record_pulse(
     _record_cooldown(conn, "system.pulse")
 
 
+def _maybe_curiosity_ping(
+    conn,
+    ha_summary: Dict[str, Any],
+    network_snapshot: Dict[str, Any],
+    system_snapshot: Dict[str, Any],
+    interval_seconds: int,
+) -> None:
+    if interval_seconds <= 0:
+        return
+    if not _cooldown_elapsed(conn, "curiosity.ping", interval_seconds):
+        return
+    people_home = ha_summary.get("people_home") or []
+    device_count = 0
+    if isinstance(network_snapshot, dict):
+        devices = network_snapshot.get("devices") or []
+        if isinstance(devices, list):
+            device_count = len(devices)
+    load = None
+    if isinstance(system_snapshot, dict):
+        load = system_snapshot.get("loadavg", {}).get("1m")
+    payload = {
+        "people_home": len(people_home),
+        "device_count": device_count,
+        "load_1m": load,
+        "message": "Quick curiosity check completed.",
+    }
+    if load is not None:
+        payload["summary"] = f"{len(people_home)} home • {device_count} devices • load {load:.2f}"
+    else:
+        payload["summary"] = f"{len(people_home)} home • {device_count} devices"
+    store.insert_event(conn, "system", "curiosity.ping", payload, severity="info")
+    store.set_memory(conn, "curiosity.last_ping", payload)
+    _record_cooldown(conn, "curiosity.ping")
+
+
 def _normalize_ts(value: str | None) -> datetime | None:
     if not value or not isinstance(value, str):
         return None
@@ -3303,6 +3338,17 @@ def run_once() -> Dict[str, Any]:
         network_snapshot if isinstance(network_snapshot, dict) else {},
         len(proposals),
         pulse_interval,
+    )
+    try:
+        curiosity_interval = int(autonomy_cfg.get("curiosity_interval_seconds", 3600))
+    except (TypeError, ValueError):
+        curiosity_interval = 3600
+    _maybe_curiosity_ping(
+        conn,
+        ha_summary if isinstance(ha_summary, dict) else {},
+        network_snapshot if isinstance(network_snapshot, dict) else {},
+        system_snapshot if isinstance(system_snapshot, dict) else {},
+        curiosity_interval,
     )
 
     detections = _build_detections_from_events(conn, new_events)

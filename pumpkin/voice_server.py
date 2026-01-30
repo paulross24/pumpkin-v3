@@ -71,6 +71,7 @@ THOUGHT_EVENT_TYPES = {
     "action.summary",
     "awareness.snapshot",
     "system.pulse",
+    "curiosity.ping",
 }
 
 _DEEP_SCAN_LOCK = threading.Lock()

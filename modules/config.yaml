@@ -77,6 +77,7 @@ modules:
       homeassistant.service: 15
       network.discovery: 90
     pulse_interval_seconds: 45
+    curiosity_interval_seconds: 3600
   detections:
     enabled: true
     window_seconds: 900

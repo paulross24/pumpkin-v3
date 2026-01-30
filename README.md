@@ -27,10 +27,12 @@ Pumpkin v3 is a persistent, context-aware digital steward that observes, decides
 - Vision pipeline: snapshots, unknowns, recognition, CompreFace enroll, auto-tuned thresholds
 - Camera recordings: rolling RTSP segments with retention and playback
 - Live camera HLS: low-latency stream at `/camera/live`
+- Live audio resync on HLS feeds (improved mic continuity for wake-word tests)
 - Car telemetry ingestion and reporting
 - Dog watch alerts (camera-based behavior alerts)
 - Shopping list for suggested hardware, with mark acquired
 - Proposal workflow with approvals, follow-through queue, and audit log
+- Proposal confidence hints (success probability for code patches)
 - UI auto-curation: hides low-signal panels and keeps high-signal ones prominent, while preserving full access via menu
 - Feedback loop: mark decisions/alerts as helpful or not to improve signal quality
 - System goals: seeded objectives shown in settings to guide evolution
@@ -40,6 +42,8 @@ Pumpkin v3 is a persistent, context-aware digital steward that observes, decides
 - Self narrative: counterfactuals and uncertainty tracking
 - Self journal: daily reflections and evolution summaries in `/ui/self`
 - Causal trace viewer: observation → decision → action → outcome at `/ui/trace`
+- Thinking timeline + mini briefs in the Command Center for quick “alive” snapshots
+- Curiosity ping: lightweight hourly “I’m still watching” marker in the thought stream
 
 ## Autonomy modes and safety lanes
 Autonomy is controlled by mode + policy lanes:
@@ -95,6 +99,7 @@ Pumpkin records:
   - `PUMPKIN_OLLAMA_CODER_MODEL` (e.g., qwen2.5-coder) — local code generation
   - `PUMPKIN_LLM_CODER_MODEL` (override for any provider)
   - `PUMPKIN_INGEST_KEY`
+  - `PUMPKIN_KITCHEN_CAM_USER` / `PUMPKIN_KITCHEN_CAM_PASS` (RTSP creds for kitchen live feed)
 
 ## Memory
 - Conversation memory: rolling summary + extracted facts per device/person
