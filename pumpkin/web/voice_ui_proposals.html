@@ -209,12 +209,18 @@
 
           const meta = document.createElement("div");
           meta.className = "meta";
+          const success = proposal.success_probability;
           meta.innerHTML = `
             <div>Kind: ${proposal.kind || "unknown"} • Status: ${proposal.status || "pending"}</div>
             <div>Risk: ${proposal.risk ?? "n/a"} • Expected: ${proposal.expected_outcome || "n/a"}</div>
             <div>Needs capability: ${proposal.needs_new_capability ? "yes" : "no"}</div>
             <div>Capability request: ${proposal.capability_request || "none"}</div>
             <div>Created: ${proposal.ts_created || "unknown"}</div>
+            ${
+              success
+                ? `<div>Success probability: ${Math.round(success.probability * 100)}% • ${success.rationale || "n/a"}</div>`
+                : ""
+            }
           `;
 
           const details = document.createElement("pre");

@@ -80,6 +80,67 @@ CODE_PROMPT_MAX_LEN = 8000
 _SERVER_START = time.time()
 
 
+def _estimate_code_success(details: Dict[str, Any]) -> Dict[str, Any] | None:
+    if details.get("action_type") != "code.apply_patch":
+        return None
+    action_params = details.get("action_params") or {}
+    patch = action_params.get("patch")
+    repo_root = action_params.get("repo_root")
+    if not isinstance(patch, str) or not patch.strip():
+        return {"probability": 0.1, "rationale": "Missing patch payload."}
+    if not isinstance(repo_root, str) or not repo_root.strip():
+        return {"probability": 0.1, "rationale": "Missing repo_root for patch."}
+
+    repo_path = Path(repo_root)
+    if not repo_path.exists():
+        return {"probability": 0.1, "rationale": f"repo_root not found: {repo_root}"}
+
+    probability = 0.35
+    rationale_parts = []
+    if (repo_path / ".git").exists():
+        probability += 0.1
+        rationale_parts.append("Git repo detected.")
+
+    # Check whether patched files exist (light heuristic).
+    touched = 0
+    existing = 0
+    for line in patch.splitlines():
+        if line.startswith("+++ b/"):
+            touched += 1
+            rel = line.replace("+++ b/", "", 1).strip()
+            if rel and (repo_path / rel).exists():
+                existing += 1
+    if touched:
+        hit_rate = existing / touched if touched else 0
+        probability += 0.2 * hit_rate
+        rationale_parts.append(f"{existing}/{touched} target files exist.")
+
+    # Dry-run git apply to estimate success.
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo_path), "apply", "--check", "-"],
+            input=patch.encode("utf-8"),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=6,
+        )
+        if proc.returncode == 0:
+            probability = max(probability, 0.85)
+            rationale_parts.append("Patch applies cleanly in dry-run.")
+        else:
+            probability = min(probability, 0.25)
+            err = proc.stderr.decode("utf-8", errors="ignore").strip().splitlines()
+            if err:
+                rationale_parts.append(f"Apply check failed: {err[0]}")
+            else:
+                rationale_parts.append("Apply check failed.")
+    except Exception as exc:
+        probability = min(probability, 0.2)
+        rationale_parts.append(f"Apply check error: {exc}")
+
+    probability = max(0.05, min(0.95, probability))
+    return {"probability": round(probability, 2), "rationale": " ".join(rationale_parts)}
+
 def _bad_request(handler: BaseHTTPRequestHandler, message: str) -> None:
     append_jsonl(
         str(settings.audit_path()),
@@ -5888,6 +5949,7 @@ class VoiceHandler(BaseHTTPRequestHandler):
                             "ai_context_excerpt": row["ai_context_excerpt"],
                             "trail": trail,
                             "ts_created": row["ts_created"],
+                            "success_probability": _estimate_code_success(details),
                         }
                     )
                 _send_json(
